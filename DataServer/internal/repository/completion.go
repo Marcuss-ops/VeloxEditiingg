@@ -35,6 +35,7 @@ type CompletionTx interface {
 	ExpireCompletionAttempt(ctx context.Context, fence CompletionFence, now string) error
 	ExpireCompletionAttemptByID(ctx context.Context, commitID, now string) error
 	MarkCompletionCommitted(ctx context.Context, commitID, now string) error
+	CommitPreparedWindow(ctx context.Context, params PreparedWindowCommitParams) (string, error)
 	MarkCompletionTaskAttemptSucceeded(ctx context.Context, attemptID, workerID, leaseID, now string) error
 	MarkCompletionTaskSucceeded(ctx context.Context, taskID, attemptID, workerID, leaseID, now string) error
 	MarkCompletionJobSucceededIfTasksDone(ctx context.Context, jobID, now string) error
@@ -64,6 +65,13 @@ type CompletionDeclareParams struct {
 	CommitID, TaskID, AttemptID, JobID, WorkerID, LeaseID string
 	Revision, RequiredOutputCount                         int
 	TokenHash, Deadline, Now                              string
+}
+
+type PreparedWindowCommitParams struct {
+	Fence                                                        CompletionFence
+	JobID, Identity, AssetID, SHA256, ExtradataSHA256, TokenHash string
+	SizeBytes                                                    int64
+	Now                                                          string
 }
 
 type CompletionDeclarationParams struct {

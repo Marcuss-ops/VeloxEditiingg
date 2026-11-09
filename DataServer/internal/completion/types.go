@@ -226,3 +226,17 @@ type Coordinator interface {
 	// and other repair cases.
 	ReconcileAttempt(ctx context.Context, commitID string) (*CommitResult, error)
 }
+
+// PreparedWindowCoordinator extends the coordinator for internal task
+// commits while keeping existing protocol-only adapters source compatible.
+type PreparedWindowCoordinator interface {
+	CommitPreparedWindow(ctx context.Context, cmd PreparedWindowCommitCommand) (string, error)
+}
+
+// PreparedWindowCommitCommand references an already registered Master-side
+// blob. It never uploads bytes or creates a publishable video artifact.
+type PreparedWindowCommitCommand struct {
+	Fence                                             FenceTuple
+	JobID, Identity, AssetID, SHA256, ExtradataSHA256 string
+	SizeBytes                                         int64
+}

@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"velox-server/internal/repository"
+	"velox-shared/contract"
 )
 
 func (r *sqliteCompletionTx) MarkCompletionCommitted(ctx context.Context, commitID, now string) error {
@@ -21,6 +24,94 @@ func (r *sqliteCompletionTx) MarkCompletionCommitted(ctx context.Context, commit
 		return fmt.Errorf("%w: commit=%s committed rows=%d", ErrCompletionTransitionConflict, commitID, n)
 	}
 	return nil
+}
+
+// CommitPreparedWindow closes an internal preparation task through the same
+// completion transaction used by published outputs. The worker's asset ID is
+// accepted only when the canonical prepared-window source reference resolves
+// to a READY, verified blob carrying the same media certificate.
+func (r *sqliteCompletionTx) CommitPreparedWindow(ctx context.Context, p repository.PreparedWindowCommitParams) (string, error) {
+	f, jobID, identity, assetID, sha256, extradataSHA256, tokenHash, sizeBytes, now := p.Fence, p.JobID, p.Identity, p.AssetID, p.SHA256, p.ExtradataSHA256, p.TokenHash, p.SizeBytes, p.Now
+	commitID := "prepared_" + f.TaskID + "_" + f.AttemptID
+	var priorStatus, priorWorker, priorLease string
+	var priorRevision int
+	if err := r.tx.QueryRowContext(ctx, `SELECT status,worker_id,lease_id,task_revision FROM attempt_commits WHERE commit_id=?`, commitID).Scan(&priorStatus, &priorWorker, &priorLease, &priorRevision); err == nil {
+		if priorStatus == "COMMITTED" && priorWorker == f.WorkerID && priorLease == f.LeaseID && priorRevision == f.Revision {
+			return commitID, nil
+		}
+		return "", fmt.Errorf("%w: prior prepared-window commit fence/status mismatch", ErrCompletionTransitionConflict)
+	} else if err != sql.ErrNoRows {
+		return "", err
+	}
+	var taskExecutor, taskJob, taskAttempt, taskWorker, taskLease, taskStatus string
+	var taskRevision, terminalPending int
+	err := r.tx.QueryRowContext(ctx, `SELECT executor_id,job_id,COALESCE(attempt_id,''),COALESCE(worker_id,''),COALESCE(lease_id,''),status,revision,COALESCE(winning_attempt_terminal_pending,0) FROM tasks WHERE task_id=?`, f.TaskID).Scan(&taskExecutor, &taskJob, &taskAttempt, &taskWorker, &taskLease, &taskStatus, &taskRevision, &terminalPending)
+	if err != nil {
+		return "", fmt.Errorf("store: prepared-window task lookup: %w", err)
+	}
+	if taskExecutor != "video.prepare.window.v1" || taskJob != jobID || taskAttempt != f.AttemptID || taskWorker != f.WorkerID || taskLease != f.LeaseID || taskRevision != f.Revision || (taskStatus != "RUNNING" && taskStatus != "FAILED") || terminalPending != 1 {
+		return "", fmt.Errorf("%w: prepared-window task fence or executor mismatch", ErrCompletionTransitionConflict)
+	}
+	var specJSON string
+	if err := r.tx.QueryRowContext(ctx, `SELECT COALESCE(payload_json,'{}') FROM task_specs WHERE task_id=?`, f.TaskID).Scan(&specJSON); err != nil {
+		return "", fmt.Errorf("store: prepared-window canonical task spec: %w", err)
+	}
+	var canonicalSpec struct {
+		Request contract.VideoPrepareWindowV1 `json:"video_prepare_window"`
+	}
+	if err := json.Unmarshal([]byte(specJSON), &canonicalSpec); err != nil {
+		return "", fmt.Errorf("store: decode prepared-window task spec: %w", err)
+	}
+	var attemptStatus string
+	if err := r.tx.QueryRowContext(ctx, `SELECT status FROM task_attempts WHERE id=? AND task_id=? AND worker_id=? AND lease_id=?`, f.AttemptID, f.TaskID, f.WorkerID, f.LeaseID).Scan(&attemptStatus); err != nil {
+		return "", fmt.Errorf("store: prepared-window attempt lookup: %w", err)
+	}
+	if attemptStatus != "SUCCEEDED" {
+		return "", fmt.Errorf("%w: prepared-window attempt status=%s", ErrCompletionTransitionConflict, attemptStatus)
+	}
+	var registeredSHA, storageKey, status, verifiedAt, metadata string
+	var registeredSize int64
+	err = r.tx.QueryRowContext(ctx, `SELECT a.sha256,a.size_bytes,a.status,a.storage_key,COALESCE(a.verified_at,''),COALESCE(a.metadata_json,'') FROM assets a JOIN asset_sources s ON s.asset_id=a.asset_id WHERE a.asset_id=? AND s.source_reference=?`, assetID, "prepared-window:"+identity).Scan(&registeredSHA, &registeredSize, &status, &storageKey, &verifiedAt, &metadata)
+	if err != nil {
+		return "", fmt.Errorf("store: prepared-window registry lookup: %w", err)
+	}
+	var metadataEnvelope struct {
+		Window contract.VideoPrepareWindowCertificateV1 `json:"window_certificate"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &metadataEnvelope); err != nil {
+		return "", fmt.Errorf("store: decode registered prepared-window certificate: %w", err)
+	}
+	if canonicalSpec.Request.SourceIdentityDiscovery {
+		canonicalSpec.Request.Source.SHA256 = metadataEnvelope.Window.SourceSHA256
+		canonicalSpec.Request.SourceIdentityDiscovery = false
+	}
+	canonicalIdentity, err := contract.VideoPrepareWindowCacheIdentity(canonicalSpec.Request)
+	if err != nil || canonicalIdentity != identity {
+		return "", fmt.Errorf("%w: prepared-window identity does not match immutable task spec", ErrCompletionTransitionConflict)
+	}
+	if status != "READY" || registeredSHA != sha256 || registeredSize != sizeBytes || sizeBytes <= 0 || storageKey == "" || verifiedAt == "" || len(identity) != 64 || len(sha256) != 64 || len(extradataSHA256) != 64 {
+		return "", fmt.Errorf("%w: prepared-window asset evidence mismatch", ErrCompletionTransitionConflict)
+	}
+	if metadataEnvelope.Window.OutputSHA256 != sha256 || metadataEnvelope.Window.OutputSizeBytes != sizeBytes {
+		return "", fmt.Errorf("%w: registered certificate does not match the blob", ErrCompletionTransitionConflict)
+	}
+	certificateExtradata := strings.ToLower(metadataEnvelope.Window.OutputEvidence.ExtradataSHA256)
+	if certificateExtradata != extradataSHA256 {
+		return "", fmt.Errorf("%w: prepared-window extradata certificate mismatch", ErrCompletionTransitionConflict)
+	}
+	if _, err := r.tx.ExecContext(ctx, `INSERT OR IGNORE INTO attempt_commits (commit_id,task_id,attempt_id,job_id,worker_id,lease_id,task_revision,status,required_output_count,ready_output_count,commit_token_hash,commit_deadline_at,last_progress_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'VERIFYING',0,0,?,?,?,?,?)`, commitID, f.TaskID, f.AttemptID, jobID, f.WorkerID, f.LeaseID, f.Revision, tokenHash, now, now, now, now, now); err != nil {
+		return "", fmt.Errorf("store: prepared-window commit record: %w", err)
+	}
+	if err := r.MarkCompletionCommitted(ctx, commitID, now); err != nil {
+		return "", err
+	}
+	if err := r.MarkCompletionTaskSucceeded(ctx, f.TaskID, f.AttemptID, f.WorkerID, f.LeaseID, now); err != nil {
+		return "", err
+	}
+	if err := r.InsertCompletionOutbox(ctx, "ce_"+commitID, "task", f.TaskID, "commit_protocol.committed", `{"kind":"prepared_window","commit_id":"`+commitID+`","attempt_id":"`+f.AttemptID+`","job_id":"`+jobID+`"}`, now); err != nil {
+		return "", err
+	}
+	return commitID, nil
 }
 
 func (r *sqliteCompletionTx) MarkCompletionTaskAttemptSucceeded(ctx context.Context, attemptID, workerID, leaseID, now string) error {
@@ -66,6 +157,19 @@ func (r *sqliteCompletionTx) MarkCompletionTaskSucceeded(ctx context.Context, ta
 }
 
 func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.Context, jobID, now string) error {
+	// Task commits are independent in a DAG. A successful child must commit
+	// even while siblings (or its parent assembly task) are still pending.
+	// The job finalizer is only eligible once every task is terminal-success;
+	// returning nil here keeps the per-task completion transaction intact and
+	// lets the final successful task perform the job-level promotion below.
+	var outstanding int
+	if err := r.tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tasks WHERE job_id=? AND status!='SUCCEEDED'`, jobID).Scan(&outstanding); err != nil {
+		return fmt.Errorf("store: count incomplete completion tasks: %w", err)
+	}
+	if outstanding != 0 {
+		return nil
+	}
 	// The persisted request contract is authoritative. render_only=true is
 	// the only explicit no-artifact path; every other job must already be at
 	// AWAITING_ARTIFACT and must prove at least one durable READY artifact.

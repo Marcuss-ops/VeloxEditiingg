@@ -6,17 +6,22 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"velox-server/internal/completion"
 	"velox-server/internal/ingest"
 	"velox-server/internal/logging"
 	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 	"velox-server/internal/telemetry"
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-shared/identity"
 
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -235,6 +240,12 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 			return
 		}
 	} else {
+		if strings.EqualFold(tr.GetStatus(), "succeeded") && canonicalExecutorID == contract.VideoPrepareWindowExecutorID {
+			if err := h.commitPreparedWindowResult(ctx, workerID, jobID, taskID, attemptID, leaseID, int(revision), segmentTimings); err != nil {
+				logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskResultFailed, "[GRPC] prepared-window completion commit failed task=%s attempt=%s: %v", taskID, attemptID, err)
+				return
+			}
+		}
 		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCTaskResult, "[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q", taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
 		logArtifactProtocol("TASK_RESULT_INGESTED", protocolStartedAt, map[string]interface{}{
 			"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
@@ -280,6 +291,83 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 			"lease_id": leaseID, "ack_error": ackError,
 		})
 	}
+}
+
+func (h *Handler) commitPreparedWindowResult(ctx context.Context, workerID, jobID, taskID, attemptID, leaseID string, revision int, segments []taskattempts.SegmentTiming) error {
+	if h.completionCoord == nil {
+		return fmt.Errorf("completion coordinator is not configured")
+	}
+	specStore, ok := h.taskRepo.(taskgraph.TaskSpecStore)
+	if !ok {
+		return fmt.Errorf("canonical task spec reader is not configured")
+	}
+	payload, err := specStore.GetTaskSpecPayload(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("read canonical task spec: %w", err)
+	}
+	rawRequest, ok := payload[contract.VideoPrepareWindowPayloadKey]
+	if !ok {
+		return fmt.Errorf("canonical task has no video_prepare_window request")
+	}
+	encoded, err := json.Marshal(rawRequest)
+	if err != nil {
+		return err
+	}
+	var request contract.VideoPrepareWindowV1
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		return fmt.Errorf("decode canonical preparation request: %w", err)
+	}
+	var assetID string
+	var cert contract.VideoPrepareWindowCertificateV1
+	for _, segment := range segments {
+		if segment.SourceType != contract.VideoPrepareWindowExecutorID || segment.MetadataJSON == "" {
+			continue
+		}
+		var metadata struct {
+			AssetID     string                                   `json:"registered_asset_id"`
+			Certificate contract.VideoPrepareWindowCertificateV1 `json:"window_certificate"`
+		}
+		if json.Unmarshal([]byte(segment.MetadataJSON), &metadata) == nil && metadata.AssetID != "" && metadata.Certificate.OutputSHA256 != "" {
+			assetID, cert = metadata.AssetID, metadata.Certificate
+			break
+		}
+		// Current workers serialize the certificate at the metadata root.
+		var root map[string]json.RawMessage
+		if json.Unmarshal([]byte(segment.MetadataJSON), &root) == nil {
+			if raw := root["registered_asset_id"]; len(raw) > 0 {
+				_ = json.Unmarshal(raw, &assetID)
+			}
+			if json.Unmarshal([]byte(segment.MetadataJSON), &cert) == nil && assetID != "" {
+				break
+			}
+		}
+	}
+	if assetID == "" {
+		return fmt.Errorf("registered prepared-window asset evidence is missing")
+	}
+	if request.SourceIdentityDiscovery {
+		if cert.SourceSHA256 == "" {
+			return fmt.Errorf("discovery certificate has no source sha256")
+		}
+		request.Source.SHA256 = cert.SourceSHA256
+		request.SourceIdentityDiscovery = false
+	}
+	if err := cert.ValidateFor(request); err != nil {
+		return fmt.Errorf("prepared-window certificate does not match canonical request: %w", err)
+	}
+	identityHash, err := contract.VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		return err
+	}
+	preparedCoordinator, ok := h.completionCoord.(completion.PreparedWindowCoordinator)
+	if !ok {
+		return fmt.Errorf("prepared-window completion is not wired")
+	}
+	_, err = preparedCoordinator.CommitPreparedWindow(ctx, completion.PreparedWindowCommitCommand{
+		Fence: completion.FenceTuple{TaskID: taskID, AttemptID: attemptID, WorkerID: identity.ParseWorkerID(workerID), LeaseID: leaseID, Revision: revision},
+		JobID: jobID, Identity: identityHash, AssetID: assetID, SHA256: cert.OutputSHA256, SizeBytes: cert.OutputSizeBytes, ExtradataSHA256: cert.OutputEvidence.ExtradataSHA256,
+	})
+	return err
 }
 
 func declaredArtifactsFromProto(items []*structpb.Struct) []ingest.DeclaredArtifact {
