@@ -11,6 +11,7 @@ import (
 	"velox-server/internal/placement"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract"
 	"velox-shared/futureasset"
 )
 
@@ -390,6 +391,25 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 			}
 		}
 		return taskgraph.FutureReservationWithPayload{}, false, nil
+	}
+	// Window preparation resolves and verifies exactly its declared source on
+	// the worker. Requiring a job-wide future-asset reservation here causes
+	// every independent encode to wait for unrelated assets and reservations.
+	// Keep assembly and all other executors on the strict reservation path.
+	if candidate.Executor.ID == contract.VideoPrepareWindowExecutorID {
+		payload, payloadErr := pg.store.FutureTaskPayload(ctx, candidate.TaskID)
+		if payloadErr != nil {
+			return PreparationWaiting, payloadErr
+		}
+		var root map[string]json.RawMessage
+		var request contract.VideoPrepareWindowV1
+		if json.Unmarshal(payload, &root) != nil || json.Unmarshal(root[contract.VideoPrepareWindowPayloadKey], &request) != nil {
+			return PreparationWaiting, fmt.Errorf("preparation gate: invalid video window request")
+		}
+		if err := request.Validate(); err != nil {
+			return PreparationWaiting, fmt.Errorf("preparation gate: invalid video window request: %w", err)
+		}
+		return PreparationNotRequired, nil
 	}
 
 	reservation, found, err := findReservation()

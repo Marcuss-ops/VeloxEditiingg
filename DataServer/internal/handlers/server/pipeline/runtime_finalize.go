@@ -386,7 +386,7 @@ func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Con
 			TaskID: taskID, ExecutorID: contract.VideoPrepareWindowExecutorID, ExecutorVer: contract.VideoPrepareWindowVersion,
 			Payload: map[string]interface{}{
 				contract.VideoPrepareWindowPayloadKey: preparation.Request,
-				"runtime_assets":                      bindings,
+				"runtime_assets":                      runtimeBindingsForSource(bindings, preparation.Request.Source),
 				"runtime_prepare_identity":            preparation.Identity,
 			},
 		})
@@ -406,6 +406,21 @@ func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Con
 	}
 	p.notifier.NotifyTaskUpdated(ctx, candidate.JobID)
 	log.Printf("[PIPELINE] runtime FINALIZE published preparation DAG job_id=%s task_id=%s tasks=%d", candidate.JobID, candidate.TaskID, len(additions))
+	return nil
+}
+
+// runtimeBindingsForSource keeps preparation tasks self-contained and avoids
+// making each window task prefetch every asset in the final assembly plan.
+func runtimeBindingsForSource(bindings []map[string]interface{}, source contract.AssetRefV2) []map[string]interface{} {
+	for _, binding := range bindings {
+		id, _ := binding["asset_id"].(string)
+		if id == "" {
+			id, _ = binding["drive_file_id"].(string)
+		}
+		if id == source.AssetID || (source.DriveFileID != "" && id == source.DriveFileID) {
+			return []map[string]interface{}{binding}
+		}
+	}
 	return nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"velox-server/internal/placement"
 
 	"velox-shared/assetref"
+	"velox-shared/contract"
 	"velox-shared/dispatchable"
 )
 
@@ -189,6 +190,23 @@ func taskCandidatesFromDispatchableJobs(jobs []dispatchable.Job) []placement.Tas
 }
 
 func sortedAssetKeys(payload []byte) []string {
+	var root map[string]interface{}
+	if json.Unmarshal(payload, &root) == nil {
+		if raw, ok := root[contract.VideoPrepareWindowPayloadKey]; ok {
+			encoded, err := json.Marshal(raw)
+			var request contract.VideoPrepareWindowV1
+			if err == nil && json.Unmarshal(encoded, &request) == nil && request.Validate() == nil {
+				key := request.Source.AssetKey
+				if key == "" {
+					key = request.Source.AssetID
+				}
+				if key != "" {
+					return []string{key}
+				}
+				return nil
+			}
+		}
+	}
 	keys := assetref.ExtractAssetKeys(payload)
 	out := make([]string, 0, len(keys))
 	for key := range keys {

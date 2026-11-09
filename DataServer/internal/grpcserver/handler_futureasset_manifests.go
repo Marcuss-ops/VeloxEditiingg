@@ -47,6 +47,46 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 		if pending, _ := object["runtime_assets_pending"].(bool); pending {
 			return nil
 		}
+		if rawRequest, ok := object[contract.VideoPrepareWindowPayloadKey]; ok {
+			encoded, err := json.Marshal(rawRequest)
+			var request contract.VideoPrepareWindowV1
+			if err == nil && json.Unmarshal(encoded, &request) == nil && request.Validate() == nil {
+				source := request.Source
+				key := source.AssetKey
+				if key == "" {
+					key = source.AssetID
+				}
+				if key == "" {
+					return nil
+				}
+				uri := ""
+				for _, raw := range asInterfaceSlice(object["runtime_assets"]) {
+					binding, _ := raw.(map[string]interface{})
+					id, _ := binding["asset_id"].(string)
+					if id == "" {
+						id, _ = binding["drive_file_id"].(string)
+					}
+					if id != source.AssetID && (source.DriveFileID == "" || id != source.DriveFileID) {
+						continue
+					}
+					uri, _ = binding["source_uri"].(string)
+					if strings.TrimSpace(uri) == "" {
+						uri, _ = binding["url"].(string)
+					}
+					break
+				}
+				if uri == "" && source.DriveFileID != "" {
+					uri = "https://drive.google.com/uc?export=download&id=" + source.DriveFileID
+				}
+				if strings.TrimSpace(uri) != "" {
+					uri = paths.NormalizeDriveURL(uri)
+				}
+				if source.SHA256 != "" && source.SizeBytes > 0 || uri != "" && source.AssetID != "" && source.SizeBytes > 0 {
+					return []futureasset.AssetManifest{{AssetKey: key, AssetID: source.AssetID, SHA256: source.SHA256, SizeBytes: source.SizeBytes, Role: "video_prepare_source", SourceURI: uri}}
+				}
+				return nil
+			}
+		}
 	}
 	seen := make(map[string]futureasset.AssetManifest)
 	sourceURIs, planAssetKeys := futureAssetRuntimeBindings(root)
@@ -154,6 +194,11 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 		return out[i].AssetKey < out[j].AssetKey
 	})
 	return out
+}
+
+func asInterfaceSlice(value interface{}) []interface{} {
+	items, _ := value.([]interface{})
+	return items
 }
 
 // futureAssetRuntimeBindings joins FINALIZE's direct byte locators to the
