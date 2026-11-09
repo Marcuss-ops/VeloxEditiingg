@@ -85,6 +85,14 @@ func (r *sqliteCompletionTx) CommitPreparedWindow(ctx context.Context, p reposit
 	if err := json.Unmarshal([]byte(metadata), &metadataEnvelope); err != nil {
 		return "", fmt.Errorf("store: decode registered prepared-window certificate: %w", err)
 	}
+	// New content-addressed rows wrap the certificate in the asset metadata
+	// envelope. Deduplicated rows retain the certificate directly on the
+	// source row, matching the metadata written by registerPreparedVideoFile.
+	if metadataEnvelope.Window.OutputSHA256 == "" {
+		if err := json.Unmarshal([]byte(metadata), &metadataEnvelope.Window); err != nil {
+			return "", fmt.Errorf("store: decode source prepared-window certificate: %w", err)
+		}
+	}
 	if canonicalSpec.Request.SourceIdentityDiscovery {
 		canonicalSpec.Request.Source.SHA256 = metadataEnvelope.Window.SourceSHA256
 		canonicalSpec.Request.SourceIdentityDiscovery = false
