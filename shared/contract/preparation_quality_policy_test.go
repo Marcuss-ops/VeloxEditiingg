@@ -18,7 +18,8 @@ func TestPreparationQualityPolicyDefaultValidates(t *testing.T) {
 // silently produce a stream nobody can certify.
 func TestPreparationQualityPolicyValidateFailsClosed(t *testing.T) {
 	mutations := map[string]func(*PreparationQualityPolicy){
-		"video_bitrate":     func(q *PreparationQualityPolicy) { q.VideoBitrate = "" },
+		"video_crf_low":     func(q *PreparationQualityPolicy) { q.VideoCRF = -1 },
+		"video_crf_high":    func(q *PreparationQualityPolicy) { q.VideoCRF = 52 },
 		"video_maxrate":     func(q *PreparationQualityPolicy) { q.VideoMaxRate = "" },
 		"video_bufsize":     func(q *PreparationQualityPolicy) { q.VideoBufferSize = "  " },
 		"audio_codec":       func(q *PreparationQualityPolicy) { q.AudioCodec = "" },
@@ -47,7 +48,7 @@ func TestPreparationQualityPolicyCarriesNoCompatibilityFields(t *testing.T) {
 	// The canonical policy is fully described by these quality knobs; anything
 	// else here is compatibility drift.
 	qualityKnobs := map[string]bool{
-		"VideoBitrate":    true,
+		"VideoCRF":        true,
 		"VideoMaxRate":    true,
 		"VideoBufferSize": true,
 		"AudioCodec":      true,

@@ -38,7 +38,7 @@ func CanonicalVideoEncodeArgs(profile CanonicalVideoProfileV1, quality Preparati
 		"-c:v", "libx264",
 		"-preset", CanonicalVideoEncoderPreset,
 		"-refs", CanonicalVideoEncoderRefFrames,
-		"-b:v", quality.VideoBitrate,
+		"-crf", strconv.Itoa(quality.VideoCRF),
 		"-maxrate", quality.VideoMaxRate,
 		"-bufsize", quality.VideoBufferSize,
 		"-pix_fmt", profile.PixelFormat,

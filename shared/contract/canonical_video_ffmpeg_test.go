@@ -15,6 +15,8 @@ func TestCanonicalVideoEncoderContractPinsAVCC(t *testing.T) {
 		"-c:v libx264",
 		"-preset veryfast",
 		"-refs 1",
+		"-crf 23",
+		"-maxrate 2.75M",
 		"-colorspace bt709",
 		"-color_primaries bt709",
 		"-color_trc bt709",
@@ -61,7 +63,7 @@ func TestCanonicalVideoEncoderArgsDigestTracksContract(t *testing.T) {
 		t.Fatalf("encoder args digest is not stable: %q != %q (err=%v)", base, again, err)
 	}
 	changedQuality := quality
-	changedQuality.VideoBitrate = "1.5M"
+	changedQuality.VideoCRF = 24
 	qualityDigest, err := CanonicalVideoEncoderArgsDigest(profile, changedQuality)
 	if err != nil {
 		t.Fatal(err)

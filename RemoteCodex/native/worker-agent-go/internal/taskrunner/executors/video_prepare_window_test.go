@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -324,6 +326,62 @@ func TestVideoPrepareWindow_RealFFmpegOutputPassesCertification(t *testing.T) {
 	}
 	if shortCertificate.OutputEvidence.FrameCount != 120 {
 		t.Fatalf("short timestamp window frame count = %d, want 120", shortCertificate.OutputEvidence.FrameCount)
+	}
+}
+
+func TestVideoPrepareWindow_UsesCertifiedPacketCopyForCanonicalKeyframeWindow(t *testing.T) {
+	if _, err := osexec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	if _, err := osexec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is not installed")
+	}
+	root := t.TempDir()
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	revision, err := contract.VideoWindowPreparationRevision(profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(root, "source.mp4")
+	args := []string{"-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+		fmt.Sprintf("color=c=black:s=%dx%d:r=%d/%d:d=4", profile.Width, profile.Height, profile.FPSNum, profile.FPSDen),
+		"-an", "-vf", contract.CanonicalVideoScaleFilter(profile)}
+	args = append(args, contract.CanonicalVideoEncodeArgs(profile, quality)...)
+	args = append(args, "-video_track_timescale", strconv.Itoa(profile.TimeBaseDen), "-y", sourcePath)
+	if output, err := osexec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg cannot create canonical fixture: %v: %s", err, output)
+	}
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(source)
+	request := contract.VideoPrepareWindowV1{
+		Version:          contract.VideoPrepareWindowVersion,
+		Source:           contract.AssetRefV2{AssetID: "copy-source", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(source)), Kind: "video"},
+		SourceStartFrame: 48, SourceFrameCount: 24, SourceFPSNum: profile.FPSNum, SourceFPSDen: profile.FPSDen,
+		OutputFrameCount: 24, TimelineRevision: 1, TimelineSHA256: strings.Repeat("e", 64),
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	prepare := &videoPrepareWindowExecutor{
+		outputRoot: filepath.Join(root, "prepared"), runner: ffmpegrunner.NewProcessRunner(),
+		certifier: ffprobeWindowOutputCertifier{}, profile: profile, quality: quality,
+	}
+	spec := executor.TaskSpec{JobID: "job-certified-copy", ExecutorID: VideoPrepareWindowID,
+		Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
+	ctx := runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"copy-source": {AssetID: "copy-source", Path: sourcePath, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(source)), Verified: true},
+	})
+	result, err := prepare.Execute(ctx, nil, spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := result.Segments[0].FramesEncoded; got != 0 {
+		t.Fatalf("packet-copy window reports %d encoded frames, want 0", got)
+	}
+	if got := result.Segments[0].FfmpegEncodeMS; got != 0 {
+		t.Fatalf("packet-copy window reports %v encode milliseconds, want 0", got)
 	}
 }
 

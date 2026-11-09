@@ -27,7 +27,7 @@ import (
 // scripts/ci/check-architecture.sh rule 14 and
 // TestVideoPreparationUsesCanonicalStreamProfile.
 type PreparationQualityPolicy struct {
-	VideoBitrate    string
+	VideoCRF        int
 	VideoMaxRate    string
 	VideoBufferSize string
 
@@ -42,8 +42,8 @@ type PreparationQualityPolicy struct {
 // decides whether an already-encoded source may be packet-copied or must be
 // re-encoded to fit the quality budget.
 var CanonicalPreparationQualityPolicyDefault = PreparationQualityPolicy{
-	VideoBitrate:    "2.25M",
-	VideoMaxRate:    "2.25M",
+	VideoCRF:        23,
+	VideoMaxRate:    "2.75M",
 	VideoBufferSize: "4.5M",
 	AudioCodec:      "aac",
 	AudioBitrate:    "128k",
@@ -51,12 +51,12 @@ var CanonicalPreparationQualityPolicyDefault = PreparationQualityPolicy{
 	AudioChannels:   2,
 }
 
-// Validate fails closed on a partially specified quality policy: an empty
-// bitrate string would otherwise reach ffmpeg as a malformed argument and
-// produce an asset whose stream identity silently differs from the profile.
+// Validate fails closed on a partially specified quality policy: an invalid
+// CRF or empty rate-control value would produce an asset whose stream
+// identity silently differs from the profile.
 func (q PreparationQualityPolicy) Validate() error {
-	if strings.TrimSpace(q.VideoBitrate) == "" || strings.TrimSpace(q.VideoMaxRate) == "" || strings.TrimSpace(q.VideoBufferSize) == "" {
-		return fmt.Errorf("preparation quality policy: video bitrate/maxrate/bufsize are required")
+	if q.VideoCRF < 0 || q.VideoCRF > 51 || strings.TrimSpace(q.VideoMaxRate) == "" || strings.TrimSpace(q.VideoBufferSize) == "" {
+		return fmt.Errorf("preparation quality policy: video CRF must be 0..51 and maxrate/bufsize are required")
 	}
 	if strings.TrimSpace(q.AudioCodec) == "" || strings.TrimSpace(q.AudioBitrate) == "" {
 		return fmt.Errorf("preparation quality policy: audio codec/bitrate are required")
