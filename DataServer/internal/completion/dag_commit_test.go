@@ -72,10 +72,10 @@ func TestCommitPreparedWindowClosesFencedInternalTask(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO task_specs(task_id,executor_id,payload_json,created_at) VALUES(?,?,?,?)`, taskID, contract.VideoPrepareWindowExecutorID, mustJSON(t, map[string]any{contract.VideoPrepareWindowPayloadKey: req}), now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO assets(asset_id,kind,status,sha256,size_bytes,storage_provider,storage_key,metadata_json,created_at,verified_at) VALUES('prep-asset','video_segment','READY',?,10,'local','blob/prep',?,?,?)`, outputSHA, string(meta), now, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO assets(asset_id,kind,status,sha256,size_bytes,storage_provider,storage_key,metadata_json,created_at,verified_at) VALUES('prep-asset','video_segment','READY',?,10,'local','blob/prep','{}',?,?)`, outputSHA, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO asset_sources(source_id,asset_id,source_type,source_reference,created_at) VALUES('prep-source','prep-asset','worker_prepared','prepared-window:'||?,?)`, identity, now); err != nil {
+	if _, err := db.Exec(`INSERT INTO asset_sources(source_id,asset_id,source_type,source_reference,metadata_json,created_at) VALUES('prep-source','prep-asset','worker_prepared','prepared-window:'||?,?,?)`, identity, string(meta), now); err != nil {
 		t.Fatal(err)
 	}
 	coord := c.(PreparedWindowCoordinator)

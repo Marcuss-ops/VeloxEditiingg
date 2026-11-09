@@ -71,7 +71,11 @@ func (r *sqliteCompletionTx) CommitPreparedWindow(ctx context.Context, p reposit
 	}
 	var registeredSHA, storageKey, status, verifiedAt, metadata string
 	var registeredSize int64
-	err = r.tx.QueryRowContext(ctx, `SELECT a.sha256,a.size_bytes,a.status,a.storage_key,COALESCE(a.verified_at,''),COALESCE(a.metadata_json,'') FROM assets a JOIN asset_sources s ON s.asset_id=a.asset_id WHERE a.asset_id=? AND s.source_reference=?`, assetID, "prepared-window:"+identity).Scan(&registeredSHA, &registeredSize, &status, &storageKey, &verifiedAt, &metadata)
+	// The certificate belongs to this prepared-window source reference, not
+	// necessarily to the content-addressed asset row. A byte-identical asset
+	// may have been registered earlier by another producer and then reused
+	// here; asset_sources retains the certificate for this exact identity.
+	err = r.tx.QueryRowContext(ctx, `SELECT a.sha256,a.size_bytes,a.status,a.storage_key,COALESCE(a.verified_at,''),COALESCE(s.metadata_json,'') FROM assets a JOIN asset_sources s ON s.asset_id=a.asset_id WHERE a.asset_id=? AND s.source_reference=?`, assetID, "prepared-window:"+identity).Scan(&registeredSHA, &registeredSize, &status, &storageKey, &verifiedAt, &metadata)
 	if err != nil {
 		return "", fmt.Errorf("store: prepared-window registry lookup: %w", err)
 	}
