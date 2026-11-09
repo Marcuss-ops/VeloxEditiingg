@@ -227,7 +227,16 @@ func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMe
 	prepared.State = PreparationStatePrepared
 	prepared.PreparedAt = metadata.PreparedAt
 	s.prepared[key] = prepared
-	return prepared, true
+	// The scheduler continues accepting asset-ready callbacks after this
+	// transition. Do not expose the map stored in s.prepared to the caller:
+	// OnPrepared persists evidence outside s.mu while later work items may
+	// update the same map, which can panic during concurrent iteration.
+	snapshot := prepared
+	snapshot.Assets = make(map[string]PreparedAssetMetadata, len(prepared.Assets))
+	for assetKey, assetMetadata := range prepared.Assets {
+		snapshot.Assets[assetKey] = assetMetadata
+	}
+	return snapshot, true
 }
 
 func (s *Scheduler) preparationCounts(job futureasset.Job) (preparedCount, requiredCount int, missing string) {
