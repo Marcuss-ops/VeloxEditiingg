@@ -1,13 +1,32 @@
 # Video performance roadmap — action list
 
-Status updated: 2026-11-08
+Status updated: 2026-11-09
 
 This checklist tracks the P0–P3 work needed to keep video bytes off the
 control plane, reuse certified work across retries, and publish one clean
 worker image after implementation and verification are complete.
 
+## Current objective
+
+Close the source-tree gaps behind the recurring r67f stall: make executor
+required assets, prefetch eligibility and completion behavior explicit in one
+authority, expose a read-only job doctor for operator diagnosis, and pin both
+with regression coverage. Production-only gates — fleet rollout, 100-job
+benchmark evidence and digest promotion — remain open below.
+
 ## Current completion snapshot
 
+- Complete: executor task contracts in the canonical `shared/taskcontract`
+  package now declare required assets, prefetch eligibility and completion
+  kind; the DataServer placement and preparation gate consume that declaration
+  instead of inferring inputs from the whole job payload. Window preparation declares
+  exactly one source and skips the job-wide prefetch gate; unregistered
+  executors stay conservative.
+- Complete: read-only `velox-admin doctor` reports an evidence-backed verdict
+  and stable cause code for one job, including pending preparation, expired
+  reservations, fence conflicts and capacity/worker starvation. It never
+  writes to SQLite and says `INSUFFICIENT_EVIDENCE` when a projection is
+  missing.
 - Complete: assembly-only retry, cache-first lookup, deterministic persisted
   stock selection, the worker window-preparation executor, prepared-fragment
   link/clone staging, and warm-cache attestation.
@@ -59,6 +78,35 @@ worker image after implementation and verification are complete.
 - [x] Pin a full cache hit with a media integration test that removes the
   source file before retry; preparation still succeeds from the certified
   cached fragment without source materialization.
+
+## Executor contracts and job diagnostics (r67f)
+
+- [x] Add executor contracts to the canonical `shared/taskcontract` package.
+  Contracts key on executor ID/version and consume a `TaskInput` view, so the
+  persisted `TaskSpec`/spec-hash contract is unchanged. The declaration point
+  covers `Validate`, `RequiredAssets`, `RequiresPrefetch` and `CompletionKind`.
+  Register `video.prepare.window.v1` as one-source/no-prefetch with
+  `prepared_segment` completion, and `video.assemble.copy.v1` /
+  `video.assemble.slice.v1` as compiled-plan/runtime-asset executors with the
+  strict prep gate and `artifact_commit` completion. Unknown executors keep
+  the legacy payload scan and require prefetch.
+- [x] Resolve placement `RequiredAssetKeys` from the executor contract.
+  Window preparation no longer inherits every sibling asset in the job; the
+  r67f 246-asset shape is pinned by a regression test.
+- [x] Make the preparation gate ask the contract instead of special-casing the
+  window executor ID. Only a registered contract that explicitly returns
+  `RequiresPrefetch == false` bypasses the reservation fence; assembly and all
+  unregistered executors keep it.
+- [x] Add `velox-admin doctor --db --job [--json] [--output] [--stall-after]`.
+  It opens SQLite read-only via `invariants.OpenReadOnly`, reports
+  `ADVANCING`/`STALLED`/`BLOCKED`/`COMPLETE`/`UNKNOWN`, and uses closed cause
+  codes for preparation, reservations, workers, capacity, fencing, missing
+  commits and no-progress. Missing evidence yields
+  `INSUFFICIENT_EVIDENCE` rather than a fabricated cause.
+- [x] Cover the contracts and doctor with focused tests: single-source window
+  declaration, assembly assets, conservative unknown executor, malformed
+  payloads, duplicate registration, pending preparation, expired reservation,
+  fence conflict, complete job and insufficient evidence.
 
 ## I/O and cache efficiency (audit §7B)
 
@@ -266,6 +314,10 @@ worker image after implementation and verification are complete.
   test; the fMP4 gate has fail-closed tests; staging, warm-cache attestation,
   extradata mismatch/reference and cache-first hit/miss paths have focused
   tests. Overlay equivalence remains blocked with P3.
+- [x] Executor contracts and the read-only job doctor are covered by focused
+  tests and the full-module gate. The SUCCEEDED-writer audit explicitly
+  classifies the completion DAG fixture as test-only: it seeds
+  `task_attempts`, never `jobs.status`.
 - [x] Focused tests for assembly retry reuse/ineligibility, stock-pool
   snapshot and warm-cache paths pass
   (`go test ./contract`, `go test ./internal/mediarange`, focused

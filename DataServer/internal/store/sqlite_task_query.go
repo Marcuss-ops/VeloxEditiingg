@@ -19,6 +19,7 @@ import (
 	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-shared/dispatchable"
+	"velox-shared/taskcontract"
 )
 
 // IsAllAttemptCommitsCommittedForTasks is the Phase 2.8 roll-up gate
@@ -183,10 +184,40 @@ func taskCandidatesFromDispatchableJobs(jobs []dispatchable.Job) []placement.Tas
 			Executor:             placement.NormalizeExecutorKey(j.ExecutorID, j.ExecutorVersion),
 			RequiredCapabilities: j.RequiredCapabilities,
 			PlacementPinWorkerID: j.PlacementPinWorkerID,
-			RequiredAssetKeys:    sortedAssetKeys(j.Payload),
+			RequiredAssetKeys:    taskAssetKeys(j.ExecutorID, j.ExecutorVersion, j.Payload),
 		})
 	}
 	return candidates
+}
+
+// taskAssetKeys resolves the candidate's asset affinity from the executor
+// contract. A registered executor declares its own inputs, so a window
+// preparation task carries exactly its source instead of every asset
+// referenced elsewhere in the job. Unregistered executors keep the legacy
+// payload scan so the migration can proceed one executor at a time.
+func taskAssetKeys(executorID string, executorVersion int, payload []byte) []string {
+	spec, err := taskcontract.TaskInputFromJSON(executorID, executorVersion, payload)
+	if err != nil {
+		return nil
+	}
+	assets, authoritative, err := taskcontract.Default().RequiredAssets(spec)
+	if !authoritative {
+		return sortedAssetKeys(payload)
+	}
+	if err != nil {
+		// A registered executor with an invalid declaration has no
+		// trustworthy asset set. Returning nil is safer than falling back to
+		// a job-wide scan that could reintroduce unrelated dependencies.
+		return nil
+	}
+	keys := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		if asset.Key != "" {
+			keys = append(keys, asset.Key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func sortedAssetKeys(payload []byte) []string {

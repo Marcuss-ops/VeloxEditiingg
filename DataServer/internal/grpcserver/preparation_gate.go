@@ -11,8 +11,8 @@ import (
 	"velox-server/internal/placement"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
-	"velox-shared/contract"
 	"velox-shared/futureasset"
+	"velox-shared/taskcontract"
 )
 
 // PreparationDecision describes the outcome of the preparation gate
@@ -392,24 +392,26 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 		}
 		return taskgraph.FutureReservationWithPayload{}, false, nil
 	}
-	// Window preparation resolves and verifies exactly its declared source on
-	// the worker. Requiring a job-wide future-asset reservation here causes
-	// every independent encode to wait for unrelated assets and reservations.
-	// Keep assembly and all other executors on the strict reservation path.
-	if candidate.Executor.ID == contract.VideoPrepareWindowExecutorID {
+	// The executor contract decides whether this task needs the job-wide
+	// prefetch gate. Window preparation declares a single source and
+	// self-certifies it, so unrelated job assets cannot block the encode.
+	// Assembly and every unregistered executor keep the strict reservation
+	// path. Only registered executors pay the extra payload read here.
+	if taskContract, registered := taskcontract.Default().Lookup(candidate.Executor.ID, candidate.Executor.Version); registered {
 		payload, payloadErr := pg.store.FutureTaskPayload(ctx, candidate.TaskID)
 		if payloadErr != nil {
 			return PreparationWaiting, payloadErr
 		}
-		var root map[string]json.RawMessage
-		var request contract.VideoPrepareWindowV1
-		if json.Unmarshal(payload, &root) != nil || json.Unmarshal(root[contract.VideoPrepareWindowPayloadKey], &request) != nil {
-			return PreparationWaiting, fmt.Errorf("preparation gate: invalid video window request")
+		spec, specErr := taskcontract.TaskInputFromJSON(candidate.Executor.ID, candidate.Executor.Version, payload)
+		if specErr != nil {
+			return PreparationWaiting, fmt.Errorf("preparation gate: decode task contract: %w", specErr)
 		}
-		if err := request.Validate(); err != nil {
-			return PreparationWaiting, fmt.Errorf("preparation gate: invalid video window request: %w", err)
+		if !taskContract.RequiresPrefetch(spec) {
+			if err := taskContract.Validate(spec); err != nil {
+				return PreparationWaiting, fmt.Errorf("preparation gate: task contract rejected: %w", err)
+			}
+			return PreparationNotRequired, nil
 		}
-		return PreparationNotRequired, nil
 	}
 
 	reservation, found, err := findReservation()

@@ -149,6 +149,11 @@ var allowedTestFiles = map[string]bool{
 	// exercise worker telemetry projection; this is a test fixture, not
 	// a production completion writer.
 	filepath.Join("internal", "store", "e2e_metrics_worker_flow_test.go"): true,
+	// dag_commit_test.go seeds a task_attempts SUCCEEDED row as a TEST
+	// FIXTURE for the completion coordinator; it never flips jobs.status.
+	// The tasks/attempts lifecycle is separate from verified job
+	// finalization, which remains owned by the artifacts writer.
+	filepath.Join("internal", "completion", "dag_commit_test.go"): true,
 }
 
 // allowedJobAttemptsLegacyWriters is the explicit allowlist of files

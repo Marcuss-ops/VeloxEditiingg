@@ -40,6 +40,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "       velox-admin cleanup-drive-duplicates --db PATH --manifest PATH (--dry-run|--apply) [--actor ID]")
 		fmt.Fprintln(stderr, "       velox-admin reconcile-stale-executions --db PATH (--dry-run|--apply) [--output PATH] [--limit N] [--actor ID]")
 		fmt.Fprintln(stderr, "       velox-admin audit-invariants --db PATH [--output PATH]")
+		fmt.Fprintln(stderr, "       velox-admin doctor --db PATH --job JOB_ID [--json] [--output PATH] [--stall-after DURATION]")
 		fmt.Fprintln(stderr, "       velox-admin retry-prepared-windows --db PATH --job JOB_ID --apply")
 		return nil
 	}
@@ -51,6 +52,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "audit-invariants" {
 		return runInvariantAudit(args[1:], stdout, stderr)
+	}
+	if args[0] == "doctor" {
+		return runDoctor(args[1:], stdout, stderr)
 	}
 	if args[0] == "retry-prepared-windows" {
 		return runPreparedWindowRetry(args[1:], stdout, stderr)

@@ -1,5 +1,45 @@
 ## [Unreleased] - 2026-11-08
 
+### Added — executor contracts and read-only job doctor
+
+- The existing canonical `shared/taskcontract` package now also declares how
+  an executor consumes a task: validation, authoritative required assets,
+  prefetch eligibility and completion kind. Contracts consume a `TaskInput`
+  view (executor ID, version and payload), so the persisted `TaskSpec` and
+  its spec hash are unchanged. `video.prepare.window.v1` declares exactly
+  its one source and does not require the job-wide prefetch plan;
+  `video.assemble.copy.v1` and `video.assemble.slice.v1` declare the
+  compiled-plan/runtime assets and keep the strict preparation gate.
+  Unregistered executors remain conservative (legacy payload scan and
+  prefetch required), so migration proceeds one executor at a time.
+- DataServer placement now resolves `RequiredAssetKeys` from the contract, and
+  the preparation gate uses `RequiresPrefetch` instead of an executor-ID
+  special case. A window-preparation task no longer inherits the 246 sibling
+  assets from the r67f job; assembly behavior is unchanged.
+- New `velox-admin doctor --db PATH --job JOB_ID [--json] [--output PATH]
+  [--stall-after DURATION]` opens SQLite read-only and reports
+  ADVANCING/STALLED/BLOCKED/COMPLETE/UNKNOWN with stable cause codes
+  (`PREPARATION_GATE_PENDING`, `RUNTIME_ASSETS_PENDING`,
+  `RESERVATION_EXPIRED`, `WORKER_NOT_READY`, `CAPACITY_EXHAUSTED`,
+  `FENCE_CONFLICT`, `ATTEMPT_SUCCEEDED_WITHOUT_COMMIT`, `NO_PROGRESS`,
+  `NO_READY_TASKS`). Missing projections produce `INSUFFICIENT_EVIDENCE`
+  instead of a guessed cause.
+- Regression tests pin the single-source window declaration against the
+  246-sibling-asset shape, assembly assets, conservative unknown executors and
+  malformed payloads; doctor coverage pins pending preparation, expired
+  reservations, fence conflicts, complete jobs and insufficient evidence.
+- Verification: `go test ./taskcontract` in `shared`; the focused DataServer
+  jobdoctor, velox-admin, artifacts, grpcserver and placement suites pass. The
+  full-module gate (`scripts/ci/pre-removal-verify.sh`) is green: vet, build
+  and `go test -count=1 ./...` (431 s), `OVERALL_RC=0`.
+
+### Fixed — completion fixture classified in the SUCCEEDED-writer audit
+
+- `internal/completion/dag_commit_test.go` seeds a `task_attempts` row with
+  `SUCCEEDED` as a test fixture; it never flips `jobs.status`. The audit now
+  allowlists it explicitly in the test-file list with the same documenting
+  rationale as the other test fixtures.
+
 ### Fixed — reject video fragments without canonical H.264 identity
 
 - A video asset is no longer treated as packet-copy-ready from profile, frame

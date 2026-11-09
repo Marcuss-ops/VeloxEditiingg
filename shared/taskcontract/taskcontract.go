@@ -6,6 +6,11 @@
 // All task-spec identity fields (Version, JobID, ExecutorID, Payload),
 // validation rules, and hashing live here. Both sides import this package
 // and re-export via a type alias so existing call-sites remain unchanged.
+//
+// The package also owns the executor contract registry. A contract declares
+// the executor's required assets, prefetch eligibility and completion kind
+// from a TaskInput view (executor ID, executor version and payload), without
+// changing the persisted TaskSpec or its spec hash.
 package taskcontract
 
 import (
