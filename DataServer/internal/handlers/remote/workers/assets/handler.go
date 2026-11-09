@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -78,7 +77,7 @@ func (h *Handler) RegisterPreparedWindow() gin.HandlerFunc {
 		if !h.authorizeWorker(c) {
 			return
 		}
-		if h.assetSvc == nil {
+		if h.assetSvc == nil || h.blobStore == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset service unavailable"})
 			return
 		}
@@ -115,13 +114,17 @@ func (h *Handler) RegisterPreparedWindow() gin.HandlerFunc {
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes+1)
-		tmp, err := os.CreateTemp("", "velox-prepared-window-*.mp4")
+		path, err := h.blobStore.StagingPath("assets", "prepared-window", ".mp4")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot stage prepared window"})
 			return
 		}
-		path := tmp.Name()
-		defer os.Remove(path)
+		defer h.blobStore.RemoveStaging(path)
+		tmp, err := h.blobStore.OpenStagedWrite(path)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot stage prepared window"})
+			return
+		}
 		written, copyErr := io.Copy(tmp, c.Request.Body)
 		closeErr := tmp.Close()
 		if copyErr != nil || closeErr != nil || written <= 0 || written > maxBytes {
