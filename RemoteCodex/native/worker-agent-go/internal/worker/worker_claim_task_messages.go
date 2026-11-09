@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 
 	"velox-shared/contract"
 	"velox-shared/controltransport"
@@ -90,7 +91,29 @@ func (w *Worker) handleTaskOfferMessage(ctx context.Context, msg controltranspor
 		}
 		return
 	}
-	if err := contract.ValidateCompiledRenderPlanV2Payload(admissionPayload); err != nil {
+	if executorID == "video.prepare.window.v1" {
+		var request contract.VideoPrepareWindowV1
+		raw, ok := admissionPayload[contract.VideoPrepareWindowPayloadKey]
+		encoded, encodeErr := json.Marshal(raw)
+		if !ok || encodeErr != nil {
+			w.logger.Warn("[RECEIVE] TaskOffer refused — invalid video window preparation payload (task=%s)", taskID)
+			if rejectErr := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "invalid_task_payload", attemptNumber, revision); rejectErr != nil {
+				w.logger.Warn("[RECEIVE] Failed to send TaskRejected (invalid task payload): %v", rejectErr)
+			}
+			return
+		}
+		validationErr := json.Unmarshal(encoded, &request)
+		if validationErr == nil {
+			validationErr = request.Validate()
+		}
+		if validationErr != nil {
+			w.logger.Warn("[RECEIVE] TaskOffer refused — invalid video window preparation contract (task=%s): %v", taskID, validationErr)
+			if rejectErr := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "invalid_task_payload", attemptNumber, revision); rejectErr != nil {
+				w.logger.Warn("[RECEIVE] Failed to send TaskRejected (invalid task payload): %v", rejectErr)
+			}
+			return
+		}
+	} else if err := contract.ValidateCompiledRenderPlanV2Payload(admissionPayload); err != nil {
 		w.logger.Warn("[RECEIVE] TaskOffer refused — invalid CompiledRenderPlanV2 (task=%s): %v", taskID, err)
 		if rejectErr := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "invalid_render_plan", attemptNumber, revision); rejectErr != nil {
 			w.logger.Warn("[RECEIVE] Failed to send TaskRejected (invalid render plan): %v", rejectErr)
