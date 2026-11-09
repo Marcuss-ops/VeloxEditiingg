@@ -13,9 +13,10 @@ import (
 )
 
 // RetryFailedPreparedWindows requeues only failed video.prepare.window.v1
-// tasks whose recorded failure came from the prepared-window upload boundary.
-// It keeps task specs and attempt history intact, and leaves the parent job
-// RUNNING so the normal dispatcher can continue the existing DAG.
+// tasks whose failure is a known upload error or a certification error
+// followed by a successful worker image update. It keeps task specs and
+// attempt history intact, and leaves the parent job RUNNING so the normal
+// dispatcher can continue the existing DAG.
 func (s *SQLiteStore) RetryFailedPreparedWindows(ctx context.Context, jobID string) ([]string, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(jobID) == "" {
 		return nil, fmt.Errorf("prepared-window retry: store and job_id are required")
@@ -48,7 +49,7 @@ func (s *SQLiteStore) RetryFailedPreparedWindows(ctx context.Context, jobID stri
 
 	rows, err := conn.QueryContext(ctx, `
 		SELECT t.task_id,t.status,t.revision,t.winning_attempt_terminal_pending,
-		       t.executor_id,s.executor_id,a.error_message
+		       t.executor_id,s.executor_id,a.error_code,a.error_message,a.worker_id,a.completed_at
 		FROM tasks t
 		JOIN task_specs s ON s.task_id=t.task_id
 		JOIN task_attempts a ON a.id=(SELECT a2.id FROM task_attempts a2 WHERE a2.task_id=t.task_id ORDER BY a2.attempt_number DESC,a2.created_at DESC LIMIT 1)
@@ -58,22 +59,24 @@ func (s *SQLiteStore) RetryFailedPreparedWindows(ctx context.Context, jobID stri
 		return nil, wrapDBInfrastructure("prepared-window retry candidates", err)
 	}
 	type candidate struct {
-		id, status, taskExecutor, specExecutor, failure string
-		revision                                        int
-		pending                                         int
+		id, status, taskExecutor, specExecutor, errorCode, failure, workerID, failedAt string
+		revision                                                                       int
+		pending                                                                        int
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.status, &c.revision, &c.pending, &c.taskExecutor, &c.specExecutor, &c.failure); err != nil {
+		if err := rows.Scan(&c.id, &c.status, &c.revision, &c.pending, &c.taskExecutor, &c.specExecutor, &c.errorCode, &c.failure, &c.workerID, &c.failedAt); err != nil {
 			rows.Close()
 			return nil, wrapDBInfrastructure("prepared-window retry scan", err)
 		}
-		if c.taskExecutor != c.specExecutor || c.pending != 0 ||
-			!(strings.Contains(c.failure, "prepared-window registry upload") &&
-				(strings.Contains(c.failure, "HTTP 401") || strings.Contains(c.failure, "HTTP 422"))) {
+		retryableUpload := strings.Contains(c.failure, "prepared-window registry upload") &&
+			(strings.Contains(c.failure, "HTTP 401") || strings.Contains(c.failure, "HTTP 422"))
+		retryableCertification := c.errorCode == "WINDOW_CERTIFICATION_FAILED" && c.workerID != "" && c.failedAt != "" &&
+			successfulWorkerUpdateAfterFailure(ctx, conn, c.workerID, c.failedAt)
+		if c.taskExecutor != c.specExecutor || c.pending != 0 || !(retryableUpload || retryableCertification) {
 			rows.Close()
-			return nil, fmt.Errorf("prepared-window retry: task %s is not a known retryable upload failure", c.id)
+			return nil, fmt.Errorf("prepared-window retry: task %s is not a known retryable failure after worker update", c.id)
 		}
 		candidates = append(candidates, c)
 	}
@@ -117,4 +120,11 @@ func (s *SQLiteStore) RetryFailedPreparedWindows(ctx context.Context, jobID stri
 	}
 	committed = true
 	return ids, nil
+}
+
+func successfulWorkerUpdateAfterFailure(ctx context.Context, conn *sql.Conn, workerID, failedAt string) bool {
+	var count int
+	err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM fleet_operations
+		WHERE worker_id=? AND op='update' AND status='SUCCEEDED' AND finished_at>?`, workerID, failedAt).Scan(&count)
+	return err == nil && count > 0
 }
