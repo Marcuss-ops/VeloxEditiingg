@@ -126,10 +126,17 @@ type windowFFprobeDocument struct {
 		FrameCount    string `json:"nb_read_frames"`
 		ExtradataHash string `json:"extradata_hash"`
 	} `json:"streams"`
+	Frames []struct {
+		KeyFrame int `json:"key_frame"`
+	} `json:"frames"`
 }
 
 func (ffprobeWindowOutputCertifier) Certify(ctx context.Context, path string, profile contract.CanonicalVideoProfileV1, wantFrames int64) (windowOutputEvidence, error) {
-	args := []string{"-v", "error", "-count_frames", "-show_data_hash", "sha256", "-show_entries", "stream=codec_type,codec_name,profile,level,width,height,pix_fmt,r_frame_rate,time_base,has_b_frames,nb_read_frames,extradata_hash", "-of", "json", path}
+	// Include frame key flags in the stream probe so certification needs one
+	// ffprobe process per fragment. Prepared windows are short, and this keeps
+	// the independent first-frame keyframe check without spawning a second
+	// process for every preparation task.
+	args := []string{"-v", "error", "-count_frames", "-show_frames", "-show_data_hash", "sha256", "-show_entries", "stream=codec_type,codec_name,profile,level,width,height,pix_fmt,r_frame_rate,time_base,has_b_frames,nb_read_frames,extradata_hash:frame=key_frame", "-of", "json", path}
 	data, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
 	if err != nil {
 		return windowOutputEvidence{}, fmt.Errorf("ffprobe prepared window: %w", err)
@@ -161,13 +168,7 @@ func (ffprobeWindowOutputCertifier) Certify(ctx context.Context, path string, pr
 	if parseErr != nil {
 		return windowOutputEvidence{}, fmt.Errorf("prepared fragment frame count is unavailable: %w", parseErr)
 	}
-	keyframeArgs := []string{"-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_entries", "frame=key_frame", "-of", "csv=p=0", path}
-	keyframeData, err := exec.CommandContext(ctx, "ffprobe", keyframeArgs...).Output()
-	if err != nil {
-		return windowOutputEvidence{}, fmt.Errorf("ffprobe prepared window first frame: %w", err)
-	}
-	firstFrameField := strings.TrimSpace(strings.SplitN(string(keyframeData), ",", 2)[0])
-	firstFrameKeyframe := firstFrameField == "1"
+	firstFrameKeyframe := len(doc.Frames) > 0 && doc.Frames[0].KeyFrame == 1
 	evidence := windowOutputEvidence{
 		Codec: video.CodecName, Profile: strings.ToLower(video.Profile), Level: video.Level,
 		Width: video.Width, Height: video.Height, PixelFormat: video.PixelFormat,
