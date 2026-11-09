@@ -137,7 +137,7 @@ func Build(in PlannerInput) (Plan, error) {
 		Limits:       limits,
 	}
 	protected := make(map[string]*ProtectedAsset)
-	seenJobs := make(map[string]struct{}, len(in.FutureJobs))
+	seenTasks := make(map[string]struct{}, len(in.FutureJobs))
 
 	for index, inputJob := range in.FutureJobs {
 		if index >= limits.ProtectionLookahead {
@@ -147,10 +147,10 @@ func Build(in PlannerInput) (Plan, error) {
 		if strings.TrimSpace(job.JobID) == "" || strings.TrimSpace(job.TaskID) == "" {
 			return Plan{}, fmt.Errorf("futureasset: future job %d requires job_id and task_id", index)
 		}
-		if _, exists := seenJobs[job.JobID]; exists {
-			return Plan{}, fmt.Errorf("futureasset: duplicate job_id %q", job.JobID)
+		if _, exists := seenTasks[job.TaskID]; exists {
+			return Plan{}, fmt.Errorf("futureasset: duplicate task_id %q", job.TaskID)
 		}
-		seenJobs[job.JobID] = struct{}{}
+		seenTasks[job.TaskID] = struct{}{}
 		job.Distance = index + 1
 		var err error
 		job.Assets, err = canonicalAssets(job.Assets)

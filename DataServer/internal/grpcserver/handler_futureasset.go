@@ -237,8 +237,10 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	reservationsReconciledAt = reconciledAt
 
 	// ── Stage 5: Build plan ─────────────────────────────────────────────
-	plan, ok := h.buildFuturePlan(workerID, currentJobID, jobs)
-	if !ok {
+	plan, err := h.buildFuturePlan(workerID, currentJobID, jobs)
+	if err != nil {
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed,
+			"[PREFETCH] build plan worker=%s current_job=%s: %v", workerID, currentJobID, err)
 		return
 	}
 	planBuiltAt = time.Now().UTC()

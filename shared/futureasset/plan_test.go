@@ -43,6 +43,20 @@ func TestBuildDeduplicatesProtectedAssetsAndCanonicalizesJobAssets(t *testing.T)
 	}
 }
 
+func TestBuildAllowsMultipleTasksFromSameJob(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	plan, err := Build(PlannerInput{Version: 3, PlanID: "plan-dag", WorkerID: "worker-1", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), FutureJobs: []Job{
+		{JobID: "job-dag", TaskID: "prepare-1", ReservationID: "res-1", Assets: []AssetManifest{{AssetKey: "source-1", SHA256: "a", SizeBytes: 10}}},
+		{JobID: "job-dag", TaskID: "prepare-2", ReservationID: "res-2", Assets: []AssetManifest{{AssetKey: "source-2", SHA256: "b", SizeBytes: 20}}},
+	}})
+	if err != nil {
+		t.Fatalf("multiple tasks in one job rejected: %v", err)
+	}
+	if len(plan.PrefetchJobs) != 2 || plan.PrefetchJobs[0].TaskID != "prepare-1" || plan.PrefetchJobs[1].TaskID != "prepare-2" {
+		t.Fatalf("prefetch tasks = %+v, want both unique tasks for job-dag", plan.PrefetchJobs)
+	}
+}
+
 func TestBuildRequiresIntegrityManifestForPrefetch(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	_, err := Build(PlannerInput{Version: 1, PlanID: "plan", WorkerID: "worker", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), FutureJobs: []Job{{JobID: "job", TaskID: "task", ReservationID: "res", Assets: []AssetManifest{{AssetKey: "asset", SizeBytes: 1}}}}})

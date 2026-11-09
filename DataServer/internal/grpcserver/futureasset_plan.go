@@ -16,16 +16,16 @@ func (h *Handler) buildFuturePlan(
 	workerID string,
 	currentJobID string,
 	jobs []futureasset.Job,
-) (futureasset.Plan, bool) {
+) (futureasset.Plan, error) {
 	plan, err := h.futureAssetPlanner.Build(workerID, currentJobID, fmt.Sprintf("future:%s", workerID), jobs, h.futureAssetPlanTTL())
 	if err != nil {
-		return futureasset.Plan{}, false
+		return futureasset.Plan{}, err
 	}
 	plan.Limits = futureasset.Limits{
 		PrefetchHorizon:     h.config.FutureAssetPrefetchHorizon,
 		ProtectionLookahead: h.config.FutureAssetProtectionLookahead,
 	}
-	return plan, true
+	return plan, nil
 }
 
 func (h *Handler) futureAssetPlanTTL() time.Duration {
