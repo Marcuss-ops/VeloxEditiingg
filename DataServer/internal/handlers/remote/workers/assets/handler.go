@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -129,6 +130,7 @@ func (h *Handler) RegisterPreparedWindow() gin.HandlerFunc {
 		}
 		asset, err := h.assetSvc.RegisterPreparedWindow(c.Request.Context(), path, request, certificate)
 		if err != nil {
+			log.Printf("[PREPARED_WINDOW] verification rejected identity=%s output_sha256=%s size_bytes=%d err=%v", identity, certificate.OutputSHA256, written, err)
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "prepared-window verification failed"})
 			return
 		}
