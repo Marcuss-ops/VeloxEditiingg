@@ -30,7 +30,7 @@ const (
 	runtimeFinalizeSucceeded          = "SUCCEEDED"
 	runtimeFinalizeFailed             = "FAILED"
 	runtimeFinalizeWaitingPreparation = "WAITING_PREPARATION"
-	runtimeFinalizePoll               = time.Second
+	runtimeFinalizePoll               = 100 * time.Millisecond
 	runtimeFinalizeBatch              = 16
 	runtimeFinalizeConcurrency        = 4
 )
