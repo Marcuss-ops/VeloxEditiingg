@@ -79,6 +79,9 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	if cfg.MaxActiveJobs > 0 {
 		detectedConcurrency = cfg.MaxActiveJobs
 	}
+	// Resolve the automatic value once so every downstream admission,
+	// capacity-reporting and native-render-budget path sees the same cap.
+	cfg.MaxActiveJobs = detectedConcurrency
 	log.Info("[CONCURRENCY] Detected %d CPUs, using %d max parallel jobs", runtime.NumCPU(), detectedConcurrency)
 
 	apiClient := api.NewClient(cfg.MasterURL,

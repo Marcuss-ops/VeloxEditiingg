@@ -61,7 +61,7 @@ type WorkerConfig struct {
 	StateDir string `json:"state_dir,omitempty"`
 
 	// Worker policy
-	MaxActiveJobs  int `json:"max_active_jobs"`           // Maximum concurrent active jobs (default: 1)
+	MaxActiveJobs  int `json:"max_active_jobs"`           // Maximum concurrent active jobs (0: CPU-based auto sizing; default)
 	PrometheusPort int `json:"prometheus_port,omitempty"` // Prometheus metrics port (default: 9090; set via VELOX_PROMETHEUS_PORT=0 to disable)
 	HealthPort     int `json:"health_port"`               // Health HTTP port (default: 8081, 0=disabled)
 

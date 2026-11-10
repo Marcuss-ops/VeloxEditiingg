@@ -93,7 +93,7 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		LogLevel:        "info",
 		BundleVersion:   "",
 		ProtocolVersion: "v3",
-		MaxActiveJobs:   1,    // 1 main job per VPS
+		MaxActiveJobs:   0,    // auto-size from available CPU capacity; positive values override
 		HealthPort:      8081, // Health HTTP endpoint for Docker HEALTHCHECK
 		PrometheusPort:  9090, // Prometheus metrics endpoint
 		WorkerSecret:    "",   // Set via EnvWorkerSecret or credential-file fallback

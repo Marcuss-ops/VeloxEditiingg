@@ -141,7 +141,7 @@ export VELOX_GRPC_TLS_CA_FILE=/etc/velox/certs/ca.crt
 |---------|---------|---------|
 | `VELOX_RENDER_BACKEND` | `native` | Selects the rendering backend (`native`, `chronon3d`, …) |
 | `VELOX_VIDEO_ENGINE_CPP_BIN` | `velox-render-cpp` | Path to the C++ video render binary (resolved via `exec.LookPath`) |
-| `VELOX_MAX_ACTIVE_JOBS` | `1` | Concurrent active jobs per worker (currently bound via `worker_config.json` as `max_active_jobs`; `VELOX_MAX_ACTIVE_JOBS` env-var binding is on the roadmap) |
+| `max_active_jobs` (`worker_config.json`) | `0` (auto) | Concurrent active jobs per worker. Auto sizing uses `floor(NumCPU/2)`, clamped to 1..8; a positive value pins the cap. `VELOX_MAX_ACTIVE_JOBS` is not currently bound. |
 
 ### 6. Asset download (chunked + prefetch)
 
