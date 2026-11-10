@@ -493,6 +493,11 @@ func (e *videoPrepareWindowExecutor) preparedWindowPath(identity string, request
 }
 
 func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha256 string) (windowSourceProbe, error) {
+	// Coalesce probes for the same immutable source while allowing different
+	// sources to proceed concurrently. Recheck the cache after acquiring the
+	// keyed lock because another caller may have populated it while we waited.
+	unlock := e.lockWindow("source-probe:" + sha256)
+	defer unlock()
 	if e != nil {
 		e.sourceProbeMu.Lock()
 		cached, ok := e.sourceProbes[sha256]
@@ -709,12 +714,10 @@ func (e *videoPrepareWindowExecutor) ProbeLocalPreparation(ctx context.Context, 
 
 func (e *videoPrepareWindowExecutor) canonicalExtradata(ctx context.Context, encoderBuildSHA string) (string, error) {
 	e.extradataMu.Lock()
+	defer e.extradataMu.Unlock()
 	if e.extradataKey == encoderBuildSHA && e.extradataSHA != "" {
-		hash := e.extradataSHA
-		e.extradataMu.Unlock()
-		return hash, nil
+		return e.extradataSHA, nil
 	}
-	e.extradataMu.Unlock()
 	ref := e.extradataRef
 	if ref == nil {
 		ref = ffmpegWindowExtradataReference{}
@@ -723,13 +726,8 @@ func (e *videoPrepareWindowExecutor) canonicalExtradata(ctx context.Context, enc
 	if err != nil {
 		return "", err
 	}
-	e.extradataMu.Lock()
-	if e.extradataKey == "" {
-		e.extradataKey, e.extradataSHA = encoderBuildSHA, hash
-	}
-	cached := e.extradataSHA
-	e.extradataMu.Unlock()
-	return cached, nil
+	e.extradataKey, e.extradataSHA = encoderBuildSHA, hash
+	return hash, nil
 }
 
 func (e *videoPrepareWindowExecutor) lockWindow(key string) func() {
@@ -758,12 +756,10 @@ func (e *videoPrepareWindowExecutor) lockWindow(key string) func() {
 
 func (e *videoPrepareWindowExecutor) encoderIdentity(ctx context.Context) (string, string, error) {
 	e.encoderMu.Lock()
+	defer e.encoderMu.Unlock()
 	if e.encoderVer != "" && e.encoderSHA != "" {
-		version, build := e.encoderVer, e.encoderSHA
-		e.encoderMu.Unlock()
-		return version, build, nil
+		return e.encoderVer, e.encoderSHA, nil
 	}
-	e.encoderMu.Unlock()
 	data, err := exec.CommandContext(ctx, "ffmpeg", "-version").Output()
 	if err != nil {
 		return "", "", fmt.Errorf("identify FFmpeg encoder build: %w", err)
@@ -774,12 +770,7 @@ func (e *videoPrepareWindowExecutor) encoderIdentity(ctx context.Context) (strin
 	}
 	sum := sha256.Sum256(data)
 	version, build := strings.TrimSpace(lines[0]), hex.EncodeToString(sum[:])
-	e.encoderMu.Lock()
-	if e.encoderVer == "" {
-		e.encoderVer, e.encoderSHA = version, build
-	}
-	version, build = e.encoderVer, e.encoderSHA
-	e.encoderMu.Unlock()
+	e.encoderVer, e.encoderSHA = version, build
 	return version, build, nil
 }
 
