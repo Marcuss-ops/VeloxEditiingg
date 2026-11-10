@@ -151,15 +151,16 @@ func (h *Handler) RefreshPrefetchForJob(ctx context.Context, jobID string) {
 		if err == nil {
 			for _, reservation := range reservations {
 				if reservation.JobID == jobID && reservation.WorkerID != "" {
-					h.refreshFutureAssetPlan(ctx, reservation.WorkerID, jobID)
 					// A task-spec update can make the assembly task dispatchable
 					// without producing a worker message (the FutureAssetPlan is
-					// control-plane-only). Wake the owning session after refreshing
-					// so placement observes the committed runtime_assets_pending
-					// value immediately instead of waiting for its 10s safety tick.
+					// control-plane-only). Wake placement before refreshing that plan:
+					// FINALIZE has already committed the task payload, and the refresh
+					// is best effort. It must not put a potentially slow planner query
+					// in front of the newly dispatchable assembly task.
 					if sess := h.getSession(reservation.WorkerID); sess != nil {
 						sess.signalPlacement()
 					}
+					h.refreshFutureAssetPlan(ctx, reservation.WorkerID, jobID)
 					return
 				}
 			}

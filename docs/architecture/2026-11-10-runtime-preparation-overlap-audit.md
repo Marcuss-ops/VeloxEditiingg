@@ -94,3 +94,9 @@ Add timestamps around finalizer planning, cache lookup batches, DAG persistence,
 4. Extend early preparation to clips only after tracing their current source/preparation path; do not conflate clip audio, stock-pool members, and fixed video windows.
 
 This note is based on the production SQLite records and Master journal for this job plus static code inspection. It does not claim the proposed overlap or gate fix has been implemented or benchmarked.
+
+## Code follow-up — 2026-11-10
+
+The post-FINALIZE hook is asynchronous (`Enqueuer.NotifyTaskUpdated`), and its callback previously refreshed the worker's FutureAssetPlan before waking placement. The placement path also refreshed that plan synchronously after claiming assembly but before queueing its TaskOffer. Both are best-effort prefetch work, but either could delay dispatch. The first condition is now ordered wake → refresh; the second is ordered queue offer → refresh. The placement path emits `[PLACEMENT_TIMING]` with offer preparation/queue time and post-offer prefetch refresh time, while the existing `[PREFETCH_TIMING]` log breaks the refresh into query, reconcile, plan-build, and send stages.
+
+The package test `go test ./internal/grpcserver -count=1` passed after this change. Production latency improvement is not yet measured; compare the next comparable job's FINALIZE materialization, TaskOffer sent/accepted, and assembly start timestamps, and inspect the new placement/prefetch timing fields. The 33.6-second historical gap remains an observation; stale reservation state was not conclusively established as its cause.

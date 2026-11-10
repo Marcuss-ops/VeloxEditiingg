@@ -272,11 +272,17 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		return
 	}
 
-	// Persist and publish the next worker-scoped hard reservation window while
-	// the current task is still running. The planner is best-effort here: a
-	// prefetch outage must never block correctness of the claimed task.
-	h.refreshFutureAssetPlan(ctx, workerID, tws.JobID)
+	// Queue the offer before refreshing the next worker-scoped hard reservation
+	// window. The planner is best-effort, and a slow control-plane refresh must
+	// not hold up a task that has already been claimed and is ready to run.
+	offerStarted := time.Now()
 	h.sendClaimedTaskOffer(ctx, sess, tws, attempt, leaseID)
+	offerQueued := time.Now()
+	h.refreshFutureAssetPlan(ctx, workerID, tws.JobID)
+	refreshFinished := time.Now()
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacement,
+		"[PLACEMENT_TIMING] worker=%s job_id=%s task_id=%s offer_prepare_and_queue_ms=%d post_offer_prefetch_refresh_ms=%d",
+		workerID, tws.JobID, tws.ID, offerQueued.Sub(offerStarted).Milliseconds(), refreshFinished.Sub(offerQueued).Milliseconds())
 }
 
 func withoutTaskCandidate(candidates []placement.TaskCandidate, taskID string) []placement.TaskCandidate {
