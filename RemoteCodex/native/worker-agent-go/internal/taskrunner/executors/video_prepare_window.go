@@ -217,6 +217,18 @@ type windowSourceProbe struct {
 	KeyframeTimes []float64
 }
 
+// windowSourceProbeIndex binds a persisted keyframe index to the immutable
+// source bytes and probe schema that produced it. The source hash is part of
+// the filename too, but keeping it in the document makes accidental/misplaced
+// cache entries fail closed.
+type windowSourceProbeIndex struct {
+	Version   int               `json:"version"`
+	SourceSHA string            `json:"source_sha256"`
+	Probe     windowSourceProbe `json:"probe"`
+}
+
+const windowSourceProbeIndexVersion = 1
+
 type keyedWindowLock struct {
 	mu   sync.Mutex
 	refs int
@@ -549,6 +561,15 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 			return cached, nil
 		}
 	}
+	if cached, ok := e.readPersistedSourceProbe(sha256); ok {
+		e.sourceProbeMu.Lock()
+		if e.sourceProbes == nil {
+			e.sourceProbes = make(map[string]windowSourceProbe)
+		}
+		e.sourceProbes[sha256] = cached
+		e.sourceProbeMu.Unlock()
+		return cached, nil
+	}
 	args := []string{
 		"-v", "error", "-skip_frame", "nokey", "-select_streams", "v:0", "-show_streams", "-show_frames", "-show_data_hash", "sha256",
 		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,pix_fmt,r_frame_rate,time_base,has_b_frames,extradata_hash,bit_rate,start_time:frame=key_frame,best_effort_timestamp_time",
@@ -603,8 +624,65 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 		}
 		e.sourceProbes[sha256] = probe
 		e.sourceProbeMu.Unlock()
+		e.writePersistedSourceProbe(sha256, probe)
 	}
 	return probe, nil
+}
+
+func (e *videoPrepareWindowExecutor) sourceProbeIndexPath(sourceSHA string) string {
+	if e == nil || !isLowerSHA256(sourceSHA) {
+		return ""
+	}
+	return filepath.Join(e.outputRoot, "source-probes", sourceSHA+".json")
+}
+
+func (e *videoPrepareWindowExecutor) readPersistedSourceProbe(sourceSHA string) (windowSourceProbe, bool) {
+	path := e.sourceProbeIndexPath(sourceSHA)
+	if path == "" {
+		return windowSourceProbe{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return windowSourceProbe{}, false
+	}
+	var index windowSourceProbeIndex
+	if json.Unmarshal(data, &index) != nil || index.Version != windowSourceProbeIndexVersion || index.SourceSHA != sourceSHA || !validWindowSourceProbe(index.Probe) {
+		return windowSourceProbe{}, false
+	}
+	return index.Probe, true
+}
+
+func (e *videoPrepareWindowExecutor) writePersistedSourceProbe(sourceSHA string, probe windowSourceProbe) {
+	path := e.sourceProbeIndexPath(sourceSHA)
+	if path == "" || !validWindowSourceProbe(probe) {
+		return
+	}
+	data, err := json.Marshal(windowSourceProbeIndex{Version: windowSourceProbeIndexVersion, SourceSHA: sourceSHA, Probe: probe})
+	if err != nil || os.MkdirAll(filepath.Dir(path), 0o750) != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".source-probe-*.partial")
+	if err != nil {
+		return
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return
+	}
+	if err = tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(tmpPath, path)
+}
+
+func validWindowSourceProbe(probe windowSourceProbe) bool {
+	return probe.CodecName != "" && probe.Width > 0 && probe.Height > 0 && probe.FPSNum > 0 && probe.FPSDen > 0 && probe.TimeBaseNum > 0 && probe.TimeBaseDen > 0 && len(probe.KeyframeTimes) > 0
 }
 
 type windowCopyEligibility struct {
