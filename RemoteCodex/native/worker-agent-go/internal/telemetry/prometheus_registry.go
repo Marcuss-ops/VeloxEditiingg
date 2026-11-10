@@ -62,6 +62,12 @@ type PrometheusMetrics struct {
 	assemblyAssetsMissingAtExecution *GaugeVec
 	assemblyExecutionDownloadMS      *HistogramVec
 
+	// Whole-source normalization cache outcomes. Static "total" label:
+	// source hashes and paths never become Prometheus series.
+	normalizedSourceCacheHits   *CounterVec
+	normalizedSourceCacheMisses *CounterVec
+	normalizedSourceEncodes     *CounterVec
+
 	workerErrorsTotal                  *CounterVec
 	assetDownloadActive                *GaugeVec
 	assetDownloadQueued                *GaugeVec

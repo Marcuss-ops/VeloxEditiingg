@@ -381,6 +381,15 @@ func main() {
 		logger.Warn("[CACHE_LEASES] startup reconciled previous-process leases released=%d", startupReleasedLeases)
 	}
 	w.AttachClipCache(clipCache)
+	// Registration precedes the cache open (the chunk-store attachment uses
+	// the populated registry), so hand the live cache to every executor that
+	// derives reusable source assets. FindDerived/StoreDerived stay dormant
+	// on a nil attachment; this is the production wiring point.
+	for _, registered := range registry.All() {
+		if attacher, ok := registered.(interface{ AttachDerivedCache(*workercache.Cache) }); ok {
+			attacher.AttachDerivedCache(clipCache)
+		}
+	}
 	// w was constructed before this index so its authenticated API client is
 	// the one populated by the control-plane registration handshake.
 	if w.APIClient() == nil {

@@ -118,15 +118,18 @@ func (execVideoCommandRunner) Run(ctx context.Context, name string, args ...stri
 // component that declares its own 30 fps while the profile says 24 fps is a
 // regression, not a preference.
 type VideoTrimmer struct {
-	runner  videoCommandRunner
-	profile contract.CanonicalVideoProfileV1
-	quality contract.PreparationQualityPolicy
+	runner    videoCommandRunner
+	profile   contract.CanonicalVideoProfileV1
+	quality   contract.PreparationQualityPolicy
+	keyframes *KeyframeIndex
 }
 
 // NewVideoTrimmer creates a trimmer using ffprobe and ffmpeg from PATH, wired
 // to the canonical video profile and the canonical quality policy.
 func NewVideoTrimmer() *VideoTrimmer {
-	return newVideoTrimmer(execVideoCommandRunner{}, contract.CanonicalVideoProfileV1Default, contract.CanonicalPreparationQualityPolicyDefault)
+	t := newVideoTrimmer(execVideoCommandRunner{}, contract.CanonicalVideoProfileV1Default, contract.CanonicalPreparationQualityPolicyDefault)
+	t.keyframes = DefaultKeyframeIndex()
+	return t
 }
 
 // newVideoTrimmer is the single construction path. An invalid profile or
@@ -182,11 +185,37 @@ func (t *VideoTrimmer) PreparationRevision() string {
 // Probe invokes ffprobe and returns the metadata used by Plan. It is public so
 // callers can record the source decision in the asset manifest.
 func (t *VideoTrimmer) Probe(ctx context.Context, inputPath string) (VideoProbe, error) {
+	return t.probe(ctx, inputPath, "", 0)
+}
+
+// ProbeWithIdentity reuses the persisted probe and keyframe list for an
+// immutable source. The SHA-256 is the source identity and the size guards
+// against a truncated or replaced local file. A miss runs ffprobe exactly as
+// Probe does and persists the result.
+func (t *VideoTrimmer) ProbeWithIdentity(ctx context.Context, inputPath, sourceSHA256 string, sizeBytes int64) (VideoProbe, error) {
+	return t.probe(ctx, inputPath, sourceSHA256, sizeBytes)
+}
+
+// KeyframeIndexMetrics exposes the bounded hit/miss surface for the metrics
+// composition root. It is nil-safe for test trimmers without an index.
+func (t *VideoTrimmer) KeyframeIndexMetrics() *KeyframeIndexMetrics {
+	if t == nil || t.keyframes == nil {
+		return nil
+	}
+	return t.keyframes.metrics
+}
+
+func (t *VideoTrimmer) probe(ctx context.Context, inputPath, sourceSHA256 string, sizeBytes int64) (VideoProbe, error) {
 	if t == nil || t.runner == nil {
 		return VideoProbe{}, fmt.Errorf("video trimmer unavailable")
 	}
 	if strings.TrimSpace(inputPath) == "" {
 		return VideoProbe{}, fmt.Errorf("video input path is required")
+	}
+	if t.keyframes != nil {
+		if cached, ok := t.keyframes.Lookup(ctx, sourceSHA256, sizeBytes); ok {
+			return cached, nil
+		}
 	}
 	args := []string{
 		"-v", "error",
@@ -256,6 +285,9 @@ func (t *VideoTrimmer) Probe(ctx context.Context, inputPath string) (VideoProbe,
 	}
 	if probe.DurationSeconds <= 0 || probe.Width <= 0 || probe.Height <= 0 || probe.FPSNum <= 0 || probe.FPSDen <= 0 || probe.VideoCodec == "" {
 		return VideoProbe{}, fmt.Errorf("ffprobe %s: incomplete video metadata", inputPath)
+	}
+	if t.keyframes != nil && len(probe.Keyframes) > 0 {
+		_ = t.keyframes.Store(ctx, sourceSHA256, sizeBytes, probe)
 	}
 	return probe, nil
 }

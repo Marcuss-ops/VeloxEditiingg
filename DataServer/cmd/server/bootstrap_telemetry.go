@@ -51,6 +51,11 @@ func wireMetricsTelemetry(
 				metricsRegistry.Register(family)
 			}
 		}
+		for _, family := range velmetrics.NewKeyframeIndexFamilies(m.AssetService.KeyframeIndexMetrics()) {
+			if family != nil {
+				metricsRegistry.Register(family)
+			}
+		}
 	}
 	return metricsRegistry, metricsCollector
 }

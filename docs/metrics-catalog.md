@@ -1,7 +1,7 @@
 # Velox Enterprise Metric Catalog
 
 > **Owner:** video-engine  
-> **Last updated:** 2026-09-28  
+> **Last updated:** 2026-11-10
 > **Version:** Scorecard v2 (Steps 1–18)  
 > **Cardinality discipline:** NEVER put `job_id`, `task_id`, `attempt_id`, `hash`, or `video_title` in a Prometheus label. Use SQL for those dimensions.
 
@@ -64,6 +64,9 @@ per-job labels. Per-job delivery timing and cache totals come from
 | `velox_assembly_prefetch_ms` | H | `label=total` | per-asset warm prefetch latency in milliseconds |
 | `velox_assembly_assets_ready_at_execution` / `velox_assembly_assets_missing_at_execution` | G | `label=total` | verified assets available/missing when execution starts; missing target is zero |
 | `velox_assembly_execution_download_ms` | H | `label=total` | residual download duration on the execution critical path; fast-path target is zero |
+| `velox_normalized_source_cache_hits_total` / `velox_normalized_source_cache_misses_total` | C | `label=total` | timestamp windows served by, or missing, the cached whole-source normalization |
+| `velox_normalized_source_encodes_total` | C | `label=total` | whole-source normalizations actually encoded after a cache miss; `misses - encodes` is the cache/fallback gap |
+| `velox_keyframe_index_hits_total` / `velox_keyframe_index_misses_total` | C | none | persisted per-source keyframe/probe index outcomes; no source hash or path is a label |
 | `velox_unique_assets_requested` / `velox_cache_invariant_violations_total` | G/C | none | latest unique-asset snapshot and rejected accounting mismatches |
 | `velox_prefetch_jobs_total` | C | `worker_id`, `outcome` | worker prefetch lifecycle milestones (`received`, `applied`, `failed`) |
 | `velox_prefetch_bytes_total` | C | `worker_id`, `origin` | bytes observed for `prefetch`, `warm_cache` or `runtime_download` |
@@ -434,6 +437,7 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 
 | Date       | Change                                              | Migration |
 | ---------- | --------------------------------------------------- | --------- |
+| 2026-11-10 | Whole-source normalization cache and persistent keyframe-index hit/miss counters (`velox_normalized_source_*`, `velox_keyframe_index_*`); worker counters use static `label=total`, keyframe counters are label-free | — |
 | 2026-09-28 | Job-queue + e2e latency surface: `velox_jobs_pending`, `velox_jobs_running`, `velox_jobs_oldest_pending_age_seconds`, `velox_job_succeeded_total`, `velox_job_failed_total`, `velox_job_e2e_duration_seconds{phase}` (metrics supervisor, `jobs.QueueSnapshot` / `jobs.CompletionRecord`) | — |
 | 2026-09-28 | Dispatch wait histograms exposed for the first time: `velox_queue_wait_ms`, `velox_lease_wait_ms`, `velox_queue_time_to_first_worker_ms`; catalog keys renamed to the unit-suffix convention (`queue.wait_ms`, `lease.wait_ms`, `queue.time_to_first_worker_ms`), daily rollup `metric_name` unchanged (`queue_ms`) | — |
 | 2026-09-28 | `velox_compute_seconds_total` unit fix: the family counted **milliseconds** while its name, help and this catalog said seconds (every absolute reading was 1000× high; `rate()` ratios were unaffected). The recorder now converts `cpu_time_ms / 1000` with an exact sub-second carry | — |

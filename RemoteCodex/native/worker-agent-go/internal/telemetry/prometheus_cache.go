@@ -194,6 +194,34 @@ func (m *PrometheusMetrics) RecordAssemblyExecutionDownload(duration time.Durati
 	m.assemblyExecutionDownloadMS.observe("total", float64(duration.Milliseconds()))
 }
 
+// RecordNormalizedSourceCacheHit counts one timestamp window served by an
+// already-normalized source. No source identity enters the label set.
+func (m *PrometheusMetrics) RecordNormalizedSourceCacheHit() {
+	if m == nil || m.normalizedSourceCacheHits == nil {
+		return
+	}
+	m.normalizedSourceCacheHits.inc("total")
+}
+
+// RecordNormalizedSourceCacheMiss counts one timestamp window that had to
+// look past the normalized-source cache (including a failed encode).
+func (m *PrometheusMetrics) RecordNormalizedSourceCacheMiss() {
+	if m == nil || m.normalizedSourceCacheMisses == nil {
+		return
+	}
+	m.normalizedSourceCacheMisses.inc("total")
+}
+
+// RecordNormalizedSourceEncode counts one whole-source normalization that
+// actually ran. A miss without an encode remains visible as the difference
+// between the miss and encode counters.
+func (m *PrometheusMetrics) RecordNormalizedSourceEncode() {
+	if m == nil || m.normalizedSourceEncodes == nil {
+		return
+	}
+	m.normalizedSourceEncodes.inc("total")
+}
+
 func (m *PrometheusMetrics) SetPrefetchOperational(active, queued int) {
 	if active < 0 {
 		active = 0

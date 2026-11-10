@@ -50,6 +50,13 @@ func initPrometheusCacheFamily(m *PrometheusMetrics) {
 	m.assemblyAssetsReadyAtExecution = &GaugeVec{Name: "velox_assembly_assets_ready_at_execution", Help: "Verified warm assembly assets available when execution started", values: map[string]float64{"total": 0}}
 	m.assemblyAssetsMissingAtExecution = &GaugeVec{Name: "velox_assembly_assets_missing_at_execution", Help: "Warm assembly assets missing when execution started", values: map[string]float64{"total": 0}}
 	m.assemblyExecutionDownloadMS = &HistogramVec{Name: "velox_assembly_execution_download_ms", Help: "Download latency remaining on the warm assembly execution critical path", Buckets: []float64{0, 1, 10, 50, 100, 500, 1000, 5000, 30000}, values: make(map[string]*histogramData)}
+
+	// Whole-source normalization cache. A hit means a timestamp window reused
+	// an already-normalized source; an encode is one source normalized after a
+	// miss. All are worker-lifetime counters with a static label.
+	m.normalizedSourceCacheHits = &CounterVec{Name: "velox_normalized_source_cache_hits_total", Help: "Timestamp windows served from the cached whole-source normalization", values: map[string]float64{"total": 0}}
+	m.normalizedSourceCacheMisses = &CounterVec{Name: "velox_normalized_source_cache_misses_total", Help: "Timestamp windows that did not find a cached whole-source normalization", values: map[string]float64{"total": 0}}
+	m.normalizedSourceEncodes = &CounterVec{Name: "velox_normalized_source_encodes_total", Help: "Whole-source normalizations encoded after a cache miss", values: map[string]float64{"total": 0}}
 }
 
 func exportPrometheusCacheFamily(m *PrometheusMetrics) string {
@@ -95,5 +102,8 @@ func exportPrometheusCacheFamily(m *PrometheusMetrics) string {
 		m.assemblyPrefetchMS.export() +
 		m.assemblyAssetsReadyAtExecution.export() +
 		m.assemblyAssetsMissingAtExecution.export() +
-		m.assemblyExecutionDownloadMS.export()
+		m.assemblyExecutionDownloadMS.export() +
+		m.normalizedSourceCacheHits.export() +
+		m.normalizedSourceCacheMisses.export() +
+		m.normalizedSourceEncodes.export()
 }

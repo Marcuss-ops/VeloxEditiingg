@@ -16,9 +16,12 @@ import (
 	"sync"
 	"time"
 
+	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
+	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
@@ -68,6 +71,16 @@ type windowOutputCertifier interface {
 // this reference instead of mere presence.
 type windowExtradataReference interface {
 	ExpectedExtradataSHA256(context.Context, contract.CanonicalVideoProfileV1, contract.PreparationQualityPolicy) (string, error)
+}
+
+// windowDerivedCache is the durable derived-asset index. A normalized source
+// is stored under (source SHA-256, normalization profile), so a second window
+// of the same immutable source reuses the normalized bytes instead of
+// repeating scale/fps conversion. The interface is deliberately small so the
+// executor can be tested without a SQLite cache.
+type windowDerivedCache interface {
+	FindDerived(context.Context, assetref.ContentHash, workercache.NormalizationProfile) (workercache.Entry, bool, error)
+	StoreDerived(context.Context, assetref.ContentHash, workercache.NormalizationProfile, workercache.Entry) (assetref.AssetKey, error)
 }
 
 type ffmpegWindowExtradataReference struct{}
@@ -193,6 +206,8 @@ type videoPrepareWindowExecutor struct {
 	extradataMu   sync.Mutex
 	extradataKey  string
 	extradataSHA  string
+	derivedCache  windowDerivedCache
+	metrics       *telemetry.PrometheusMetrics
 	windowLockMu  sync.Mutex
 	windowLocks   map[string]*keyedWindowLock
 	sourceProbeMu sync.Mutex
@@ -234,15 +249,40 @@ type keyedWindowLock struct {
 	refs int
 }
 
-func NewVideoPrepareWindow(outputRoot string) executor.Executor {
+func NewVideoPrepareWindow(outputRoot string, derivedCaches ...*workercache.Cache) executor.Executor {
 	if strings.TrimSpace(outputRoot) == "" {
 		outputRoot = filepath.Join(os.TempDir(), "velox", "video-prepare-window")
 	}
-	return &videoPrepareWindowExecutor{
+	exec := &videoPrepareWindowExecutor{
 		outputRoot: outputRoot, runner: ffmpegrunner.NewProcessRunner(), certifier: ffprobeWindowOutputCertifier{},
 		extradataRef: ffmpegWindowExtradataReference{},
 		profile:      contract.CanonicalVideoProfileV1Default, quality: contract.CanonicalPreparationQualityPolicyDefault,
 	}
+	if len(derivedCaches) > 0 && derivedCaches[0] != nil {
+		exec.derivedCache = derivedCaches[0]
+	}
+	return exec
+}
+
+// AttachDerivedCache wires the durable source-normalization index after the
+// worker has opened its clip cache. Registration happens before the cache is
+// opened, so this attachment point is what makes FindDerived/StoreDerived
+// active in production instead of only in tests.
+func (e *videoPrepareWindowExecutor) AttachDerivedCache(c *workercache.Cache) {
+	if e == nil || c == nil {
+		return
+	}
+	e.derivedCache = c
+}
+
+// cacheMetrics returns the injected registry in tests, or the worker's global
+// Prometheus registry in production. Keeping the seam narrow lets the cache
+// test assert exact deltas without depending on test order or prior encodes.
+func (e *videoPrepareWindowExecutor) cacheMetrics() *telemetry.PrometheusMetrics {
+	if e != nil && e.metrics != nil {
+		return e.metrics
+	}
+	return telemetry.GetPrometheusMetrics()
 }
 
 func (e *videoPrepareWindowExecutor) Descriptor() executor.Descriptor {
@@ -439,13 +479,23 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 			}
 		}
 	}
+	// Timestamp windows can safely address the normalized source because its
+	// timeline starts at zero and its frame rate is the canonical rate. Frame
+	// windows keep the original frames: their indices are source-frame
+	// coordinates and must never be reinterpreted against a resampled file.
+	sourcePath := source.Path
+	if resolvedRequest.SourceDurationUS > 0 {
+		if normalized, ok := e.normalizedSourcePath(ctx, source.Path, source.SHA256); ok {
+			sourcePath = normalized
+		}
+	}
 	if !packetCopied {
 		var args []string
 		if resolvedRequest.SourceDurationUS > 0 {
-			args = contract.CanonicalVideoWindowTimestampArgs(e.profile, e.quality, source.Path, tmpPath,
+			args = contract.CanonicalVideoWindowTimestampArgs(e.profile, e.quality, sourcePath, tmpPath,
 				resolvedRequest.SourceStartUS, resolvedRequest.SourceDurationUS, resolvedRequest.OutputFrameCount)
 		} else {
-			args = contract.CanonicalVideoWindowArgs(e.profile, e.quality, source.Path, tmpPath,
+			args = contract.CanonicalVideoWindowArgs(e.profile, e.quality, sourcePath, tmpPath,
 				resolvedRequest.SourceStartFrame, resolvedRequest.SourceFrameCount, resolvedRequest.SourceFPSNum, resolvedRequest.SourceFPSDen, resolvedRequest.OutputFrameCount)
 		}
 		encode, err = e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args})
@@ -534,6 +584,83 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 			MetadataJSON: string(certificateJSON),
 		}}, StartedAt: started, CompletedAt: completed,
 	}, nil
+}
+
+// normalizedSourcePath returns a cached whole-source normalization for this
+// immutable source, creating it once on a miss. Normalization is an
+// optimization: any failure falls back to the original source so a transient
+// cache problem cannot fail an otherwise valid window. The output carries the
+// same canonical encoder lane as the final fragment; the per-window encode
+// still selects the exact interval because the source GOP is arbitrary.
+func (e *videoPrepareWindowExecutor) normalizedSourcePath(ctx context.Context, sourcePath, sourceSHA string) (string, bool) {
+	if e == nil || e.derivedCache == nil || !isLowerSHA256(sourceSHA) {
+		return "", false
+	}
+	profile := e.normalizationProfile()
+	if err := profile.Validate(); err != nil {
+		return "", false
+	}
+	sourceHash := assetref.ContentHash(sourceSHA)
+	if entry, found, err := e.derivedCache.FindDerived(ctx, sourceHash, profile); err == nil && found && strings.TrimSpace(entry.LocalPath) != "" {
+		if info, statErr := os.Stat(entry.LocalPath); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			e.cacheMetrics().RecordNormalizedSourceCacheHit()
+			return entry.LocalPath, true
+		}
+	}
+	key, err := workercache.DerivedAssetKey(sourceHash, profile)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(key))
+	dir := filepath.Join(e.outputRoot, "derived-sources")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", false
+	}
+	outputPath := filepath.Join(dir, hex.EncodeToString(sum[:])+".mp4")
+	if info, statErr := os.Stat(outputPath); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		e.cacheMetrics().RecordNormalizedSourceCacheHit()
+		return outputPath, true
+	}
+	e.cacheMetrics().RecordNormalizedSourceCacheMiss()
+	tmpPath := outputPath + ".partial.mp4"
+	_ = os.Remove(tmpPath)
+	defer os.Remove(tmpPath)
+	args := contract.CanonicalVideoNormalizeSourceArgs(e.profile, e.quality, sourcePath, tmpPath)
+	if _, err := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args}); err != nil {
+		return "", false
+	}
+	e.cacheMetrics().RecordNormalizedSourceEncode()
+	if err := os.Rename(tmpPath, outputPath); err != nil {
+		return "", false
+	}
+	artifact, err := artifactFromFile("video/mp4", outputPath)
+	if err != nil {
+		_ = os.Remove(outputPath)
+		return "", false
+	}
+	_, _ = e.derivedCache.StoreDerived(ctx, sourceHash, profile, workercache.Entry{
+		ContentHash: assetref.ContentHash(artifact.Hash), LocalPath: outputPath,
+		SizeBytes: artifact.SizeBytes, DownloadComplete: true,
+	})
+	return outputPath, true
+}
+
+func (e *videoPrepareWindowExecutor) normalizationProfile() workercache.NormalizationProfile {
+	encoderSettings, _ := contract.CanonicalVideoEncoderArgsDigest(e.profile, e.quality)
+	return workercache.NormalizationProfile{
+		NormalizerVersion: 1,
+		Codec:             e.profile.Codec,
+		Width:             e.profile.Width,
+		Height:            e.profile.Height,
+		FPSNum:            e.profile.FPSNum,
+		FPSDen:            e.profile.FPSDen,
+		PixelFormat:       e.profile.PixelFormat,
+		ColorProperties:   contract.CanonicalVideoColorspace + "/" + contract.CanonicalVideoColorRange,
+		Profile:           e.profile.CodecProfile,
+		Level:             e.profile.CodecLevel,
+		GOPPolicy:         fmt.Sprintf("closed-gop:%d", e.profile.GOPSize),
+		EncoderSettings:   encoderSettings,
+	}
 }
 
 func (e *videoPrepareWindowExecutor) preparedWindowPath(identity string, request contract.VideoPrepareWindowV1, resolver *storage.Resolver) string {

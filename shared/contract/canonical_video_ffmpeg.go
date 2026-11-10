@@ -93,6 +93,28 @@ func CanonicalVideoScaleFilter(profile CanonicalVideoProfileV1) string {
 	return fmt.Sprintf("%s,fps=%d/%d", CanonicalVideoScaleGeometryFilter(profile), profile.FPSNum, profile.FPSDen)
 }
 
+// CanonicalVideoNormalizeSourceArgs converts a whole source into the canonical
+// stream once. Workers cache this derivation by source SHA-256 and profile, so
+// every window of the same immutable source starts from already-normalized
+// frames instead of repeating scale/fps conversion per window. The output is
+// video-only; window preparation still selects and encodes its exact frame
+// interval, because a source may have arbitrary GOP boundaries.
+func CanonicalVideoNormalizeSourceArgs(profile CanonicalVideoProfileV1, quality PreparationQualityPolicy, inputPath, outputPath string) []string {
+	filter := fmt.Sprintf("setpts=PTS-STARTPTS,fps=%d/%d,%s", profile.FPSNum, profile.FPSDen, CanonicalVideoScaleGeometryFilter(profile))
+	args := []string{
+		"-hide_banner", "-loglevel", "error", "-y", "-i", inputPath,
+		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
+	}
+	args = append(args, CanonicalVideoEncodeArgs(profile, quality)...)
+	args = append(args,
+		"-fps_mode", "cfr",
+		"-force_key_frames", "expr:eq(n,0)",
+		"-avoid_negative_ts", "make_zero", "-reset_timestamps", "1",
+		"-movflags", "+faststart", outputPath,
+	)
+	return args
+}
+
 // CanonicalVideoWindowArgs builds a frame-accurate video-only preparation
 // command. It selects the requested source-frame interval, normalizes source
 // timestamps, converts to the output profile rate/geometry, forces an IDR at

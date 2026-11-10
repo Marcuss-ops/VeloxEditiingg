@@ -31,6 +31,9 @@ func TestCanonicalVideoEncoderContractPinsAVCC(t *testing.T) {
 			t.Errorf("canonical encoder args %q do not pin %q", joined, want)
 		}
 	}
+	if strings.Contains(joined, "-b:v") {
+		t.Errorf("canonical encoder args must not carry a bitrate target (it changes the SPS VUI/avcC): %q", joined)
+	}
 
 	frameWindow := strings.Join(CanonicalVideoWindowArgs(profile, quality, "in.mp4", "out.mp4", 0, 48, 24, 1, 48), " ")
 	timestampWindow := strings.Join(CanonicalVideoWindowTimestampArgs(profile, quality, "in.mp4", "out.mp4", 0, 2_000_000, 48), " ")
@@ -135,8 +138,8 @@ func TestCanonicalVideoAVCCMatchesBetweenMasterAndWorkerEncodes(t *testing.T) {
 	if producerAVCC != workerAVCC {
 		t.Fatalf("Master and worker encodes disagree on avcC: producer=%s worker=%s", producerAVCC, workerAVCC)
 	}
-	if len(producerAVCC) != 64 {
-		t.Fatalf("avcC hash is not a full SHA-256: %q", producerAVCC)
+	if producerAVCC != CanonicalVideoExtradataSHA256 {
+		t.Fatalf("canonical encode avcC = %s, want the shared PipelineGen/RenderingGen identity %s", producerAVCC, CanonicalVideoExtradataSHA256)
 	}
 }
 

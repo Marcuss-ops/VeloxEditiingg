@@ -135,6 +135,15 @@ func (s *AssetService) MediaMetadataMetrics() *MediaMetadataMetrics {
 	return s.mediaMetadataMetrics
 }
 
+// KeyframeIndexMetrics exposes bounded persisted-probe hit/miss counters for
+// the metrics composition root. It carries no source SHA-256, path or asset ID.
+func (s *AssetService) KeyframeIndexMetrics() *KeyframeIndexMetrics {
+	if s == nil || s.videoTrimmer == nil {
+		return nil
+	}
+	return s.videoTrimmer.KeyframeIndexMetrics()
+}
+
 // SecurityMetrics exposes bounded input rejection counters for the metrics
 // composition root without exposing URLs or filesystem paths.
 func (s *AssetService) SecurityMetrics() *inputsecurity.Metrics {

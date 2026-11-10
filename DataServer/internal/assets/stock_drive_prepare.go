@@ -129,7 +129,7 @@ func (s *AssetService) materializeDriveStockSources(
 				cleanup()
 				return fmt.Errorf("stock file %q identity: %w", request.driveID, err)
 			}
-			state.probe, err = s.videoTrimmer.Probe(sourceCtx, path)
+			state.probe, err = s.videoTrimmer.ProbeWithIdentity(sourceCtx, path, state.sha, state.size)
 			if err != nil {
 				cleanup()
 				return fmt.Errorf("stock file %q certification: %w", request.driveID, err)

@@ -10,6 +10,9 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 	metrics := NewPrometheusMetrics()
 	metrics.RecordAssetCacheHit("asset-id-must-not-be-a-label")
 	metrics.RecordAssetCacheMiss("another-asset-id-must-not-be-a-label")
+	metrics.RecordNormalizedSourceCacheHit()
+	metrics.RecordNormalizedSourceCacheMiss()
+	metrics.RecordNormalizedSourceEncode()
 	metrics.RecordCacheDownload(2048, 250*time.Millisecond)
 	metrics.RecordRender(3 * time.Second)
 	metrics.RecordArtifactUpload(120 * time.Millisecond)
@@ -30,6 +33,9 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 	for _, name := range []string{
 		"velox_asset_cache_hits_total",
 		"velox_asset_cache_misses_total",
+		"velox_normalized_source_cache_hits_total",
+		"velox_normalized_source_cache_misses_total",
+		"velox_normalized_source_encodes_total",
 		"velox_asset_download_seconds",
 		"velox_render_seconds",
 		"velox_artifact_upload_seconds",
