@@ -152,6 +152,14 @@ func (h *Handler) RefreshPrefetchForJob(ctx context.Context, jobID string) {
 			for _, reservation := range reservations {
 				if reservation.JobID == jobID && reservation.WorkerID != "" {
 					h.refreshFutureAssetPlan(ctx, reservation.WorkerID, jobID)
+					// A task-spec update can make the assembly task dispatchable
+					// without producing a worker message (the FutureAssetPlan is
+					// control-plane-only). Wake the owning session after refreshing
+					// so placement observes the committed runtime_assets_pending
+					// value immediately instead of waiting for its 10s safety tick.
+					if sess := h.getSession(reservation.WorkerID); sess != nil {
+						sess.signalPlacement()
+					}
 					return
 				}
 			}
