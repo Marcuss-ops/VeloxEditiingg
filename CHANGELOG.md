@@ -1,5 +1,23 @@
 ## [Unreleased] - 2026-11-08
 
+### Changed — lower video preparation and assembly wait time
+
+- Packet-copy fallback decisions now include structured eligibility and
+  fallback reasons in the preparation certificate metadata, including source
+  profile, bitrate, keyframe, certification and copy failures.
+- Final-manifest artifacts resolve concurrently with a four-request bound;
+  manifest state still commits atomically only after every artifact passes
+  SHA-256 and size verification.
+- Future prefetch can start while runtime assets are pending when a trusted
+  locator and size are already available. This does not make the task
+  executable: the existing FINALIZE/readiness gate remains authoritative.
+- Fixed prepared-asset invalidation to delete by the task key used by the
+  scheduler.
+- Worker verification: `go test -race ./... -count=1` passed; focused
+  `go vet` passed. Master verification: `go test -race
+  ./internal/grpcserver/... -count=1` and focused `go vet` passed. Production
+  end-to-end timing is pending deployment of the versioned worker image.
+
 ### Added — executor contracts and read-only job doctor
 
 - The existing canonical `shared/taskcontract` package now also declares how
