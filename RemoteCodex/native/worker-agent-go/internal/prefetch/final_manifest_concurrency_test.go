@@ -2,6 +2,8 @@ package prefetch
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +11,62 @@ import (
 	"velox-shared/contract/assembly"
 	"velox-worker-agent/internal/downloader"
 )
+
+type boundedParallelFinalResolver struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *boundedParallelFinalResolver) Resolve(ctx context.Context, request downloader.DownloadRequest) (downloader.CacheResolution, error) {
+	r.started <- struct{}{}
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return downloader.CacheResolution{}, ctx.Err()
+	}
+	return downloader.CacheResolution{AssetID: request.AssetID, LocalPath: "/verified/" + request.AssetID, SHA256: request.SHA256, DownloadBytes: request.SizeBytes}, nil
+}
+
+func TestFinalManifestReconcilerResolvesDeltaWithBoundedParallelism(t *testing.T) {
+	resolver := &boundedParallelFinalResolver{started: make(chan struct{}, 8), release: make(chan struct{})}
+	reconciler, err := NewFinalManifestReconciler(finalWorkerBase(), resolver, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := make([]assembly.PublishedArtifact, 8)
+	for i := range artifacts {
+		artifacts[i] = finalWorkerArtifact("job-final-worker", fmt.Sprintf("scene-%d", i), strings.Repeat("a", 64))
+	}
+	delta := finalWorkerDelta(1, 2, finalWorkerBase().PreparationHash, artifacts...)
+	result := make(chan error, 1)
+	go func() {
+		_, err := reconciler.ApplyDelta(context.Background(), delta)
+		result <- err
+	}()
+	for i := 0; i < finalManifestResolveConcurrency; i++ {
+		select {
+		case <-resolver.started:
+		case <-time.After(time.Second):
+			close(resolver.release)
+			t.Fatalf("only %d resolver calls started; want %d concurrent calls", i, finalManifestResolveConcurrency)
+		}
+	}
+	select {
+	case <-resolver.started:
+		close(resolver.release)
+		t.Fatal("resolver concurrency exceeded configured bound")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(resolver.release)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("ApplyDelta: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parallel final manifest resolution did not complete")
+	}
+}
 
 type blockingFinalManifestResolver struct {
 	started chan struct{}

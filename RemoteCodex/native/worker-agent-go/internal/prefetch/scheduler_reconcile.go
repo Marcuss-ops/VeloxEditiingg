@@ -139,7 +139,10 @@ func (s *Scheduler) retainPreparedAssetsLocked(job futureasset.Job, planID strin
 		retained[key] = metadata
 	}
 	if len(retained) == 0 {
-		delete(s.prepared, job.JobID)
+		// prepared is keyed by taskKey(job), which prefers TaskID over
+		// JobID. Delete the exact key we just looked up; using JobID leaves
+		// stale preparation metadata behind for task-scoped entries.
+		delete(s.prepared, key)
 		return
 	}
 	previous.ReservationID = job.ReservationID

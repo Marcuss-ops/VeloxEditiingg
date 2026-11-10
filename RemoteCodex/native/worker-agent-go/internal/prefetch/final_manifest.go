@@ -22,6 +22,11 @@ const (
 	FinalManifestReady     FinalManifestState = "READY"
 )
 
+// Final artifact resolutions are independent once the delta has passed
+// validation. Keep a small fixed bound so one large delta cannot monopolize
+// the worker's download resources.
+const finalManifestResolveConcurrency = 4
+
 // FinalArtifactEvidence records the local verification result for one
 // published artifact. The cache resolver has already performed the SHA-256 and
 // size gate before this evidence is stored.
@@ -117,28 +122,9 @@ func (r *FinalManifestReconciler) ApplyDelta(ctx context.Context, delta assembly
 	resolver := r.resolver
 	r.mu.Unlock()
 
-	resolved := make([]FinalArtifactEvidence, 0, len(toResolve))
-	for _, artifact := range toResolve {
-		asset, err := resolver.Resolve(ctx, downloader.DownloadRequest{
-			JobID:     artifact.JobID,
-			AssetKey:  assetref.AssetKey(artifact.AssetID),
-			AssetID:   artifact.AssetID,
-			Source:    "final_manifest_artifact",
-			SHA256:    assetref.ContentHash(artifact.SHA256),
-			SizeBytes: artifact.SizeBytes,
-			MIMEType:  artifact.MIMEType,
-			Priority:  downloader.PriorityForeground,
-		})
-		if err != nil {
-			return FinalManifestResult{}, fmt.Errorf("prefetch: resolve final artifact %q: %w", artifact.AssetID, err)
-		}
-		sizeMatches := asset.DownloadBytes == artifact.SizeBytes || (asset.CacheHit && asset.DownloadBytes == 0)
-		if asset.LocalPath == "" || asset.SHA256 != assetref.ContentHash(artifact.SHA256) || !sizeMatches {
-			return FinalManifestResult{}, fmt.Errorf("prefetch: resolver returned unverifiable final artifact %q", artifact.AssetID)
-		}
-		resolved = append(resolved, FinalArtifactEvidence{
-			Artifact: artifact, LocalPath: asset.LocalPath, CacheHit: asset.CacheHit, PreparedAt: r.now().UTC(),
-		})
+	resolved, err := r.resolveArtifacts(ctx, resolver, toResolve)
+	if err != nil {
+		return FinalManifestResult{}, err
 	}
 
 	r.mu.Lock()
@@ -159,6 +145,69 @@ func (r *FinalManifestReconciler) ApplyDelta(ctx context.Context, delta assembly
 	}
 	result := r.resultLocked(disposition, resolved)
 	return result, nil
+}
+
+func (r *FinalManifestReconciler) resolveArtifacts(ctx context.Context, resolver FinalArtifactResolver, artifacts []assembly.PublishedArtifact) ([]FinalArtifactEvidence, error) {
+	if len(artifacts) == 0 {
+		return nil, nil
+	}
+	workerCount := min(finalManifestResolveConcurrency, len(artifacts))
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	resolved := make([]FinalArtifactEvidence, len(artifacts))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	var firstErr error
+	var errOnce sync.Once
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				artifact := artifacts[index]
+				asset, err := resolver.Resolve(workCtx, downloader.DownloadRequest{
+					JobID: artifact.JobID, AssetKey: assetref.AssetKey(artifact.AssetID), AssetID: artifact.AssetID,
+					Source: "final_manifest_artifact", SHA256: assetref.ContentHash(artifact.SHA256),
+					SizeBytes: artifact.SizeBytes, MIMEType: artifact.MIMEType, Priority: downloader.PriorityForeground,
+				})
+				if err != nil {
+					errOnce.Do(func() {
+						firstErr = fmt.Errorf("prefetch: resolve final artifact %q: %w", artifact.AssetID, err)
+						cancel()
+					})
+					continue
+				}
+				sizeMatches := asset.DownloadBytes == artifact.SizeBytes || (asset.CacheHit && asset.DownloadBytes == 0)
+				if asset.LocalPath == "" || asset.SHA256 != assetref.ContentHash(artifact.SHA256) || !sizeMatches {
+					errOnce.Do(func() {
+						firstErr = fmt.Errorf("prefetch: resolver returned unverifiable final artifact %q", artifact.AssetID)
+						cancel()
+					})
+					continue
+				}
+				resolved[index] = FinalArtifactEvidence{
+					Artifact: artifact, LocalPath: asset.LocalPath, CacheHit: asset.CacheHit, PreparedAt: r.now().UTC(),
+				}
+			}
+		}()
+	}
+dispatch:
+	for index := range artifacts {
+		select {
+		case jobs <- index:
+		case <-workCtx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("prefetch: resolve final artifacts: %w", err)
+	}
+	return resolved, nil
 }
 
 func sameArtifactIdentity(a, b assembly.PublishedArtifact) bool {

@@ -14,6 +14,19 @@ import (
 	"velox-worker-agent/internal/workercache"
 )
 
+func TestRetainPreparedAssetsDeletesByTaskKeyWhenManifestDropsAllAssets(t *testing.T) {
+	s := NewScheduler(Config{})
+	s.prepared = map[string]PreparedJob{
+		"task-1": {JobID: "job-1", TaskID: "task-1", Assets: map[string]PreparedAssetMetadata{
+			"removed": {AssetKey: "removed", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		}},
+	}
+	s.retainPreparedAssetsLocked(futureasset.Job{JobID: "job-1", TaskID: "task-1"}, "plan-2", 2)
+	if _, exists := s.prepared["task-1"]; exists {
+		t.Fatal("stale task-keyed preparation survived empty manifest reconciliation")
+	}
+}
+
 type schedulerManager struct {
 	mu      sync.Mutex
 	keys    []assetref.AssetKey

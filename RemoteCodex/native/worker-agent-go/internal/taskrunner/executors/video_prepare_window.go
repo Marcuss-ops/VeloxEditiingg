@@ -394,16 +394,36 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		evidence        windowOutputEvidence
 		packetCopied    bool
 		closedGOPProven bool
+		copyEligible    bool
+		copyFallback    []string
 	)
-	if sourceProbe, probeErr := e.probeSource(ctx, source.Path, source.SHA256); probeErr == nil && sourceWindowCopyEligible(sourceProbe, resolvedRequest, e.profile, e.quality, expectedExtradata) {
-		copyResult, copyErr := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{
-			Operation: ffmpegrunner.OperationEncode,
-			Args:      canonicalWindowStreamCopyArgs(e.profile, source.Path, tmpPath, resolvedRequest),
-		})
-		if copyErr == nil {
-			copyEvidence, certifyErr := e.certifier.Certify(ctx, tmpPath, e.profile, request.OutputFrameCount)
-			if certifyErr == nil && copyEvidence.ExtradataSHA256 == expectedExtradata && copyEvidence.BFrames == 0 && isFirstFrameIDR(ctx, tmpPath) {
-				encode, evidence, packetCopied, closedGOPProven = copyResult, copyEvidence, true, true
+	sourceProbe, probeErr := e.probeSource(ctx, source.Path, source.SHA256)
+	if probeErr != nil {
+		copyFallback = []string{"source_probe_failed"}
+	} else {
+		eligibility := diagnoseSourceWindowCopy(sourceProbe, resolvedRequest, e.profile, e.quality, expectedExtradata)
+		copyEligible = eligibility.Eligible
+		copyFallback = eligibility.Reasons
+		if eligibility.Eligible {
+			copyResult, copyErr := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{
+				Operation: ffmpegrunner.OperationEncode,
+				Args:      canonicalWindowStreamCopyArgs(e.profile, source.Path, tmpPath, resolvedRequest),
+			})
+			if copyErr != nil {
+				copyFallback = []string{"packet_copy_failed"}
+			} else {
+				copyEvidence, certifyErr := e.certifier.Certify(ctx, tmpPath, e.profile, request.OutputFrameCount)
+				if certifyErr != nil {
+					copyFallback = []string{"packet_copy_certification_failed"}
+				} else if copyEvidence.ExtradataSHA256 != expectedExtradata {
+					copyFallback = []string{"packet_copy_extradata_mismatch"}
+				} else if copyEvidence.BFrames != 0 {
+					copyFallback = []string{"packet_copy_b_frames"}
+				} else if !isFirstFrameIDR(ctx, tmpPath) {
+					copyFallback = []string{"packet_copy_first_frame_not_idr"}
+				} else {
+					encode, evidence, packetCopied, closedGOPProven = copyResult, copyEvidence, true, true
+				}
 			}
 		}
 	}
@@ -464,6 +484,29 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	certificate := bindWindowCertificate(attestation, resolvedRequest)
 	certificate.CacheHit = false
 	certificateJSON, err := json.Marshal(certificate)
+	if err != nil {
+		return fail("WINDOW_CERTIFICATE_ENCODE_FAILED", err)
+	}
+	var certificateFields map[string]json.RawMessage
+	if err := json.Unmarshal(certificateJSON, &certificateFields); err != nil {
+		return fail("WINDOW_CERTIFICATE_ENCODE_FAILED", err)
+	}
+	copyDiagnostic, err := json.Marshal(struct {
+		Eligible bool     `json:"packet_copy_eligible"`
+		Used     bool     `json:"packet_copy_used"`
+		Reasons  []string `json:"packet_copy_fallback_reasons,omitempty"`
+	}{Eligible: copyEligible, Used: packetCopied, Reasons: copyFallback})
+	if err != nil {
+		return fail("WINDOW_CERTIFICATE_ENCODE_FAILED", err)
+	}
+	var copyDiagnosticFields map[string]json.RawMessage
+	if err := json.Unmarshal(copyDiagnostic, &copyDiagnosticFields); err != nil {
+		return fail("WINDOW_CERTIFICATE_ENCODE_FAILED", err)
+	}
+	for key, value := range copyDiagnosticFields {
+		certificateFields[key] = value
+	}
+	certificateJSON, err = json.Marshal(certificateFields)
 	if err != nil {
 		return fail("WINDOW_CERTIFICATE_ENCODE_FAILED", err)
 	}
@@ -564,39 +607,80 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 	return probe, nil
 }
 
+type windowCopyEligibility struct {
+	Eligible bool
+	Reasons  []string
+}
+
 func sourceWindowCopyEligible(source windowSourceProbe, request contract.VideoPrepareWindowV1, profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, expectedExtradata string) bool {
-	if profile.BFrames != 0 || !profile.ClosedGOP || source.BFrames != 0 || source.CodecName != profile.Codec ||
-		source.Profile != strings.ToLower(profile.CodecProfile) || source.Level != canonicalLevelNumber(profile.CodecLevel) ||
-		source.Width != profile.Width || source.Height != profile.Height || source.PixelFormat != profile.PixelFormat ||
-		source.FPSNum != profile.FPSNum || source.FPSDen != profile.FPSDen ||
-		source.TimeBaseNum != profile.TimeBaseNum || source.TimeBaseDen != profile.TimeBaseDen ||
-		source.ExtradataSHA != expectedExtradata || !isLowerSHA256(source.ExtradataSHA) {
-		return false
+	return diagnoseSourceWindowCopy(source, request, profile, quality, expectedExtradata).Eligible
+}
+
+func diagnoseSourceWindowCopy(source windowSourceProbe, request contract.VideoPrepareWindowV1, profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, expectedExtradata string) windowCopyEligibility {
+	var reasons []string
+	if source.CodecName != profile.Codec {
+		reasons = append(reasons, "codec_mismatch")
+	}
+	if source.Profile != strings.ToLower(profile.CodecProfile) {
+		reasons = append(reasons, "profile_mismatch")
+	}
+	if source.Level != canonicalLevelNumber(profile.CodecLevel) {
+		reasons = append(reasons, "level_mismatch")
+	}
+	if source.Width != profile.Width || source.Height != profile.Height {
+		reasons = append(reasons, "geometry_mismatch")
+	}
+	if source.PixelFormat != profile.PixelFormat {
+		reasons = append(reasons, "pixel_format_mismatch")
+	}
+	if source.FPSNum != profile.FPSNum || source.FPSDen != profile.FPSDen {
+		reasons = append(reasons, "frame_rate_mismatch")
+	}
+	if source.TimeBaseNum != profile.TimeBaseNum || source.TimeBaseDen != profile.TimeBaseDen {
+		reasons = append(reasons, "time_base_mismatch")
+	}
+	if profile.BFrames != 0 || source.BFrames != 0 {
+		reasons = append(reasons, "b_frames_present")
+	}
+	if !profile.ClosedGOP {
+		reasons = append(reasons, "profile_not_closed_gop")
+	}
+	if source.ExtradataSHA != expectedExtradata || !isLowerSHA256(source.ExtradataSHA) {
+		reasons = append(reasons, "extradata_mismatch")
 	}
 	maxRate, err := parseWindowBitRateBPS(quality.VideoMaxRate)
 	if err != nil || maxRate <= 0 || source.BitRateBPS <= 0 || source.BitRateBPS > maxRate {
-		return false
+		reasons = append(reasons, "bitrate_out_of_range")
 	}
 	startSeconds, durationSeconds, ok := requestedWindowSeconds(request)
 	if !ok || absFloat(source.StartTimeSec) > 1e-6 || request.OutputFrameCount <= 0 {
-		return false
+		reasons = append(reasons, "invalid_window_or_source_start_time")
 	}
-	wantFrameCount := durationSeconds * float64(profile.FPSNum) / float64(profile.FPSDen)
-	if absFloat(wantFrameCount-float64(request.OutputFrameCount)) > 1e-6 {
-		return false
+	if ok {
+		wantFrameCount := durationSeconds * float64(profile.FPSNum) / float64(profile.FPSDen)
+		if absFloat(wantFrameCount-float64(request.OutputFrameCount)) > 1e-6 {
+			reasons = append(reasons, "output_frame_count_mismatch")
+		}
 	}
-	startFrame := startSeconds * float64(profile.FPSNum) / float64(profile.FPSDen)
-	if absFloat(startFrame-math.Round(startFrame)) > 1e-6 {
-		return false
+	if ok {
+		startFrame := startSeconds * float64(profile.FPSNum) / float64(profile.FPSDen)
+		if absFloat(startFrame-math.Round(startFrame)) > 1e-6 {
+			reasons = append(reasons, "window_start_not_frame_aligned")
+		}
 	}
+	keyframeFound := false
 	for _, keyframeTime := range source.KeyframeTimes {
 		if absFloat(keyframeTime-startSeconds) <= 1e-6 {
 			// The end may be any frame: with B-frames disabled no packet in
 			// the copied window references a frame after its final packet.
-			return true
+			keyframeFound = true
+			break
 		}
 	}
-	return false
+	if !keyframeFound {
+		reasons = append(reasons, "window_start_not_keyframe")
+	}
+	return windowCopyEligibility{Eligible: len(reasons) == 0, Reasons: reasons}
 }
 
 func requestedWindowSeconds(request contract.VideoPrepareWindowV1) (float64, float64, bool) {

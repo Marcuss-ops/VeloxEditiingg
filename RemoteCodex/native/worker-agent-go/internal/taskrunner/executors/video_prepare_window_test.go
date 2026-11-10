@@ -424,6 +424,37 @@ func TestVideoPrepareWindow_RejectsNonCanonicalExtradata(t *testing.T) {
 	}
 }
 
+func TestDiagnoseSourceWindowCopyReportsIndependentFallbackCauses(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	request := contract.VideoPrepareWindowV1{
+		SourceStartFrame: 24, SourceFrameCount: 24, SourceFPSNum: profile.FPSNum,
+		SourceFPSDen: profile.FPSDen, OutputFrameCount: 24,
+	}
+	source := windowSourceProbe{
+		CodecName: profile.Codec, Profile: strings.ToLower(profile.CodecProfile),
+		Level: canonicalLevelNumber(profile.CodecLevel), Width: profile.Width, Height: profile.Height,
+		PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen,
+		TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+		BitRateBPS: 10_000_000, ExtradataSHA: strings.Repeat("a", 64), KeyframeTimes: []float64{},
+	}
+	got := diagnoseSourceWindowCopy(source, request, profile, quality, strings.Repeat("b", 64))
+	if got.Eligible {
+		t.Fatal("incompatible source was eligible for packet copy")
+	}
+	want := map[string]bool{"bitrate_out_of_range": false, "extradata_mismatch": false, "window_start_not_keyframe": false}
+	for _, reason := range got.Reasons {
+		if _, ok := want[reason]; ok {
+			want[reason] = true
+		}
+	}
+	for reason, found := range want {
+		if !found {
+			t.Errorf("missing fallback reason %q in %v", reason, got.Reasons)
+		}
+	}
+}
+
 func testSHA256(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
