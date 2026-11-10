@@ -44,9 +44,6 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 		return nil
 	}
 	if object, ok := root.(map[string]interface{}); ok {
-		if pending, _ := object["runtime_assets_pending"].(bool); pending {
-			return nil
-		}
 		if rawRequest, ok := object[contract.VideoPrepareWindowPayloadKey]; ok {
 			encoded, err := json.Marshal(rawRequest)
 			var request contract.VideoPrepareWindowV1

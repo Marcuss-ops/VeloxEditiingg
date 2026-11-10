@@ -309,9 +309,18 @@ func TestFutureAssetManifestsIncludesCompiledPlanAssets(t *testing.T) {
 	}
 }
 
-func TestFutureAssetManifestsWaitForFinalizedRuntimeAssets(t *testing.T) {
+func TestFutureAssetManifestsPrefetchesKnownAssetsWhileRuntimeAssetsPending(t *testing.T) {
 	payload := []byte(`{"runtime_assets_pending":true,"compiled_render_plan_json":"{}","runtime_assets":[{"asset_id":"fragment","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size_bytes":10,"source_uri":"https://objects.example/fragment"}]}`)
-	if assets := futureAssetManifests(payload); len(assets) != 0 {
-		t.Fatalf("manifests while runtime assets are pending = %+v, want none", assets)
+	assets := futureAssetManifests(payload)
+	if len(assets) != 1 || assets[0].AssetID != "fragment" || assets[0].SHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("prefetch manifests while runtime assets are pending = %+v, want the known immutable asset", assets)
+	}
+}
+
+func TestFutureAssetManifestsDefersUnknownIdentityWhileRuntimeAssetsPending(t *testing.T) {
+	payload := []byte(`{"runtime_assets_pending":true,"runtime_assets":[{"asset_id":"fragment","size_bytes":10,"source_uri":"https://objects.example/fragment"}]}`)
+	assets := futureAssetManifests(payload)
+	if len(assets) != 1 || assets[0].AssetID != "fragment" || assets[0].SHA256 != "" || assets[0].SourceURI == "" {
+		t.Fatalf("deferred prefetch manifest while runtime assets are pending = %+v, want source-only deferred asset", assets)
 	}
 }
