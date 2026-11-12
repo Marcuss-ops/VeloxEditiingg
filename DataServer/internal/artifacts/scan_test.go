@@ -79,13 +79,13 @@ var allowedWriters = map[string]bool{
 	// transaction-bound repository methods. The application package
 	// owns orchestration only; the SQLite persistence (including the
 	// tasks / task_attempts / jobs SUCCEEDED CAS) was split out of the
-	// store god-package into the dedicated internal/completionstore
+	// store god-package into the dedicated internal/store/completionstore
 	// package (7b41c9c8). This is the SAME completion-flow writer
 	// previously allowlisted as internal/store/completion_repository_finalize.go
 	// — it is NOT the verified-finalization lifecycle and does not
 	// route through FinalizeVerified.
 	filepath.Join("internal", "store", "completion_repository.go"):                    true,
-	filepath.Join("internal", "completionstore", "completion_repository_finalize.go"): true,
+	filepath.Join("internal", "store", "completionstore", "completion_repository_finalize.go"): true,
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
 	filepath.Join("internal", "artifacts", "finalization_repository.go"): true,

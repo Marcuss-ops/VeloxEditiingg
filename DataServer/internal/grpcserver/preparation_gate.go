@@ -397,11 +397,13 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 	// self-certifies it, so unrelated job assets cannot block the encode.
 	// Assembly and every unregistered executor keep the strict reservation
 	// path. Only registered executors pay the extra payload read here.
+	var liveTaskPayload []byte
 	if taskContract, registered := taskcontract.Default().Lookup(candidate.Executor.ID, candidate.Executor.Version); registered {
 		payload, payloadErr := pg.store.FutureTaskPayload(ctx, candidate.TaskID)
 		if payloadErr != nil {
 			return PreparationWaiting, payloadErr
 		}
+		liveTaskPayload = payload
 		spec, specErr := taskcontract.TaskInputFromJSON(candidate.Executor.ID, candidate.Executor.Version, payload)
 		if specErr != nil {
 			return PreparationWaiting, fmt.Errorf("preparation gate: decode task contract: %w", specErr)
@@ -458,9 +460,23 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 	// assets, but must not render until FINALIZE clears this marker on the
 	// same TaskSpec. Keeping the decision here preserves the existing strict
 	// reservation/certificate path and the worker affinity.
-	if runtimeAssetsPending(reservation.Payload) {
-		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED runtime_assets_pending worker=%s task=%s reservation=%s", workerID, candidate.TaskID, reservation.ReservationID)
+	// The reservation list is a placement-pass snapshot and may have been
+	// loaded before FINALIZE committed its TaskSpec update. The task spec is
+	// authoritative for this gate bit; re-read it immediately before deciding
+	// whether assembly is still blocked. Prepared asset manifests remain bound
+	// to the reservation snapshot and are independently checked below.
+	if liveTaskPayload == nil {
+		liveTaskPayload, err = pg.store.FutureTaskPayload(ctx, candidate.TaskID)
+		if err != nil {
+			return PreparationWaiting, err
+		}
+	}
+	if runtimeAssetsPending(liveTaskPayload) {
+		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED runtime_assets_pending worker=%s task=%s reservation=%s task_revision=%d reservation_revision=%d", workerID, candidate.TaskID, reservation.ReservationID, candidate.Revision, reservation.TaskRevision)
 		return PreparationWaiting, nil
+	}
+	if runtimeAssetsPending(reservation.Payload) {
+		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate refreshed stale reservation payload worker=%s task=%s reservation=%s task_revision=%d reservation_revision=%d", workerID, candidate.TaskID, reservation.ReservationID, candidate.Revision, reservation.TaskRevision)
 	}
 
 	// TTL expiry gate.

@@ -51,6 +51,47 @@ func TestInvariant_GateBlocksWithoutEvidence(t *testing.T) {
 	}
 }
 
+func TestPreparationGate_UsesCommittedTaskSpecAfterFinalize(t *testing.T) {
+	const (
+		workerID = "worker-finalize"
+		taskID   = "assembly-finalize"
+		jobID    = "job-finalize"
+	)
+	frs := &expiryMockStore{payload: []byte(`{"runtime_assets_pending":false}`)}
+	h := buildExpiryHandler(t, frs)
+	reservation := taskgraph.FutureReservation{
+		TaskID: taskID, JobID: jobID, WorkerID: workerID,
+		ReservationID: "reservation-finalize", TaskRevision: 4,
+		State: taskgraph.ReservationPrepared, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}
+	if _, err := frs.TryReserveFutureTask(context.Background(), reservation); err != nil {
+		t.Fatalf("create reservation: %v", err)
+	}
+
+	// Placement cached the reservation before FINALIZE committed. Its payload
+	// still says pending, while FutureTaskPayload returns the committed spec.
+	frs.mu.Lock()
+	frs.reservation.Payload = []byte(`{"runtime_assets_pending":true}`)
+	frs.mu.Unlock()
+	snapshot, err := frs.ListFutureReservations(context.Background(), workerID)
+	if err != nil {
+		t.Fatalf("load stale placement snapshot: %v", err)
+	}
+	candidate := expiryCandidate(taskID, jobID, 4)
+	candidate.Executor.ID = "test.assembly"
+
+	decision, err := NewPreparationGate(frs, h, nil).EnsurePreparedWithReservations(
+		context.Background(), workerID, candidate,
+		&snapshot,
+	)
+	if err != nil {
+		t.Fatalf("gate evaluation: %v", err)
+	}
+	if decision != PreparationReady {
+		t.Fatalf("decision=%s, want READY after committed FINALIZE", decision)
+	}
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // INVARIANT 2: Reservation expiry clears gate
 // When a reservation expires, ListFutureReservations returns empty → gate

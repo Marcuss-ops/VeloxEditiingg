@@ -7,7 +7,7 @@
 
 package store
 
-import "velox-server/internal/completionstore"
+import "velox-server/internal/store/completionstore"
 
 // SQLiteCompletionStore is re-exported from the completionstore package,
 // which owns the SQLite completion-protocol implementation.

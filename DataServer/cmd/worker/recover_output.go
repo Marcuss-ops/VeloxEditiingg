@@ -99,9 +99,9 @@ import (
 	"time"
 
 	"velox-server/internal/completion"
-	"velox-server/internal/completionstore"
 	"velox-server/internal/config"
 	"velox-server/internal/store"
+	"velox-server/internal/store/completionstore"
 	"velox-shared/identity"
 	"velox-shared/iopool"
 )

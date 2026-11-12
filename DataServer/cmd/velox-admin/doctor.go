@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"velox-server/internal/invariants"
-	"velox-server/internal/jobdoctor"
+	"velox-server/internal/store/jobdoctor"
 )
 
 // runDoctor prints a read-only, evidence-backed diagnosis for one job. It

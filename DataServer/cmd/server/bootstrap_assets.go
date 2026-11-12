@@ -9,13 +9,13 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/artifactsstore"
 	"velox-server/internal/completion"
-	"velox-server/internal/completionstore"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/logging"
 	"velox-server/internal/outbox"
 	"velox-server/internal/repository"
 	"velox-server/internal/store"
+	"velox-server/internal/store/completionstore"
 )
 
 // assetDeps holds the artifact pipeline components built before modules

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"velox-server/internal/completionstore"
 	"velox-server/internal/repository"
+	"velox-server/internal/store/completionstore"
 	"velox-server/internal/store/migrations"
 
 	_ "github.com/mattn/go-sqlite3"

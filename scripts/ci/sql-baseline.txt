@@ -10,11 +10,6 @@
 26 DataServer/internal/artifactsstore/media_probe.go
 6 DataServer/internal/artifactsstore/sqlite_artifact_reader.go
 7 DataServer/internal/artifactsstore/sqlite_job_delivery_counter.go
-5 DataServer/internal/completionstore/completion_repository_bindings.go
-13 DataServer/internal/completionstore/completion_repository_finalize.go
-1 DataServer/internal/completionstore/completion_repository_reconcile.go
-17 DataServer/internal/completionstore/completion_repository_tx_lifecycle.go
-7 DataServer/internal/completionstore/completionstore.go
 6 DataServer/internal/deliveries/plan_resolver.go
 10 DataServer/internal/deliverystore/deliverystore.go
 8 DataServer/internal/deliverystore/destinations.go
