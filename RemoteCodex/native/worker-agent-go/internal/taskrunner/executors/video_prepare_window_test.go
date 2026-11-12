@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -37,7 +38,8 @@ func (r *recordingWindowRunner) Run(_ context.Context, request ffmpegrunner.FFmp
 }
 
 type fixedWindowCertifier struct {
-	frames int64
+	frames    int64
+	extradata string
 }
 
 type fixedWindowExtradataReference string
@@ -47,12 +49,16 @@ func (r fixedWindowExtradataReference) ExpectedExtradataSHA256(context.Context, 
 }
 
 func (c fixedWindowCertifier) Certify(_ context.Context, _ string, profile contract.CanonicalVideoProfileV1, _ int64) (windowOutputEvidence, error) {
+	extradata := c.extradata
+	if extradata == "" {
+		extradata = contract.CanonicalVideoExtradataSHA256
+	}
 	return windowOutputEvidence{
 		Codec: profile.Codec, Profile: strings.ToLower(profile.CodecProfile), Level: canonicalLevelNumber(profile.CodecLevel),
 		Width: profile.Width, Height: profile.Height, PixelFormat: profile.PixelFormat,
 		FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, TimeBaseNum: profile.TimeBaseNum,
 		TimeBaseDen: profile.TimeBaseDen, BFrames: profile.BFrames, FrameCount: c.frames,
-		FirstFrameKeyframe: true, ExtradataSHA256: strings.Repeat("c", 64),
+		FirstFrameKeyframe: true, ExtradataSHA256: extradata,
 	}, nil
 }
 
@@ -79,7 +85,7 @@ func TestVideoPrepareWindow_EncodesAndEmitsBoundCertification(t *testing.T) {
 	runner := &recordingWindowRunner{}
 	exec := &videoPrepareWindowExecutor{
 		outputRoot: t.TempDir(), runner: runner, certifier: fixedWindowCertifier{frames: request.OutputFrameCount},
-		extradataRef: fixedWindowExtradataReference(strings.Repeat("c", 64)),
+		extradataRef: fixedWindowExtradataReference(contract.CanonicalVideoExtradataSHA256),
 		profile:      profile, quality: quality, encoderVer: "ffmpeg test runner", encoderSHA: strings.Repeat("e", 64),
 	}
 	spec := executor.TaskSpec{JobID: "job-window", ExecutorID: VideoPrepareWindowID,
@@ -197,7 +203,7 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 	runner := &recordingWindowRunner{}
 	e := &videoPrepareWindowExecutor{outputRoot: t.TempDir(), runner: runner,
 		certifier:    fixedWindowCertifier{frames: request.OutputFrameCount},
-		extradataRef: fixedWindowExtradataReference(strings.Repeat("c", 64)),
+		extradataRef: fixedWindowExtradataReference(contract.CanonicalVideoExtradataSHA256),
 		profile:      profile, quality: quality,
 		encoderVer: "ffmpeg test runner", encoderSHA: strings.Repeat("e", 64)}
 	spec := executor.TaskSpec{JobID: "job-time-window", ExecutorID: VideoPrepareWindowID,
@@ -265,6 +271,16 @@ func TestVideoPrepareWindow_RealFFmpegOutputPassesCertification(t *testing.T) {
 	result, err := exec.Execute(ctx, nil, spec)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+	actualReference, err := (ffmpegWindowExtradataReference{}).ExpectedExtradataSHA256(context.Background(), profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actualReference != contract.CanonicalVideoExtradataSHA256 {
+		if result.Status != "failed" || result.ErrorCode != "WINDOW_ENCODER_UNSUPPORTED" {
+			t.Fatalf("unsupported encoder was not rejected: %+v", result)
+		}
+		return
 	}
 	if result.Status != "succeeded" {
 		t.Fatalf("real FFmpeg result failed: %+v", result)
@@ -377,11 +393,36 @@ func TestVideoPrepareWindow_UsesCertifiedPacketCopyForCanonicalKeyframeWindow(t 
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	actualReference, err := (ffmpegWindowExtradataReference{}).ExpectedExtradataSHA256(context.Background(), profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actualReference != contract.CanonicalVideoExtradataSHA256 {
+		if result.Status != "failed" || result.ErrorCode != "WINDOW_ENCODER_UNSUPPORTED" {
+			t.Fatalf("unsupported encoder was not rejected: %+v", result)
+		}
+		return
+	}
+	if result.Status != "succeeded" || len(result.Segments) != 1 {
+		t.Fatalf("packet-copy result=%+v", result)
+	}
 	if got := result.Segments[0].FramesEncoded; got != 0 {
 		t.Fatalf("packet-copy window reports %d encoded frames, want 0", got)
 	}
 	if got := result.Segments[0].FfmpegEncodeMS; got != 0 {
 		t.Fatalf("packet-copy window reports %v encode milliseconds, want 0", got)
+	}
+}
+
+func TestCanonicalExtradataRejectsUnsupportedEncoder(t *testing.T) {
+	e := &videoPrepareWindowExecutor{profile: contract.CanonicalVideoProfileV1Default, quality: contract.CanonicalPreparationQualityPolicyDefault,
+		extradataRef: fixedWindowExtradataReference(strings.Repeat("d", 64))}
+	_, err := e.canonicalExtradata(context.Background(), "encoder-build")
+	if !errors.Is(err, errUnsupportedCanonicalEncoder) {
+		t.Fatalf("got %v, want unsupported encoder", err)
+	}
+	if e.extradataSHA != "" {
+		t.Fatal("unsupported identity was cached")
 	}
 }
 
@@ -406,8 +447,8 @@ func TestVideoPrepareWindow_RejectsNonCanonicalExtradata(t *testing.T) {
 		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
 	}
 	exec := &videoPrepareWindowExecutor{
-		outputRoot: t.TempDir(), runner: &recordingWindowRunner{}, certifier: fixedWindowCertifier{frames: 48},
-		extradataRef: fixedWindowExtradataReference(strings.Repeat("d", 64)), profile: profile, quality: quality,
+		outputRoot: t.TempDir(), runner: &recordingWindowRunner{}, certifier: fixedWindowCertifier{frames: 48, extradata: strings.Repeat("c", 64)},
+		extradataRef: fixedWindowExtradataReference(contract.CanonicalVideoExtradataSHA256), profile: profile, quality: quality,
 		encoderVer: "ffmpeg test runner", encoderSHA: strings.Repeat("e", 64),
 	}
 	spec := executor.TaskSpec{JobID: "job-extradata-mismatch", ExecutorID: VideoPrepareWindowID,

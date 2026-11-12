@@ -30,6 +30,8 @@ const (
 	VideoPrepareWindowVersion = 1
 )
 
+var errUnsupportedCanonicalEncoder = errors.New("worker encoder does not produce the canonical stream identity")
+
 type windowFFmpegRunner interface {
 	Run(context.Context, ffmpegrunner.FFmpegRequest) (ffmpegrunner.FFmpegResult, error)
 }
@@ -348,6 +350,9 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	}
 	expectedExtradata, err := e.canonicalExtradata(ctx, encoderBuildSHA)
 	if err != nil {
+		if errors.Is(err, errUnsupportedCanonicalEncoder) {
+			return fail("WINDOW_ENCODER_UNSUPPORTED", err)
+		}
 		return fail("WINDOW_EXTRADATA_REFERENCE", err)
 	}
 	if strings.TrimSpace(spec.JobID) == "" {
@@ -644,6 +649,9 @@ func (e *videoPrepareWindowExecutor) canonicalExtradata(ctx context.Context, enc
 	hash, err := ref.ExpectedExtradataSHA256(ctx, e.profile, e.quality)
 	if err != nil {
 		return "", err
+	}
+	if hash != contract.CanonicalVideoExtradataSHA256 {
+		return "", fmt.Errorf("%w: encoder avcC=%s, required=%s", errUnsupportedCanonicalEncoder, hash, contract.CanonicalVideoExtradataSHA256)
 	}
 	e.extradataKey, e.extradataSHA = encoderBuildSHA, hash
 	return hash, nil
