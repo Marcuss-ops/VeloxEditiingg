@@ -219,8 +219,13 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 		}
 		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous == req.IdempotencyKey {
 			state, _ := current[runtimeFinalizeStatusKey].(string)
-			if state == runtimeFinalizeQueued || state == runtimeFinalizeRunning {
+			switch state {
+			case runtimeFinalizeQueued, runtimeFinalizeRunning, runtimeFinalizeWaitingPreparation:
 				c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "stock_preparation_queued", "finalization_status": state, "idempotent": true})
+				return
+			case runtimeFinalizeFailed:
+				message, _ := current[runtimeFinalizeErrorKey].(string)
+				c.JSON(http.StatusConflict, gin.H{"ok": false, "job_id": jobID, "error": "runtime_finalize_failed", "message": message, "finalization_status": state, "idempotent": true})
 				return
 			}
 		}
