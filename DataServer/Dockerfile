@@ -39,7 +39,7 @@
 # Keep operator tooling in a source-independent stage.  Otherwise every
 # application source edit invalidates the cosign installation layer and the
 # fast benchmark build spends time rebuilding a large Go tool dependency tree.
-FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS tools
+FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS tools
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go install github.com/sigstore/cosign/v2/cmd/cosign@v2.4.1
 
 # ─── Stage 2: builder ──────────────────────────────────────────────────────
-FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS builder
+FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 

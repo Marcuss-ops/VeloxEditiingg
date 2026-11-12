@@ -62,7 +62,7 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit "${2:-1}"; }
   || fail "DataServer/go.mod not found (run from repo root)"
 
 command -v go >/dev/null 2>&1 \
-  || fail "go not on PATH; install Go 1.25.8+ (DataServer/go.mod requirement)"
+  || fail "go not on PATH; install Go 1.26.11+ (DataServer/go.mod requirement)"
 
 OVERALL_RC=0
 

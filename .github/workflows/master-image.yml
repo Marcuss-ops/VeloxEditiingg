@@ -100,7 +100,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.8'
+          go-version: '1.26.11'
           cache-dependency-path: DataServer/go.sum
       - name: Select balanced package shard
         working-directory: DataServer
@@ -239,7 +239,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.8'
+          go-version: '1.26.11'
           cache-dependency-path: ${{ env.BUILD_DIR }}/go.sum
 
       - name: Build velox-server binary

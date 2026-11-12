@@ -83,7 +83,7 @@ func CanonicalVideoEncoderArgsDigest(profile CanonicalVideoProfileV1, quality Pr
 // geometry. Keeping this in the shared contract prevents the Master and
 // workers from preparing visually or bitstream-incompatible fragments.
 func CanonicalVideoScaleGeometryFilter(profile CanonicalVideoProfileV1) string {
-	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2",
+	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1",
 		profile.Width, profile.Height, profile.Width, profile.Height)
 }
 

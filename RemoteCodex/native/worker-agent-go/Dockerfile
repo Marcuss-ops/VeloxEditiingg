@@ -118,11 +118,11 @@ RUN --mount=type=cache,id=velox-worker-cpp-ccache,target=/root/.ccache,sharing=l
 # are uniformly governed by Makefile.source-of-truth — NOT duplicated in
 # Dockerfile. See RemoteCodex/native/worker-agent-go/Makefile for the
 # contract (VERSION_FILE, BUILD_TIME fallback, LDFLAGS).
-FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS go-builder
+FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS go-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# golang:1.25.8-bookworm does NOT ship `make`. PR-3 requires it because
+# golang:1.26.11-bookworm does NOT ship `make`. PR-3 requires it because
 # the go-builder delegates to the host Makefile. Keep the dep set
 # minimal: only what's needed to run the Makefile's agent and evict targets.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

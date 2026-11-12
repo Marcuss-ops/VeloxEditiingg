@@ -60,7 +60,7 @@ jobs:
       - name: install Go toolchain (from go.work)
         uses: actions/setup-go@v5
         with:
-          # go.work pins go 1.25.8 across both modules; a literal pin
+          # go.work pins go 1.26.11 across both modules; a literal pin
           # here would drift behind the workspace resolution.
           go-version-file: go.work
           cache: true

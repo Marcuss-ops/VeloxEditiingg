@@ -502,7 +502,11 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 			return fail("WINDOW_CERTIFICATION_FAILED", err)
 		}
 		if evidence.ExtradataSHA256 != expectedExtradata {
-			return fail("WINDOW_EXTRADATA_IDENTITY_MISMATCH", fmt.Errorf("prepared fragment avcC %s does not match the canonical encoder reference %s", evidence.ExtradataSHA256, expectedExtradata))
+			argsDigest, digestErr := contract.CanonicalVideoEncoderArgsDigest(e.profile, e.quality)
+			if digestErr != nil {
+				return fail("WINDOW_EXTRADATA_IDENTITY_MISMATCH", fmt.Errorf("prepared fragment avcC %s does not match canonical reference %s; encoder=%q build=%s args=<digest unavailable: %v>", evidence.ExtradataSHA256, expectedExtradata, encoderVersion, encoderBuildSHA, digestErr))
+			}
+			return fail("WINDOW_EXTRADATA_IDENTITY_MISMATCH", fmt.Errorf("prepared fragment avcC %s does not match canonical reference %s; encoder=%q build=%s args=%s", evidence.ExtradataSHA256, expectedExtradata, encoderVersion, encoderBuildSHA, argsDigest))
 		}
 		closedGOPProven = e.profile.ClosedGOP
 	}
