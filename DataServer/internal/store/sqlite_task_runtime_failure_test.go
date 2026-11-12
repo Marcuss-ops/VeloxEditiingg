@@ -67,25 +67,52 @@ func runtimeFailureFixture(t *testing.T, parentStatus, childStatus, finalizeStat
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	_, err = db.Exec(`
-		CREATE TABLE jobs(job_id TEXT PRIMARY KEY,status TEXT,revision INTEGER,updated_at TEXT,error_message TEXT,failed_at TEXT,failed_by TEXT);
-		CREATE TABLE tasks(task_id TEXT PRIMARY KEY,job_id TEXT,executor_id TEXT,status TEXT,worker_id TEXT,revision INTEGER,updated_at TEXT,completed_at TEXT,depends_on TEXT);
-		CREATE TABLE task_specs(task_id TEXT PRIMARY KEY,spec_version INTEGER,spec_hash TEXT,payload_json TEXT);
-		CREATE TABLE task_attempts(task_id TEXT,attempt_number INTEGER,error_code TEXT,error_message TEXT);
+		CREATE TABLE jobs(job_id TEXT PRIMARY KEY,status TEXT,revision INTEGER,updated_at TEXT,error_message TEXT,failed_at TEXT,failed_by TEXT,max_retries INTEGER DEFAULT 3);
+		CREATE TABLE tasks(task_id TEXT PRIMARY KEY,job_id TEXT,executor_id TEXT,status TEXT,worker_id TEXT,lease_id TEXT,attempt_id TEXT,attempt_number INTEGER,ready_at TEXT,started_at TEXT,completed_at TEXT,lease_expires_at TEXT,revision INTEGER,updated_at TEXT,depends_on TEXT,winning_attempt_terminal_pending INTEGER DEFAULT 0,winning_attempt_id TEXT,winning_attempt_committed_at TEXT);
+		CREATE TABLE task_specs(task_id TEXT PRIMARY KEY,spec_version INTEGER,spec_hash TEXT,payload_json TEXT,executor_id TEXT);
+		CREATE TABLE task_attempts(id TEXT PRIMARY KEY,task_id TEXT,attempt_number INTEGER,error_code TEXT,error_message TEXT,worker_id TEXT,lease_id TEXT,completed_at TEXT,created_at TEXT);
+		CREATE TABLE fleet_operations(operation_id TEXT PRIMARY KEY,worker_id TEXT,op TEXT,status TEXT,finished_at TEXT);
 		CREATE TABLE job_history(job_id TEXT,status TEXT,worker_id TEXT,message TEXT,raw_json TEXT,event_ts TEXT);
 		CREATE TABLE job_events(timestamp TEXT,job_id TEXT,event TEXT,raw_json TEXT);
 		CREATE TABLE test_outbox(event_type TEXT,payload TEXT);
-		INSERT INTO jobs(job_id,status,revision) VALUES('job-1','RUNNING',1);
-		INSERT INTO tasks VALUES('assembly','job-1','video.assemble.copy.v1',?,'',1,'2026-01-01','', '["prep"]');
-		INSERT INTO tasks VALUES('prep','job-1','video.prepare.window.v1',?,'worker-1',1,'2026-01-01','', '[]');
-		INSERT INTO tasks VALUES('other','job-1','video.prepare.window.v1','READY','',1,'2026-01-01','', '[]');
-		INSERT INTO task_specs VALUES('assembly',1,'old',json_object('runtime_finalize_status',?,'runtime_assets_pending',json('true')));
-		INSERT INTO task_attempts VALUES('prep',1,'WINDOW_ENCODE_FAILED','bad source');`, parentStatus, childStatus, finalizeStatus)
+		INSERT INTO jobs(job_id,status,revision,max_retries) VALUES('job-1','RUNNING',1,3);
+		INSERT INTO tasks(task_id,job_id,executor_id,status,worker_id,lease_id,attempt_id,attempt_number,revision,updated_at,completed_at,depends_on) VALUES('assembly','job-1','video.assemble.copy.v1',?,'','','',0,1,'2026-01-01','', '["prep"]');
+		INSERT INTO tasks(task_id,job_id,executor_id,status,worker_id,lease_id,attempt_id,attempt_number,revision,updated_at,completed_at,depends_on) VALUES('prep','job-1','video.prepare.window.v1',?,'worker-1','lease-1','attempt-1',1,1,'2026-01-01','2026-01-01', '[]');
+		INSERT INTO tasks(task_id,job_id,executor_id,status,worker_id,lease_id,attempt_id,attempt_number,revision,updated_at,depends_on) VALUES('other','job-1','video.prepare.window.v1','READY','','','',0,1,'2026-01-01', '[]');
+		INSERT INTO task_specs(task_id,spec_version,spec_hash,payload_json,executor_id) VALUES('assembly',1,'old',json_object('runtime_finalize_status',?,'runtime_assets_pending',json('true')),'video.assemble.copy.v1');
+		INSERT INTO task_specs(task_id,spec_version,spec_hash,payload_json,executor_id) VALUES('prep',1,'prep-hash','{}','video.prepare.window.v1');
+		INSERT INTO task_specs(task_id,spec_version,spec_hash,payload_json,executor_id) VALUES('other',1,'other-hash','{}','video.prepare.window.v1');
+		INSERT INTO task_attempts(id,task_id,attempt_number,error_code,error_message,worker_id,lease_id,completed_at,created_at) VALUES('attempt-1','prep',1,'WINDOW_ENCODE_FAILED','bad source','worker-1','lease-1','2026-01-01','2026-01-01');`, parentStatus, childStatus, finalizeStatus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := &SQLiteStore{db: db}
 	s.SetOutbox(runtimeFailureOutbox{fail: failOutbox})
 	return NewSQLiteTaskRepository(s), db
+}
+
+func TestReconcileFailedRuntimePreparationRetriesExtradataMismatchAfterWorkerUpdate(t *testing.T) {
+	repo, db := runtimeFailureFixture(t, "READY", "FAILED", "WAITING_PREPARATION", false)
+	if _, err := db.Exec(`INSERT INTO fleet_operations(operation_id,worker_id,op,status,finished_at) VALUES('update-1','worker-1','update','SUCCEEDED','2026-01-02')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE task_attempts SET error_code='WINDOW_EXTRADATA_IDENTITY_MISMATCH',error_message='old worker SAR',completed_at='2026-01-01' WHERE id='attempt-1'`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := repo.ReconcileFailedRuntimePreparations(context.Background(), 10)
+	if err != nil || n != 1 {
+		t.Fatalf("reconcile count=%d err=%v", n, err)
+	}
+	var jobStatus, parentStatus, childStatus, finalizeStatus string
+	if err := db.QueryRow(`SELECT j.status,p.status,c.status,json_extract(s.payload_json,'$.runtime_finalize_status')
+		FROM jobs j JOIN tasks p ON p.job_id=j.job_id JOIN tasks c ON c.task_id='prep'
+		JOIN task_specs s ON s.task_id=p.task_id WHERE j.job_id='job-1' AND p.task_id='assembly'`).
+		Scan(&jobStatus, &parentStatus, &childStatus, &finalizeStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "RUNNING" || parentStatus != "READY" || childStatus != "PENDING" || finalizeStatus != "WAITING_PREPARATION" {
+		t.Fatalf("unexpected retry state job=%s parent=%s child=%s finalize=%s", jobStatus, parentStatus, childStatus, finalizeStatus)
+	}
 }
 
 func TestReconcileFailedRuntimePreparationClosesJobAtomically(t *testing.T) {

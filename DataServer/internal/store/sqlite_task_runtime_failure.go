@@ -122,9 +122,10 @@ func (r *SQLiteTaskRepository) failRuntimeFinalization(ctx context.Context, task
 			return false, fmt.Errorf("runtime finalization failure dependency: %w", err)
 		}
 		// A Master restart can encounter a failed attempt that predates the
-		// atomic ingest retry path. Requeue the same known transient failures
-		// under the same lock before declaring the parent terminal.
-		if retryablePreparedWindowFailure(errorCode, errorMessage) {
+		// atomic ingest retry path. Requeue known transient failures and an
+		// extradata mismatch only after a successful worker image update under
+		// the same lock, before declaring the parent terminal.
+		if retryablePreparedWindowFailure(errorCode, errorMessage) || errorCode == "WINDOW_EXTRADATA_IDENTITY_MISMATCH" {
 			var workerID, leaseID, attemptID string
 			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(worker_id,''),COALESCE(lease_id,''),COALESCE(attempt_id,'') FROM tasks WHERE task_id=?`, childID).Scan(&workerID, &leaseID, &attemptID); err != nil {
 				return false, fmt.Errorf("runtime finalization failure retry identity: %w", err)

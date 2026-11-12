@@ -72,7 +72,7 @@ func (s *SQLiteStore) RetryFailedPreparedWindows(ctx context.Context, jobID stri
 			return nil, wrapDBInfrastructure("prepared-window retry scan", err)
 		}
 		retryableUpload := retryablePreparedWindowFailure(c.errorCode, c.failure)
-		retryableCertification := c.errorCode == "WINDOW_CERTIFICATION_FAILED" && c.workerID != "" && c.failedAt != "" &&
+		retryableCertification := (c.errorCode == "WINDOW_CERTIFICATION_FAILED" || c.errorCode == "WINDOW_EXTRADATA_IDENTITY_MISMATCH") && c.workerID != "" && c.failedAt != "" &&
 			successfulWorkerUpdateAfterFailure(ctx, conn, c.workerID, c.failedAt)
 		if c.taskExecutor != c.specExecutor || c.pending != 0 || !(retryableUpload || retryableCertification) {
 			rows.Close()
@@ -134,9 +134,13 @@ func retryablePreparedWindowFailure(code, message string) bool {
 	return code == contract.VideoPrepareWindowRetryableErrorCode || retryablePreparedWindowUpload(message)
 }
 
-func successfulWorkerUpdateAfterFailure(ctx context.Context, conn *sql.Conn, workerID, failedAt string) bool {
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func successfulWorkerUpdateAfterFailure(ctx context.Context, q queryRower, workerID, failedAt string) bool {
 	var count int
-	err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM fleet_operations
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM fleet_operations
 		WHERE worker_id=? AND op='update' AND status='SUCCEEDED' AND finished_at>?`, workerID, failedAt).Scan(&count)
 	return err == nil && count > 0
 }
