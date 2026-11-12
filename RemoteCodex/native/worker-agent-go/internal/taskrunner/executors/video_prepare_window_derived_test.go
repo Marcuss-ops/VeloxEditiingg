@@ -172,11 +172,11 @@ func TestNormalizedSourceCacheReusesOneEncodeAcrossWindows(t *testing.T) {
 			info, err := os.Stat(path)
 			return err == nil && info.Mode().IsRegular() && info.Size() > 0
 		},
-		metrics: metrics,
 		profile: contract.CanonicalVideoProfileV1Default,
 		quality: contract.CanonicalPreparationQualityPolicyDefault,
 	}
-	ctx := context.Background()
+	recorder := telemetry.NewEventRecorder()
+	ctx := telemetry.WithRecorder(context.Background(), recorder)
 	sourceSHA := strings.Repeat("a", 64)
 	var paths []string
 	for window := 0; window < 3; window++ {
@@ -207,6 +207,13 @@ func TestNormalizedSourceCacheReusesOneEncodeAcrossWindows(t *testing.T) {
 	}
 	if runner.calls != 2 {
 		t.Fatalf("whole-source encodes after second source = %d, want 2", runner.calls)
+	}
+	if invalid := recorder.InvalidEventCount(); invalid != 0 {
+		t.Fatalf("invalid normalized source events: %d", invalid)
+	}
+	sink := telemetry.PrometheusSink{Metrics: metrics}
+	if err := sink.Publish(ctx, &telemetry.AttemptSnapshot{Events: recorder.Snapshot()}); err != nil {
+		t.Fatal(err)
 	}
 	export := metrics.ExportPrometheus()
 	for _, series := range []string{

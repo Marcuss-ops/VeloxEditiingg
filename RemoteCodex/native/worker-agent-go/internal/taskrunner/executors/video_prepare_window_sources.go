@@ -15,6 +15,7 @@ import (
 
 	"velox-shared/assetref"
 	"velox-shared/contract"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
@@ -37,7 +38,7 @@ func (e *videoPrepareWindowExecutor) normalizedSourcePath(ctx context.Context, s
 	sourceHash := assetref.ContentHash(sourceSHA)
 	if entry, found, err := e.derivedCache.FindDerived(ctx, sourceHash, profile); err == nil && found && strings.TrimSpace(entry.LocalPath) != "" {
 		if e.normalizedSourceIsValid(ctx, entry.LocalPath) {
-			e.cacheMetrics().RecordNormalizedSourceCacheHit()
+			recordNormalizedSourceEvent(ctx, "normalized_source_hit")
 			return entry.LocalPath, true
 		}
 	}
@@ -58,14 +59,14 @@ func (e *videoPrepareWindowExecutor) normalizedSourcePath(ctx context.Context, s
 	}
 	outputPath := filepath.Join(dir, hex.EncodeToString(sum[:])+".mp4")
 	if e.normalizedSourceIsValid(ctx, outputPath) {
-		e.cacheMetrics().RecordNormalizedSourceCacheHit()
+		recordNormalizedSourceEvent(ctx, "normalized_source_hit")
 		return outputPath, true
 	} else {
 		// A previous interrupted/competing encoder may have left a non-empty
 		// but unusable MP4. Never treat file size alone as cache validation.
 		_ = os.Remove(outputPath)
 	}
-	e.cacheMetrics().RecordNormalizedSourceCacheMiss()
+	recordNormalizedSourceEvent(ctx, "normalized_source_miss")
 	tmp, err := os.CreateTemp(dir, ".normalized-source-*.partial.mp4")
 	if err != nil {
 		return "", false
@@ -80,7 +81,7 @@ func (e *videoPrepareWindowExecutor) normalizedSourcePath(ctx context.Context, s
 	if _, err := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args}); err != nil {
 		return "", false
 	}
-	e.cacheMetrics().RecordNormalizedSourceEncode()
+	recordNormalizedSourceEvent(ctx, "normalized_source_encode")
 	if !e.normalizedSourceIsValid(ctx, tmpPath) {
 		return "", false
 	}
@@ -97,6 +98,11 @@ func (e *videoPrepareWindowExecutor) normalizedSourcePath(ctx context.Context, s
 		SizeBytes: artifact.SizeBytes, DownloadComplete: true,
 	})
 	return outputPath, true
+}
+
+func recordNormalizedSourceEvent(ctx context.Context, action string) {
+	rec := telemetry.RecorderFromContext(ctx)
+	rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: action}, telemetry.StatusOK, "", "")
 }
 
 // validNormalizedSource verifies that the container can be parsed and that

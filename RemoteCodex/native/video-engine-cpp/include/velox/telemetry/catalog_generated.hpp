@@ -44,7 +44,7 @@ struct EventDescriptor {
     std::string_view owner;
 };
 
-inline constexpr std::array<EventDescriptor, 159> kEvents = {{
+inline constexpr std::array<EventDescriptor, 162> kEvents = {{
     { "attempt.failure", "attempt", "failure", "worker", "attempt", "finalize", "", "counter", "count", "none", "sum", "per_attempt", "worker" },
     { "attempt.retry", "attempt", "retry", "worker", "attempt", "finalize", "", "counter", "count", "none", "sum", "per_attempt", "worker" },
     { "audio.summary", "audio", "summary", "validation", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "validation" },
@@ -176,6 +176,9 @@ inline constexpr std::array<EventDescriptor, 159> kEvents = {{
     { "worker.cache.lookup", "worker.cache", "lookup", "worker", "task", "cache_lookup", "", "duration", "milliseconds", "span_child", "sum", "per_task", "cache_resolver" },
     { "worker.cache.metadata_read", "worker.cache", "metadata_read", "worker", "task", "cache_lookup", "", "duration", "milliseconds", "span_child", "sum", "per_task", "cache_resolver" },
     { "worker.cache.miss", "worker.cache", "miss", "worker", "task", "cache_lookup", "", "counter", "count", "none", "sum", "per_task", "cache_resolver" },
+    { "worker.cache.normalized_source_encode", "worker.cache", "normalized_source_encode", "worker", "task", "cache_lookup", "", "counter", "count", "none", "sum", "per_task", "cache_resolver" },
+    { "worker.cache.normalized_source_hit", "worker.cache", "normalized_source_hit", "worker", "task", "cache_lookup", "", "counter", "count", "none", "sum", "per_task", "cache_resolver" },
+    { "worker.cache.normalized_source_miss", "worker.cache", "normalized_source_miss", "worker", "task", "cache_lookup", "", "counter", "count", "none", "sum", "per_task", "cache_resolver" },
     { "worker.commit_ack_wait", "worker", "commit_ack_wait", "upload", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "uploader" },
     { "worker.disk.wait", "worker.disk", "wait", "worker", "attempt", "render", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "attempt_telemetry" },
     { "worker.engine.binary_resolve", "worker.engine", "binary_resolve", "worker", "attempt", "render", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "process_runner" },

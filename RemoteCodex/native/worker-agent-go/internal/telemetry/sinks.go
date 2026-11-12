@@ -128,6 +128,12 @@ func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) e
 	// reintroducing producer-to-sink edges.
 	for _, event := range snapshot.Events {
 		switch {
+		case event.Component == "worker.cache" && event.Action == "normalized_source_hit":
+			s.Metrics.RecordNormalizedSourceCacheHit()
+		case event.Component == "worker.cache" && event.Action == "normalized_source_miss":
+			s.Metrics.RecordNormalizedSourceCacheMiss()
+		case event.Component == "worker.cache" && event.Action == "normalized_source_encode":
+			s.Metrics.RecordNormalizedSourceEncode()
 		case event.Component == "worker.cache" && event.Action == "hash_verify":
 			if event.DurationMS >= 0 {
 				s.Metrics.RecordCacheVerify(time.Duration(event.DurationMS) * time.Millisecond)

@@ -19,7 +19,6 @@ import (
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
-	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
@@ -211,7 +210,6 @@ type videoPrepareWindowExecutor struct {
 	// normalizedSourceValidator is injectable for deterministic cache tests;
 	// production falls through to ffprobe validation.
 	normalizedSourceValidator func(context.Context, string, contract.CanonicalVideoProfileV1) bool
-	metrics                   *telemetry.PrometheusMetrics
 	windowLockMu              sync.Mutex
 	windowLocks               map[string]*keyedWindowLock
 	sourceProbeMu             sync.Mutex
@@ -277,16 +275,6 @@ func (e *videoPrepareWindowExecutor) AttachDerivedCache(c *workercache.Cache) {
 		return
 	}
 	e.derivedCache = c
-}
-
-// cacheMetrics returns the injected registry in tests, or the worker's global
-// Prometheus registry in production. Keeping the seam narrow lets the cache
-// test assert exact deltas without depending on test order or prior encodes.
-func (e *videoPrepareWindowExecutor) cacheMetrics() *telemetry.PrometheusMetrics {
-	if e != nil && e.metrics != nil {
-		return e.metrics
-	}
-	return telemetry.GetPrometheusMetrics()
 }
 
 func (e *videoPrepareWindowExecutor) Descriptor() executor.Descriptor {
