@@ -252,6 +252,8 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 								resp["dispatch_status"] = "stock_preparation_queued"
 							case runtimeFinalizeRunning:
 								resp["dispatch_status"] = "stock_preparation_running"
+							case runtimeFinalizeRetryWait:
+								resp["dispatch_status"] = "stock_preparation_retry_wait"
 							case runtimeFinalizeFailed:
 								resp["dispatch_status"] = "stock_preparation_failed"
 							default:
@@ -262,6 +264,12 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 							}
 							if message, ok := payload[runtimeFinalizeErrorKey].(string); ok && message != "" {
 								resp["finalization_error"] = message
+								if status == "FAILED" {
+									resp["failure_message"] = message
+								}
+							}
+							if code, ok := payload["runtime_finalize_error_code"].(string); ok && code != "" && status == "FAILED" {
+								resp["failure_code"] = code
 							}
 						}
 					}

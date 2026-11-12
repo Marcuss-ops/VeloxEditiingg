@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"velox-shared/contract"
+	"velox-worker-agent/internal/downloader"
 )
 
 type preparedWindowRegistration struct {
@@ -123,7 +124,7 @@ func (c *Client) preparedWindowRequest(ctx context.Context, method, path string,
 		return out, resp.StatusCode, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return out, resp.StatusCode, fmt.Errorf("master prepared-window request failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return out, resp.StatusCode, fmt.Errorf("master prepared-window request failed: HTTP %d: %w", resp.StatusCode, downloader.NewHTTPStatusError(resp.StatusCode, strings.TrimSpace(string(data)), downloader.RetryAfter(resp)))
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return out, resp.StatusCode, fmt.Errorf("decode prepared-window response: %w", err)

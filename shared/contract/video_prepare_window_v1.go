@@ -13,6 +13,9 @@ const (
 	VideoPrepareWindowPayloadKey = "video_prepare_window"
 	VideoPrepareWindowVersion    = 1
 	VideoPrepareWindowExecutorID = "video.prepare.window.v1"
+	// VideoPrepareWindowRetryableErrorCode marks a classified transient worker
+	// failure for which the Master may schedule another bounded attempt.
+	VideoPrepareWindowRetryableErrorCode = "WINDOW_TRANSIENT_FAILURE"
 )
 
 // VideoPrepareWindowV1 is the immutable input contract for worker-side

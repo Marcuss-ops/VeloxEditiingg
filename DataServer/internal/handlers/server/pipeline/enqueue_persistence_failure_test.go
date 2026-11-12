@@ -176,3 +176,42 @@ func TestGetSubmittedJob_SuccessOmitsFailureFields(t *testing.T) {
 		}
 	}
 }
+
+func TestGetSubmittedJob_ReportsFinalizationFailureInsteadOfLatestSuccessfulAttempt(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "velox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	_, err = db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
+		ForwardingID: "cf-finalize-failed", ExternalClientID: "client-owner", SourceProvider: ExternalAPISourceProvider,
+		SourceJobID: "idem-finalize-failed", TargetExecutorID: JobSubmitTargetExecutorID,
+		TargetJobID: "job-1", Status: string(forwardingcontract.CFStatusForwarded),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.DB().ExecContext(ctx, `INSERT INTO jobs (job_id,status,error_message,revision,max_retries,created_at,updated_at,migrated_at) VALUES ('job-1','FAILED','preparation failed',0,3,datetime('now'),datetime('now'),datetime('now'))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.DB().ExecContext(ctx, `INSERT INTO task_attempts (id,task_id,job_id,attempt_number,worker_id,lease_id,status,error_code,error_message,created_at,updated_at) VALUES ('attempt-ok','prep-ok','job-1',1,'worker','lease','SUCCEEDED','','',datetime('now'),datetime('now'))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &finalizeReplayStore{payload: map[string]interface{}{"runtime_assets_pending": true, runtimeFinalizeStatusKey: runtimeFinalizeFailed, runtimeFinalizeErrorKey: "preparation failed", "runtime_finalize_error_code": "PREPARATION_TASK_FAILED"}}
+	h := &Handlers{store: db, jobs: JobsDeps{TaskReader: reader}}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/jobs/:id", func(c *gin.Context) { c.Set(m2mCtxKeyClientID, "client-owner"); h.GetSubmittedJob()(c) })
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-1", nil))
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || body["status"] != "FAILED" || body["failure_code"] != "PREPARATION_TASK_FAILED" || body["failure_message"] != "preparation failed" {
+		t.Fatalf("status=%d response=%v", w.Code, body)
+	}
+}

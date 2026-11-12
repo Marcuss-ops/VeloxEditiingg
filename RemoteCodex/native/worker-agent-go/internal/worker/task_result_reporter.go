@@ -110,7 +110,7 @@ type taskResultReporterConfig struct {
 // stamp result.sent with the exact wire boundary.
 func (r *taskResultReporter) Submit(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) time.Time {
 	resultStartedAt := time.Now()
-	status, errorCode, errorDetail := classifyTaskResultOutcome(report, execErr)
+	status, errorCode, errorDetail := classifyTaskResultOutcome(pte.ExecutorID, report, execErr)
 	tr := buildTaskResult(r, pte, taskID, attemptID, report, status, errorCode, errorDetail)
 
 	// Hash the canonical protojson representation with ReportHash empty, then

@@ -18,20 +18,25 @@ func (r *SQLiteTaskRepository) RecoverInterruptedRuntimeFinalizations(ctx contex
 		return fmt.Errorf("runtime finalization queue: task store is not initialized")
 	}
 	rows, err := r.store.db.QueryContext(ctx, `
-		SELECT s.task_id FROM task_specs s JOIN tasks t ON t.task_id=s.task_id
+		SELECT s.task_id, COALESCE(json_type(s.payload_json,'$.runtime_prepare_task_ids')='array',0)
+		FROM task_specs s JOIN tasks t ON t.task_id=s.task_id
 		WHERE json_extract(s.payload_json, '$.runtime_finalize_status') = 'RUNNING'
 		  AND t.status IN ('PENDING', 'READY') AND (t.worker_id = '' OR t.worker_id IS NULL)`)
 	if err != nil {
 		return wrapDBInfrastructure("runtime finalization queue recovery", err)
 	}
-	var taskIDs []string
+	type interrupted struct {
+		taskID          string
+		hasPreparations bool
+	}
+	var tasks []interrupted
 	for rows.Next() {
-		var taskID string
-		if err := rows.Scan(&taskID); err != nil {
+		var task interrupted
+		if err := rows.Scan(&task.taskID, &task.hasPreparations); err != nil {
 			_ = rows.Close()
 			return wrapDBInfrastructure("runtime finalization recovery scan", err)
 		}
-		taskIDs = append(taskIDs, taskID)
+		tasks = append(tasks, task)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -40,10 +45,12 @@ func (r *SQLiteTaskRepository) RecoverInterruptedRuntimeFinalizations(ctx contex
 	if err := rows.Close(); err != nil {
 		return wrapDBInfrastructure("runtime finalization recovery close", err)
 	}
-	for _, taskID := range taskIDs {
-		if _, err := r.store.db.ExecContext(ctx, `UPDATE task_specs SET payload_json=json_set(payload_json,'$.runtime_finalize_status',
-			CASE WHEN json_type(payload_json,'$.runtime_prepare_task_ids')='array' THEN 'WAITING_PREPARATION' ELSE 'QUEUED' END)
-			WHERE task_id=? AND json_extract(payload_json,'$.runtime_finalize_status')='RUNNING'`, taskID); err != nil {
+	for _, task := range tasks {
+		state := "QUEUED"
+		if task.hasPreparations {
+			state = "WAITING_PREPARATION"
+		}
+		if _, err := r.transitionRuntimeFinalizationStatus(ctx, task.taskID, "RUNNING", state); err != nil {
 			return wrapDBInfrastructure("runtime finalization recovery transition", err)
 		}
 	}
@@ -70,6 +77,8 @@ func (r *SQLiteTaskRepository) ListRuntimeFinalizationCandidates(
 		JOIN tasks t ON t.task_id = s.task_id
 		WHERE (
 			json_extract(s.payload_json, '$.runtime_finalize_status') = 'QUEUED'
+			OR (json_extract(s.payload_json, '$.runtime_finalize_status') = 'RETRY_WAIT'
+			    AND julianday(json_extract(s.payload_json, '$.runtime_finalize_retry_at')) <= julianday('now'))
 			OR (json_extract(s.payload_json, '$.runtime_finalize_status') = 'WAITING_PREPARATION'
 			    AND NOT EXISTS (
 					SELECT 1 FROM json_each(COALESCE(t.depends_on,'[]')) dep
@@ -114,7 +123,11 @@ func (r *SQLiteTaskRepository) ClaimRuntimeFinalization(ctx context.Context, tas
 	if err != nil || claimed {
 		return claimed, err
 	}
-	return r.transitionRuntimeFinalizationStatus(ctx, taskID, "WAITING_PREPARATION", "RUNNING")
+	claimed, err = r.transitionRuntimeFinalizationStatus(ctx, taskID, "WAITING_PREPARATION", "RUNNING")
+	if err != nil || claimed {
+		return claimed, err
+	}
+	return r.transitionRuntimeFinalizationStatus(ctx, taskID, "RETRY_WAIT", "RUNNING")
 }
 
 func (r *SQLiteTaskRepository) transitionRuntimeFinalizationStatus(ctx context.Context, taskID, from, to string) (bool, error) {
@@ -156,6 +169,19 @@ func (r *SQLiteTaskRepository) transitionRuntimeFinalizationStatus(ctx context.C
 	}
 	if payload["runtime_finalize_status"] != from {
 		return false, nil
+	}
+	if from == "RETRY_WAIT" {
+		retryAt, ok := payload["runtime_finalize_retry_at"].(string)
+		if !ok {
+			return false, fmt.Errorf("runtime finalization transition: retry time missing for task %s", taskID)
+		}
+		when, err := time.Parse(time.RFC3339Nano, retryAt)
+		if err != nil {
+			return false, fmt.Errorf("runtime finalization transition: invalid retry time for task %s: %w", taskID, err)
+		}
+		if when.After(time.Now().UTC()) {
+			return false, nil
+		}
 	}
 	payload["runtime_finalize_status"] = to
 	encoded, err := json.Marshal(payload)

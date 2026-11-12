@@ -180,10 +180,6 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "job_not_found", "message": "job_id does not match any task"})
 			return
 		}
-		if task.Status != taskgraph.StatusPending && task.Status != taskgraph.StatusReady {
-			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "job_already_leased", "message": "runtime assets must be finalized before the task is leased"})
-			return
-		}
 		specStore, ok := taskReader.(taskgraph.TaskSpecStore)
 		if !ok {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "task_store_unavailable", "message": "task spec runtime updates are not wired"})
@@ -199,6 +195,16 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 		current, err = specStore.GetTaskSpecPayload(c.Request.Context(), task.ID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure", "message": err.Error()})
+			return
+		}
+		if task.Status != taskgraph.StatusPending && task.Status != taskgraph.StatusReady {
+			previous, _ := current["runtime_finalize_idempotency_key"].(string)
+			state, _ := current[runtimeFinalizeStatusKey].(string)
+			if previous == req.IdempotencyKey && state == runtimeFinalizeFailed {
+				respondFinalizeFailure(c, jobID, current)
+				return
+			}
+			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "job_already_leased", "message": "runtime assets must be finalized before the task is leased"})
 			return
 		}
 		planJSON, _ := current[contract.PayloadKeyCompiledRenderPlanJSON].(string)
@@ -220,12 +226,11 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous == req.IdempotencyKey {
 			state, _ := current[runtimeFinalizeStatusKey].(string)
 			switch state {
-			case runtimeFinalizeQueued, runtimeFinalizeRunning, runtimeFinalizeWaitingPreparation:
+			case runtimeFinalizeQueued, runtimeFinalizeRunning, runtimeFinalizeWaitingPreparation, runtimeFinalizeRetryWait:
 				c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "stock_preparation_queued", "finalization_status": state, "idempotent": true})
 				return
 			case runtimeFinalizeFailed:
-				message, _ := current[runtimeFinalizeErrorKey].(string)
-				c.JSON(http.StatusConflict, gin.H{"ok": false, "job_id": jobID, "error": "runtime_finalize_failed", "message": message, "finalization_status": state, "idempotent": true})
+				respondFinalizeFailure(c, jobID, current)
 				return
 			}
 		}
@@ -291,6 +296,15 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			"idempotency_key":   req.IdempotencyKey,
 		})
 	}
+}
+
+func respondFinalizeFailure(c *gin.Context, jobID string, current map[string]interface{}) {
+	message, _ := current[runtimeFinalizeErrorKey].(string)
+	code, _ := current["runtime_finalize_error_code"].(string)
+	if code == "" {
+		code = "RUNTIME_FINALIZE_FAILED"
+	}
+	c.JSON(http.StatusConflict, gin.H{"ok": false, "job_id": jobID, "error": "runtime_finalize_failed", "failure_code": code, "message": message, "finalization_status": runtimeFinalizeFailed, "idempotent": true})
 }
 
 func logFinalizeAccepted(jobID string, req FinalizeJobRequest, payload map[string]interface{}, idempotent bool) {

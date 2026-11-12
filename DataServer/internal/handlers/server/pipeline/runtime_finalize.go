@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"reflect"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ const (
 	runtimeFinalizeRunning            = "RUNNING"
 	runtimeFinalizeSucceeded          = "SUCCEEDED"
 	runtimeFinalizeFailed             = "FAILED"
+	runtimeFinalizeRetryWait          = "RETRY_WAIT"
 	runtimeFinalizeWaitingPreparation = "WAITING_PREPARATION"
 	runtimeFinalizePoll               = 100 * time.Millisecond
 	runtimeFinalizeBatch              = 16
@@ -85,6 +87,7 @@ type RuntimeFinalizationProcessor struct {
 	queue     taskgraph.RuntimeFinalizationQueue
 	specs     taskgraph.TaskSpecStore
 	finalizer taskgraph.RuntimeTaskFinalizer
+	failures  taskgraph.RuntimeFinalizationFailures
 	expander  RuntimeTaskGraphExpander
 	evidence  taskattempts.SuccessfulSegmentTimingReader
 	assets    RuntimeStockWindowPreparer
@@ -114,6 +117,10 @@ func NewRuntimeFinalizationProcessor(
 	if !ok || isNilInterface(finalizer) {
 		return nil, errors.New("runtime finalizer: atomic task executor update is not configured")
 	}
+	failures, ok := repository.(taskgraph.RuntimeFinalizationFailures)
+	if !ok || isNilInterface(failures) {
+		return nil, errors.New("runtime finalizer: atomic failure reconciliation is not configured")
+	}
 	if isNilInterface(assets) {
 		return nil, errors.New("runtime finalizer: stock window preparer is not configured")
 	}
@@ -131,7 +138,7 @@ func NewRuntimeFinalizationProcessor(
 	if !ok || isNilInterface(evidence) {
 		return nil, errors.New("runtime finalizer: successful segment evidence reader is not configured")
 	}
-	return &RuntimeFinalizationProcessor{queue: queue, specs: specs, finalizer: finalizer, expander: expander, evidence: evidence, assets: assets, notifier: notifier}, nil
+	return &RuntimeFinalizationProcessor{queue: queue, specs: specs, finalizer: finalizer, failures: failures, expander: expander, evidence: evidence, assets: assets, notifier: notifier}, nil
 }
 
 // Run replays queued and interrupted FINALIZE work. Queue state and request
@@ -139,7 +146,7 @@ func NewRuntimeFinalizationProcessor(
 // work. Per-job materialization failures are persisted for GET polling and do
 // not stop unrelated finalizations.
 func (p *RuntimeFinalizationProcessor) Run(ctx context.Context) error {
-	if p == nil || p.queue == nil || p.specs == nil || p.finalizer == nil || p.assets == nil || p.notifier == nil {
+	if p == nil || p.queue == nil || p.specs == nil || p.finalizer == nil || p.failures == nil || p.assets == nil || p.notifier == nil {
 		return errors.New("runtime finalizer: processor is not configured")
 	}
 	if err := p.queue.RecoverInterruptedRuntimeFinalizations(ctx); err != nil {
@@ -148,6 +155,9 @@ func (p *RuntimeFinalizationProcessor) Run(ctx context.Context) error {
 	ticker := time.NewTicker(runtimeFinalizePoll)
 	defer ticker.Stop()
 	for {
+		if _, err := p.failures.ReconcileFailedRuntimePreparations(ctx, runtimeFinalizeBatch); err != nil {
+			return fmt.Errorf("runtime finalizer: reconcile failed preparations: %w", err)
+		}
 		candidates, err := p.queue.ListRuntimeFinalizationCandidates(ctx, runtimeFinalizeBatch)
 		if err != nil {
 			return fmt.Errorf("runtime finalizer: list queue: %w", err)
@@ -225,47 +235,47 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 	}
 	requestValue, ok := current[runtimeFinalizeRequestKey]
 	if !ok || requestValue == nil {
-		return p.fail(candidate, errors.New("durable finalize request is missing"))
+		return p.fail(ctx, candidate, errors.New("durable finalize request is missing"))
 	}
 	encoded, err := json.Marshal(requestValue)
 	if err != nil {
-		return p.fail(candidate, fmt.Errorf("encode durable finalize request: %w", err))
+		return p.fail(ctx, candidate, fmt.Errorf("encode durable finalize request: %w", err))
 	}
 	var req FinalizeJobRequest
 	if err := json.Unmarshal(encoded, &req); err != nil {
-		return p.fail(candidate, fmt.Errorf("decode durable finalize request: %w", err))
+		return p.fail(ctx, candidate, fmt.Errorf("decode durable finalize request: %w", err))
 	}
 	planJSON, _ := current[contract.PayloadKeyCompiledRenderPlanJSON].(string)
 	bindings, err := runtimeFinalizeBindings(req, current)
 	if err != nil {
-		return p.fail(candidate, fmt.Errorf("invalid runtime assets: %w", err))
+		return p.fail(ctx, candidate, fmt.Errorf("invalid runtime assets: %w", err))
 	}
 	if rawTasks, waiting := current[runtimePrepareTasksKey]; waiting {
 		patch, err := p.completeWorkerPreparations(ctx, candidate, planJSON, req, current, bindings, rawTasks)
 		if err != nil {
-			return p.fail(candidate, err)
+			return p.fail(ctx, candidate, err)
 		}
 		return p.commitFinalization(ctx, candidate, patch)
 	}
 	if planner, ok := p.assets.(RuntimeStockWindowTaskPlanner); ok && strings.TrimSpace(planJSON) != "" {
 		preparations, planErr := planner.PlanDriveStockWindowTasks(planJSON, bindings)
 		if planErr != nil {
-			return p.fail(candidate, fmt.Errorf("plan worker stock-window preparation: %w", planErr))
+			return p.fail(ctx, candidate, fmt.Errorf("plan worker stock-window preparation: %w", planErr))
 		}
 		if len(preparations) > 0 {
 			reuse, misses, reuseErr := p.reusablePreparations(ctx, preparations)
 			if reuseErr != nil {
-				return p.fail(candidate, reuseErr)
+				return p.fail(ctx, candidate, reuseErr)
 			}
 			if len(misses) == 0 {
 				patch, err := p.rewritePreparedWindowPlan(ctx, candidate, planJSON, req, current, bindings, reuse)
 				if err != nil {
-					return p.fail(candidate, err)
+					return p.fail(ctx, candidate, err)
 				}
 				return p.commitFinalization(ctx, candidate, patch)
 			}
 			if err := p.publishWorkerPreparations(ctx, candidate, bindings, misses, reuse); err != nil {
-				return p.fail(candidate, err)
+				return p.fail(ctx, candidate, err)
 			}
 			return nil
 		}
@@ -280,7 +290,7 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 	}
 	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, planJSON, req, current, p.assets, allowMasterStock)
 	if err != nil {
-		return p.fail(candidate, err)
+		return p.fail(ctx, candidate, err)
 	}
 	return p.commitFinalization(ctx, candidate, patch)
 }
@@ -303,7 +313,7 @@ func (p *RuntimeFinalizationProcessor) commitFinalization(ctx context.Context, c
 	}
 	executorID := contract.RequiredVideoAssemblyExecutor(finalPayload)
 	if executorID == "" {
-		return p.fail(candidate, errors.New("finalized render plan has no valid video assembly executor"))
+		return p.fail(ctx, candidate, errors.New("finalized render plan has no valid video assembly executor"))
 	}
 	if _, err := p.finalizer.FinalizeTaskSpec(ctx, candidate.TaskID, executorID, patch); err != nil {
 		return fmt.Errorf("runtime finalizer: commit task %s: %w", candidate.TaskID, err)
@@ -553,17 +563,30 @@ func (p *RuntimeFinalizationProcessor) rewritePreparedWindowPlan(
 	return patch, nil
 }
 
-func (p *RuntimeFinalizationProcessor) fail(candidate taskgraph.RuntimeFinalizationCandidate, err error) error {
+func (p *RuntimeFinalizationProcessor) fail(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	message := strings.TrimSpace(err.Error())
 	if len(message) > 2048 {
 		message = message[:2048]
 	}
-	if _, mergeErr := p.specs.MergeTaskSpecPayload(context.Background(), candidate.TaskID, map[string]interface{}{
-		runtimeFinalizeStatusKey: runtimeFinalizeFailed,
-		runtimeFinalizeErrorKey:  message,
-		"runtime_assets_pending": true,
-	}); mergeErr != nil {
-		return fmt.Errorf("runtime finalizer: persist failure for task %s (%v): %w", candidate.TaskID, err, mergeErr)
+	if p.failures == nil {
+		return fmt.Errorf("runtime finalizer: atomic failure writer unavailable for task %s: %w", candidate.TaskID, err)
+	}
+	var networkError net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) {
+		scheduled, retryErr := p.failures.ScheduleRuntimeFinalizationRetry(ctx, candidate.TaskID, message)
+		if retryErr != nil {
+			return fmt.Errorf("runtime finalizer: schedule retry for task %s: %w", candidate.TaskID, retryErr)
+		}
+		if scheduled {
+			log.Printf("[PIPELINE] runtime FINALIZE retry scheduled job_id=%s task_id=%s", candidate.JobID, candidate.TaskID)
+			return nil
+		}
+	}
+	if failErr := p.failures.FailRuntimeFinalization(ctx, candidate.TaskID, "RUNTIME_FINALIZE_FAILED", message); failErr != nil {
+		return fmt.Errorf("runtime finalizer: persist failure for task %s (%v): %w", candidate.TaskID, err, failErr)
 	}
 	log.Printf("[PIPELINE] runtime FINALIZE failed job_id=%s task_id=%s error=%q", candidate.JobID, candidate.TaskID, message)
 	return nil
@@ -634,7 +657,7 @@ func buildRuntimeFinalizePatch(
 	}
 	patch := make(map[string]interface{}, len(req.RuntimePayload)+8)
 	for key, value := range req.RuntimePayload {
-		if key == "runtime_assets_pending" || key == runtimeFinalizeStatusKey || key == runtimeFinalizeRequestKey || key == runtimeFinalizeErrorKey {
+		if key == "runtime_assets_pending" || key == runtimeFinalizeStatusKey || key == runtimeFinalizeRequestKey || key == runtimeFinalizeErrorKey || key == "runtime_finalize_error_code" || key == "runtime_finalize_retry_at" || key == "runtime_finalize_retry_count" {
 			continue
 		}
 		patch[key] = value
@@ -654,5 +677,8 @@ func buildRuntimeFinalizePatch(
 	patch[runtimeFinalizeStatusKey] = runtimeFinalizeSucceeded
 	patch[runtimeFinalizeRequestKey] = nil
 	patch[runtimeFinalizeErrorKey] = nil
+	patch["runtime_finalize_error_code"] = nil
+	patch["runtime_finalize_retry_at"] = nil
+	patch["runtime_finalize_retry_count"] = nil
 	return patch, nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"velox-server/internal/statemachine"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract"
 )
 
 // RetryFailedPreparedWindows requeues only failed video.prepare.window.v1
@@ -70,8 +71,7 @@ func (s *SQLiteStore) RetryFailedPreparedWindows(ctx context.Context, jobID stri
 			rows.Close()
 			return nil, wrapDBInfrastructure("prepared-window retry scan", err)
 		}
-		retryableUpload := strings.Contains(c.failure, "prepared-window registry upload") &&
-			(strings.Contains(c.failure, "HTTP 401") || strings.Contains(c.failure, "HTTP 422"))
+		retryableUpload := retryablePreparedWindowFailure(c.errorCode, c.failure)
 		retryableCertification := c.errorCode == "WINDOW_CERTIFICATION_FAILED" && c.workerID != "" && c.failedAt != "" &&
 			successfulWorkerUpdateAfterFailure(ctx, conn, c.workerID, c.failedAt)
 		if c.taskExecutor != c.specExecutor || c.pending != 0 || !(retryableUpload || retryableCertification) {
@@ -120,6 +120,18 @@ func (s *SQLiteStore) RetryFailedPreparedWindows(ctx context.Context, jobID stri
 	}
 	committed = true
 	return ids, nil
+}
+
+// These are the historical registry failures for which an explicit
+// preparation retry is already supported. Other encoder and certification
+// failures are not assumed to be transient from their message text.
+func retryablePreparedWindowUpload(message string) bool {
+	return strings.Contains(message, "prepared-window registry upload") &&
+		(strings.Contains(message, "HTTP 401") || strings.Contains(message, "HTTP 422"))
+}
+
+func retryablePreparedWindowFailure(code, message string) bool {
+	return code == contract.VideoPrepareWindowRetryableErrorCode || retryablePreparedWindowUpload(message)
 }
 
 func successfulWorkerUpdateAfterFailure(ctx context.Context, conn *sql.Conn, workerID, failedAt string) bool {

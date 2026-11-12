@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
@@ -19,7 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func classifyTaskResultOutcome(report *taskrunner.TaskExecutionReport, execErr error) (string, string, string) {
+func classifyTaskResultOutcome(executorID string, report *taskrunner.TaskExecutionReport, execErr error) (string, string, string) {
 	status := "succeeded"
 	var code, detail string
 	if report != nil && report.Status == "failed" {
@@ -35,6 +37,9 @@ func classifyTaskResultOutcome(report *taskrunner.TaskExecutionReport, execErr e
 		detail = execErr.Error()
 		if report != nil && report.ErrorCode != "" {
 			code = report.ErrorCode
+		}
+		if status == "failed" && executorID == contract.VideoPrepareWindowExecutorID && downloader.IsRetryableError(execErr) {
+			code = contract.VideoPrepareWindowRetryableErrorCode
 		}
 	}
 	return status, code, detail

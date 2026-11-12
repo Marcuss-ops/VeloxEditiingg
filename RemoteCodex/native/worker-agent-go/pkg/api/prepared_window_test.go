@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"velox-shared/contract"
+	"velox-worker-agent/internal/downloader"
 )
 
 func preparedWindowFixture(t *testing.T) (contract.VideoPrepareWindowV1, contract.VideoPrepareWindowCertificateV1, string) {
@@ -50,6 +51,18 @@ func preparedWindowFixture(t *testing.T) (contract.VideoPrepareWindowV1, contrac
 		TimelineRevision: request.TimelineRevision, TimelineSHA256: request.TimelineSHA256,
 	}
 	return request, certificate, path
+}
+
+func TestPreparedWindowServerFailureRetainsRetryClassification(t *testing.T) {
+	request, certificate, path := preparedWindowFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	_, _, err := NewClient(server.URL).PublishPreparedWindow(context.Background(), request, certificate, path)
+	if !downloader.IsRetryableError(err) {
+		t.Fatalf("want retryable server error, got %v", err)
+	}
 }
 
 func TestPublishPreparedWindowChecksMasterCacheBeforeUploading(t *testing.T) {

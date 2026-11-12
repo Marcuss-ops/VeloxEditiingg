@@ -141,6 +141,14 @@ type RuntimeFinalizationQueue interface {
 	ClaimRuntimeFinalization(ctx context.Context, taskID string) (bool, error)
 }
 
+// RuntimeFinalizationFailures atomically closes a failed finalization and its
+// job, and reconciles preparation dependencies that reached terminal failure.
+type RuntimeFinalizationFailures interface {
+	FailRuntimeFinalization(ctx context.Context, taskID, code, message string) error
+	ReconcileFailedRuntimePreparations(ctx context.Context, limit int) (int, error)
+	ScheduleRuntimeFinalizationRetry(ctx context.Context, taskID, message string) (bool, error)
+}
+
 // Writer is the canonical write-only task mutation surface.
 type Writer interface {
 	// Create inserts a new task in PENDING state. If id is empty the

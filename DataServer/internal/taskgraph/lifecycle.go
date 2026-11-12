@@ -336,6 +336,10 @@ func (l *LifecycleService) TickReadiness(ctx context.Context, limit int) (int, e
 
 	var transitioned int
 	for _, t := range tasks {
+		// A retry may remain PENDING until its durable backoff expires.
+		if t.ReadyAt != nil && t.ReadyAt.After(time.Now()) {
+			continue
+		}
 		// PR #4: verify real dependencies before transitioning.
 		// Single-task model (empty DependsOn) always passes.
 		satisfied, depErr := l.repo.AreDependenciesSatisfied(ctx, t.DependsOn)

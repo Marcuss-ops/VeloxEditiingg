@@ -147,8 +147,14 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	if err := persistRawReport(ctx, tx, cmd, now); err != nil {
 		return err
 	}
-	if err := persistDeadLetter(ctx, tx, cmd, ingestStartedAt); err != nil {
+	retrying, err := schedulePreparedWindowRetry(ctx, tx, cmd, ingestStartedAt)
+	if err != nil {
 		return err
+	}
+	if !retrying {
+		if err := persistDeadLetter(ctx, tx, cmd, ingestStartedAt); err != nil {
+			return err
+		}
 	}
 
 	// Persist result.sent and attempt.completed milestones derived from

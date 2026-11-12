@@ -2,12 +2,57 @@ package pipeline
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
 )
+
+func TestRuntimeFinalizationShutdownDoesNotFailJob(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p := &RuntimeFinalizationProcessor{}
+	if err := p.fail(ctx, taskgraph.RuntimeFinalizationCandidate{TaskID: "task-1", JobID: "job-1"}, errors.New("preparation interrupted")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown failure = %v, want context cancellation", err)
+	}
+}
+
+type runtimeFailureRecorder struct {
+	scheduled                bool
+	scheduleCalls, failCalls int
+}
+
+func (r *runtimeFailureRecorder) ScheduleRuntimeFinalizationRetry(context.Context, string, string) (bool, error) {
+	r.scheduleCalls++
+	return r.scheduled, nil
+}
+func (r *runtimeFailureRecorder) FailRuntimeFinalization(context.Context, string, string, string) error {
+	r.failCalls++
+	return nil
+}
+func (r *runtimeFailureRecorder) ReconcileFailedRuntimePreparations(context.Context, int) (int, error) {
+	return 0, nil
+}
+
+func TestRuntimeFinalizationRetriesTransientErrorsBeforeFailing(t *testing.T) {
+	for _, scheduled := range []bool{true, false} {
+		r := &runtimeFailureRecorder{scheduled: scheduled}
+		p := &RuntimeFinalizationProcessor{failures: r}
+		if err := p.fail(context.Background(), taskgraph.RuntimeFinalizationCandidate{TaskID: "task-1", JobID: "job-1"}, fmt.Errorf("fetch: %w", context.DeadlineExceeded)); err != nil {
+			t.Fatal(err)
+		}
+		wantFail := 0
+		if !scheduled {
+			wantFail = 1
+		}
+		if r.scheduleCalls != 1 || r.failCalls != wantFail {
+			t.Fatalf("scheduled=%v schedule calls=%d failure calls=%d", scheduled, r.scheduleCalls, r.failCalls)
+		}
+	}
+}
 
 type runtimeFinalizeTestSpecStore struct {
 	payload    map[string]interface{}
