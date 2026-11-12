@@ -41,6 +41,9 @@ type CauseCode string
 
 const (
 	CausePreparationGatePending        CauseCode = "PREPARATION_GATE_PENDING"
+	CausePreparationTaskFailed         CauseCode = "PREPARATION_TASK_FAILED"
+	CauseRuntimeFinalizeFailed         CauseCode = "RUNTIME_FINALIZE_FAILED"
+	CauseTaskFailed                    CauseCode = "TASK_FAILED"
 	CauseRuntimeAssetsPending          CauseCode = "RUNTIME_ASSETS_PENDING"
 	CauseReservationExpired            CauseCode = "RESERVATION_EXPIRED"
 	CauseWorkerNotReady                CauseCode = "WORKER_NOT_READY"
@@ -93,26 +96,43 @@ type Diagnosis struct {
 	Cause       CauseCode `json:"cause,omitempty"`
 	CauseDetail string    `json:"cause_detail,omitempty"`
 
-	Evidence []Evidence `json:"evidence,omitempty"`
-	Warnings []string   `json:"warnings,omitempty"`
+	Evidence    []Evidence   `json:"evidence,omitempty"`
+	FailedTasks []FailedTask `json:"failed_tasks,omitempty"`
+	Warnings    []string     `json:"warnings,omitempty"`
 
 	InsufficientEvidence bool `json:"insufficient_evidence,omitempty"`
+}
+
+// FailedTask identifies the executor attempt that prevents a DAG from
+// completing. Error text is included so operators can distinguish a worker
+// failure from a dependency or runtime asset gate.
+type FailedTask struct {
+	TaskID       string `json:"task_id"`
+	ExecutorID   string `json:"executor_id"`
+	WorkerID     string `json:"worker_id,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 type taskSpecInfo struct {
 	RuntimeAssetsPending bool
 	FinalizeStatus       string
+	FinalizeErrorCode    string
+	FinalizeError        string
+	FinalizeRetryAt      string
 	PrepareTaskIDs       int
 	RuntimeAssets        int
 	PrepareWindow        bool
 }
 
 type attemptInfo struct {
-	AttemptID string
-	Status    string
-	WorkerID  string
-	LeaseID   string
-	UpdatedAt string
+	AttemptID    string
+	Status       string
+	WorkerID     string
+	LeaseID      string
+	UpdatedAt    string
+	ErrorCode    string
+	ErrorMessage string
 }
 
 type reservationInfo struct {
@@ -164,9 +184,11 @@ func Diagnose(ctx context.Context, db *sql.DB, jobID string, now time.Time, thre
 	}
 
 	var jobStatus, lastError string
-	if err := db.QueryRowContext(ctx,
-		`SELECT COALESCE(status,''), COALESCE(last_error,'') FROM jobs WHERE job_id=?`, jobID,
-	).Scan(&jobStatus, &lastError); err != nil {
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(status,''), COALESCE(NULLIF(error_message,''),last_error,'') FROM jobs WHERE job_id=?`, jobID).Scan(&jobStatus, &lastError)
+	if err != nil && strings.Contains(err.Error(), "no such column: error_message") {
+		err = db.QueryRowContext(ctx, `SELECT COALESCE(status,''), COALESCE(last_error,'') FROM jobs WHERE job_id=?`, jobID).Scan(&jobStatus, &lastError)
+	}
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Diagnosis{}, ErrJobNotFound
 		}
@@ -209,6 +231,8 @@ func Diagnose(ctx context.Context, db *sql.DB, jobID string, now time.Time, thre
 	if runtimeProgress := loadRuntimeProgress(ctx, db, jobID, &warnings); runtimeProgress.After(latestProgress) {
 		latestProgress = runtimeProgress
 	}
+	diagnosis.FailedTasks = collectFailedTasks(ordered)
+	finalizeFailure := findFinalizationFailure(ordered)
 
 	if !latestProgress.IsZero() {
 		diagnosis.LastProgressAt = latestProgress.UTC().Format(time.RFC3339Nano)
@@ -233,6 +257,12 @@ func Diagnose(ctx context.Context, db *sql.DB, jobID string, now time.Time, thre
 		if strings.TrimSpace(lastError) != "" {
 			diagnosis.CauseDetail += ": " + strings.TrimSpace(lastError)
 		}
+		if strings.EqualFold(jobStatus, "FAILED") && finalizeFailure != nil {
+			diagnosis.Cause = CauseRuntimeFinalizeFailed
+			diagnosis.CauseDetail = finalizeFailure.detail()
+			addEvidence(&diagnosis, "task_specs", diagnosis.CauseDetail)
+		}
+		addFailedTaskEvidence(&diagnosis)
 		diagnosis.Summary = fmt.Sprintf("job %s is %s", jobID, jobStatus)
 		addEvidence(&diagnosis, "jobs", diagnosis.CauseDetail)
 		diagnosis.Warnings = sortedStrings(warnings)
@@ -279,8 +309,28 @@ func Diagnose(ctx context.Context, db *sql.DB, jobID string, now time.Time, thre
 			commitPending = append(commitPending, task.TaskID)
 		}
 	}
-
 	switch {
+	case finalizeFailure != nil:
+		diagnosis.Verdict = VerdictStalled
+		diagnosis.Cause = CauseRuntimeFinalizeFailed
+		diagnosis.CauseDetail = finalizeFailure.detail()
+		addEvidence(&diagnosis, "task_specs", diagnosis.CauseDetail)
+		addFailedTaskEvidence(&diagnosis)
+	case len(diagnosis.FailedTasks) > 0:
+		diagnosis.Verdict = VerdictStalled
+		diagnosis.Cause = CauseTaskFailed
+		for _, failure := range diagnosis.FailedTasks {
+			if failure.ExecutorID == "video.prepare.window.v1" {
+				diagnosis.Cause = CausePreparationTaskFailed
+				break
+			}
+		}
+		diagnosis.CauseDetail = fmt.Sprintf("%d task(s) failed and block downstream work", len(diagnosis.FailedTasks))
+		addFailedTaskEvidence(&diagnosis)
+	case hasScheduledFinalizationRetry(ordered, now):
+		diagnosis.Verdict = VerdictAdvancing
+		diagnosis.CauseDetail = "runtime finalization retry is scheduled"
+		addEvidence(&diagnosis, "task_specs", diagnosis.CauseDetail)
 	case len(fenceConflicts) > 0:
 		diagnosis.Verdict = VerdictStalled
 		diagnosis.Cause = CauseFenceConflict
@@ -431,6 +481,9 @@ func loadTaskSpecs(ctx context.Context, db *sql.DB, jobID string, tasks map[stri
 		info := &taskSpecInfo{}
 		info.RuntimeAssetsPending = boolValue(payload["runtime_assets_pending"])
 		info.FinalizeStatus, _ = payload["runtime_finalize_status"].(string)
+		info.FinalizeErrorCode, _ = payload["runtime_finalize_error_code"].(string)
+		info.FinalizeError, _ = payload["runtime_finalize_error"].(string)
+		info.FinalizeRetryAt, _ = payload["runtime_finalize_retry_at"].(string)
 		info.PrepareTaskIDs = len(interfaceSlice(payload["runtime_prepare_task_ids"]))
 		info.RuntimeAssets = len(interfaceSlice(payload["runtime_assets"]))
 		_, info.PrepareWindow = payload["video_prepare_window"]
@@ -448,7 +501,8 @@ func loadAttempts(ctx context.Context, db *sql.DB, jobID string, tasks map[strin
 	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT a.task_id, COALESCE(a.id,''), COALESCE(a.status,''),
-		       COALESCE(a.worker_id,''), COALESCE(a.lease_id,''), COALESCE(a.updated_at,'')
+		       COALESCE(a.worker_id,''), COALESCE(a.lease_id,''), COALESCE(a.updated_at,''),
+	       COALESCE(a.error_code,''), COALESCE(a.error_message,'')
 		FROM task_attempts a JOIN tasks t ON t.task_id=a.task_id
 		WHERE t.job_id=? ORDER BY a.task_id, a.attempt_number`, jobID)
 	if err != nil {
@@ -459,7 +513,7 @@ func loadAttempts(ctx context.Context, db *sql.DB, jobID string, tasks map[strin
 	for rows.Next() {
 		var taskID string
 		var attempt attemptInfo
-		if err := rows.Scan(&taskID, &attempt.AttemptID, &attempt.Status, &attempt.WorkerID, &attempt.LeaseID, &attempt.UpdatedAt); err != nil {
+		if err := rows.Scan(&taskID, &attempt.AttemptID, &attempt.Status, &attempt.WorkerID, &attempt.LeaseID, &attempt.UpdatedAt, &attempt.ErrorCode, &attempt.ErrorMessage); err != nil {
 			*warnings = append(*warnings, "task_attempts scan failed: "+err.Error())
 			return
 		}
@@ -680,7 +734,7 @@ func hasActiveAttempt(task *taskInfo) bool {
 
 func isPreparationFinalizeStatus(status string) bool {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case "QUEUED", "RUNNING", "WAITING_PREPARATION":
+	case "QUEUED", "RUNNING", "WAITING_PREPARATION", "RETRY_WAIT":
 		return true
 	default:
 		return false
