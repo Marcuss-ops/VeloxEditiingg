@@ -53,7 +53,7 @@ exclusions=(
 # NoopOperationExecutor is test-only (NewTestExecutorRegistry / _test.go).
 # A production registry must start empty; a missing executor yields
 # EXECUTOR_NOT_CONFIGURED, never a noop success.
-hits="$(git grep -nE 'NoopOperationExecutor' -- "${exclusions[@]}" || true)"
+hits="$(git grep -nE 'NoopOperationExecutor' -- ':(glob)**/*.go' "${exclusions[@]}" || true)"
 if [[ -n "$hits" ]]; then
   printf 'NoopOperationExecutor must not appear in production code (test-only double):\n%s\n\n' "$hits" >&2
   violations=$((violations + 1))
@@ -64,6 +64,7 @@ fi
 # (MisconfiguredSmokeCapability) and the VELOX_SMOKE_MODE=development
 # wiring — every other production mention is a hidden-stub regression.
 stub_hits="$(git grep -nE 'NewStubAssetResolver' -- \
+  ':(glob)**/*.go' \
   "${exclusions[@]}" \
   ':!DataServer/internal/fleet/level_d_smoke_deps.go' \
   ':!DataServer/internal/fleet/level_d_smoke_bootstrap.go' \
@@ -78,7 +79,7 @@ fi
 # silently-degraded (MISCONFIGURED) capability instead of a boot error.
 # The qualifier is intentionally wildcarded (opsalerts.NewEngine or an
 # import alias) so an aliased call cannot slip past the gate.
-nil_hits="$(git grep -nE '[.]NewEngine[(][^)]*nil' -- "${exclusions[@]}" || true)"
+nil_hits="$(git grep -nE '[.]NewEngine[(][^)]*nil' -- ':(glob)**/*.go' "${exclusions[@]}" || true)"
 if [[ -n "$nil_hits" ]]; then
   printf 'opsalerts.NewEngine must not receive a nil dependency in production code:\n%s\n\n' "$nil_hits" >&2
   violations=$((violations + 1))

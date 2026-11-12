@@ -263,3 +263,6 @@ tests/smoke/full_payload/multi_scene_concat/evidence/*
 /.finalize-requested-split-trigger
 /dist/
 DataServer/fleetctl
+
+# Local agent transcripts may contain operational data and are not source code.
+/codex-session-*.md

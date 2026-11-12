@@ -282,7 +282,7 @@ scan_dir shell "$THRESH_SH" \
 
 scan_dir docs "$THRESH_MD" \
   "${BUILD_NOISE_EXCLUDES[@]}" \
-  -type f -name '*.md'
+  -type f -name '*.md' -not -path './codex-session-*.md'
 
 scan_dir yaml "$THRESH_YML" \
   "${BUILD_NOISE_EXCLUDES[@]}" \
