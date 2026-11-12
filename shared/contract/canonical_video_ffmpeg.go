@@ -147,10 +147,10 @@ func CanonicalVideoWindowArgs(
 }
 
 // CanonicalVideoWindowTimestampArgs prepares a source-time interval when the
-// producer does not claim a CFR frame index for the original media. Input
-// seeking stays before -i so FFmpeg seeks to a preceding keyframe and decodes
-// forward accurately; output is still normalized to an exact canonical frame
-// count and the same H.264 bitstream profile as frame-indexed preparation.
+// producer does not claim a CFR frame index for the original media. Accurate
+// seeking stays after -i: fast input seeking can drop the final frame of a
+// short window near EOF. Output is still normalized to an exact canonical
+// frame count and the same H.264 bitstream profile as frame-indexed preparation.
 func CanonicalVideoWindowTimestampArgs(
 	profile CanonicalVideoProfileV1,
 	quality PreparationQualityPolicy,
@@ -167,8 +167,8 @@ func CanonicalVideoWindowTimestampArgs(
 	durationSeconds := strconv.FormatFloat(decodeDurationSeconds, 'f', 6, 64)
 	filter := fmt.Sprintf("setpts=PTS-STARTPTS,fps=%d/%d,tpad=stop_mode=clone:stop=1,%s", profile.FPSNum, profile.FPSDen, CanonicalVideoScaleGeometryFilter(profile))
 	args := []string{
-		"-hide_banner", "-loglevel", "error", "-y", "-ss", startSeconds,
-		"-i", inputPath, "-t", durationSeconds, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
+		"-hide_banner", "-loglevel", "error", "-y", "-i", inputPath,
+		"-ss", startSeconds, "-t", durationSeconds, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
 	}
 	args = append(args, CanonicalVideoEncodeArgs(profile, quality)...)
 	args = append(args,
