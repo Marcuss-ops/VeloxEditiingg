@@ -249,6 +249,40 @@ func TestSubmitJobE2E_M2MAuthEnvelopes(t *testing.T) {
 	})
 }
 
+func TestM2MAuthReturnsRetryableStatusWhenKeyStoreIsUnavailable(t *testing.T) {
+	bundle := newM2MBundle(t, m2mBundleOpts{
+		clientID: "unavailable-m2m-client",
+		rps:      5, burst: 10,
+	})
+	if err := bundle.db.Close(); err != nil {
+		t.Fatalf("close key store: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/jobs", NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, newM2MRateLimiter()), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", nil)
+	req.Header.Set("Authorization", "Bearer "+bundle.plaintext)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want %d: %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+	if got := w.Header().Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After=%q, want 2", got)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["error"] != "m2m_auth_unavailable" {
+		t.Fatalf("error=%v, want m2m_auth_unavailable", response["error"])
+	}
+}
+
 // ── Scenario 12 — M2M rate limit + per-request quota (NEW) ───────
 
 // TestSubmitJobE2E_M2MRateLimitAndQuota exercises the per-client

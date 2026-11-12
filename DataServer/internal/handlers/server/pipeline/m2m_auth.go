@@ -210,10 +210,15 @@ func NewM2MJwAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *
 		if err != nil {
 			log.Printf("[M2M_AUTH] active key lookup failed: %v", err)
 			auditM2MReject(c, st, "", "db_error")
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			// The credential itself was not rejected: the authoritative lookup
+			// could not complete (typically transient SQLite contention). Tell
+			// M2M clients to retry instead of turning infrastructure pressure
+			// into a permanent authentication failure.
+			c.Header("Retry-After", "2")
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
 				"ok":      false,
-				"error":   "m2m_auth_failure",
-				"message": "M2M key lookup failed",
+				"error":   "m2m_auth_unavailable",
+				"message": "M2M key lookup temporarily unavailable; retry the request",
 			})
 			return
 		}
