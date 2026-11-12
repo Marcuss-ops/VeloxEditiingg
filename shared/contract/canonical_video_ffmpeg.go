@@ -82,6 +82,16 @@ func CanonicalVideoEncoderArgsDigest(profile CanonicalVideoProfileV1, quality Pr
 // CanonicalVideoScaleGeometryFilter returns the canonical letterbox/pad
 // geometry. Keeping this in the shared contract prevents the Master and
 // workers from preparing visually or bitstream-incompatible fragments.
+//
+// `setsar=1` is part of the identity, not cosmetics: scale/pad preserves a
+// non-square source SAR and libx264 writes it into the SPS VUI, so an
+// anamorphic source (PAL 64:45, DV 4:3, …) emits an avcC that differs from the
+// canonical one even though codec, profile, level, geometry and fps all agree.
+// The one-frame reference is encoded from a square-pixel synthetic source, so
+// without this normalization the worker rejects its own valid output with
+// WINDOW_EXTRADATA_IDENTITY_MISMATCH. The Rust cut lane already pins
+// `setsar=1` for the same reason; this keeps every producer and every window
+// on the same square-pixel identity.
 func CanonicalVideoScaleGeometryFilter(profile CanonicalVideoProfileV1) string {
 	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1",
 		profile.Width, profile.Height, profile.Width, profile.Height)
