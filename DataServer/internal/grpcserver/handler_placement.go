@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"velox-server/internal/logging"
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -112,6 +113,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		sess.pendingTaskOfferAt = time.Time{}
 	}
 
+	offerStartedAt := time.Now()
 	snapshot := h.placementSnapshot(ctx, workerID, sess)
 	if h.dbStore == nil {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] authoritative lease store unavailable worker=%s", workerID)
@@ -272,17 +274,19 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		return
 	}
 
-	// Queue the offer before refreshing the next worker-scoped hard reservation
-	// window. The planner is best-effort, and a slow control-plane refresh must
-	// not hold up a task that has already been claimed and is ready to run.
-	offerStarted := time.Now()
+	h.deliverClaimedTask(ctx, workerID, sess, tws, attempt, leaseID, offerStartedAt)
+}
+
+// deliverClaimedTask queues the TaskOffer before refreshing the worker-scoped
+// prefetch window. The refresh is best-effort and must never delay delivery of
+// an already-claimed task; a slow planner must not turn into FINALIZE→TaskOffer
+// latency.
+func (h *Handler) deliverClaimedTask(ctx context.Context, workerID string, sess *workerSession, tws *taskgraph.TaskWithSpec, attempt *taskattempts.TaskAttempt, leaseID string, startedAt time.Time) {
 	h.sendClaimedTaskOffer(ctx, sess, tws, attempt, leaseID)
-	offerQueued := time.Now()
+	if sink, ok := h.prefetchTelemetry.(velmetrics.TaskOfferDispatchSink); ok && sink != nil {
+		sink.RecordTaskOfferDispatch(workerID, time.Since(startedAt))
+	}
 	h.refreshFutureAssetPlan(ctx, workerID, tws.JobID)
-	refreshFinished := time.Now()
-	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacement,
-		"[PLACEMENT_TIMING] worker=%s job_id=%s task_id=%s offer_prepare_and_queue_ms=%d post_offer_prefetch_refresh_ms=%d",
-		workerID, tws.JobID, tws.ID, offerQueued.Sub(offerStarted).Milliseconds(), refreshFinished.Sub(offerQueued).Milliseconds())
 }
 
 func withoutTaskCandidate(candidates []placement.TaskCandidate, taskID string) []placement.TaskCandidate {

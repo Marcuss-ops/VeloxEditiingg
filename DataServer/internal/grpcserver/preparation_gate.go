@@ -456,6 +456,16 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 			return PreparationWaiting, nil
 		}
 	}
+	// A placement pass may have snapshotted the reservation before FINALIZE
+	// committed runtime_assets_pending=false. Re-read the task spec once so a
+	// stale pass cannot pin an already-prepared task behind the gate until the
+	// next tick/reservation invalidation.
+	if fresh, payloadErr := pg.store.FutureTaskPayload(ctx, candidate.TaskID); payloadErr != nil {
+		return PreparationWaiting, fmt.Errorf("preparation gate: refresh task payload: %w", payloadErr)
+	} else if len(fresh) > 0 {
+		reservation.Payload = fresh
+	}
+
 	// PREPARE intentionally reserves and downloads the initial stock/clip
 	// assets, but must not render until FINALIZE clears this marker on the
 	// same TaskSpec. Keeping the decision here preserves the existing strict

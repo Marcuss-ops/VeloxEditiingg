@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
@@ -83,16 +84,40 @@ func (s *runtimeFinalizeTestSpecStore) MergeTaskSpecPayload(_ context.Context, _
 	return s.payload, nil
 }
 
-type runtimeFinalizeTestQueue struct{}
+type runtimeFinalizeTerminalCall struct {
+	code    string
+	message string
+}
 
-func (runtimeFinalizeTestQueue) RecoverInterruptedRuntimeFinalizations(context.Context) error {
+type runtimeFinalizeRetryCall struct {
+	code       string
+	message    string
+	next       time.Time
+	maxRetries int
+}
+
+type runtimeFinalizeTestQueue struct {
+	terminal []runtimeFinalizeTerminalCall
+	retries  []runtimeFinalizeRetryCall
+	applied  bool
+}
+
+func (q *runtimeFinalizeTestQueue) RecoverInterruptedRuntimeFinalizations(context.Context) error {
 	return nil
 }
-func (runtimeFinalizeTestQueue) ListRuntimeFinalizationCandidates(context.Context, int) ([]taskgraph.RuntimeFinalizationCandidate, error) {
+func (q *runtimeFinalizeTestQueue) ListRuntimeFinalizationCandidates(context.Context, int) ([]taskgraph.RuntimeFinalizationCandidate, error) {
 	return nil, nil
 }
-func (runtimeFinalizeTestQueue) ClaimRuntimeFinalization(context.Context, string) (bool, error) {
+func (q *runtimeFinalizeTestQueue) ClaimRuntimeFinalization(context.Context, string) (bool, error) {
 	return true, nil
+}
+func (q *runtimeFinalizeTestQueue) FailRuntimeFinalization(_ context.Context, _ string, code, message string) (bool, error) {
+	q.terminal = append(q.terminal, runtimeFinalizeTerminalCall{code: code, message: message})
+	return q.applied, nil
+}
+func (q *runtimeFinalizeTestQueue) ScheduleRuntimeFinalizationRetry(_ context.Context, _ string, code, message string, next time.Time, maxRetries int) (bool, error) {
+	q.retries = append(q.retries, runtimeFinalizeRetryCall{code: code, message: message, next: next, maxRetries: maxRetries})
+	return q.applied, nil
 }
 
 type runtimeFinalizeTestPreparer struct{}
@@ -159,7 +184,7 @@ func TestRuntimeFinalizationProcessorCommitsBeforeNotifying(t *testing.T) {
 	}}
 	notifier := &runtimeFinalizeTestNotifier{}
 	processor := &RuntimeFinalizationProcessor{
-		queue:     runtimeFinalizeTestQueue{},
+		queue:     &runtimeFinalizeTestQueue{},
 		specs:     store,
 		finalizer: store,
 		assets:    runtimeFinalizeTestPreparer{},

@@ -20,7 +20,7 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		}
 	}
 	if err := contract.ValidateCompiledRenderPlanV2Payload(renderSpec); err != nil {
-		return nil, fmt.Errorf("%w: render_spec compiled_render_plan_v2: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: render_spec compiled_render_plan_v2: %w", ErrInvalidPayload, err)
 	}
 
 	destinations := cmd.Destinations

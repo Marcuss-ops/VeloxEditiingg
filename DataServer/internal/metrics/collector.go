@@ -92,11 +92,12 @@ type Collector struct {
 	cacheCorruptions   *Family // velox_cache_corruption_total
 
 	// Prefetch lifecycle telemetry emitted by worker lifecycle events.
-	prefetchJobs     *Family // velox_prefetch_jobs_total
-	prefetchBytes    *Family // velox_prefetch_bytes_total
-	prefetchFailures *Family // velox_prefetch_failures_total
-	prefetchDuration *Family // velox_prefetch_duration_seconds
-	prefetchCache    *Family // velox_prefetch_cache_events_total
+	prefetchJobs      *Family // velox_prefetch_jobs_total
+	prefetchBytes     *Family // velox_prefetch_bytes_total
+	prefetchFailures  *Family // velox_prefetch_failures_total
+	prefetchDuration  *Family // velox_prefetch_duration_seconds
+	prefetchCache     *Family // velox_prefetch_cache_events_total
+	taskOfferDispatch *Family // velox_task_offer_dispatch_seconds
 
 	// Worker resource counters (from heartbeat.resources).
 	workerCPUUtil         *Family // velox_worker_cpu_utilization_ratio

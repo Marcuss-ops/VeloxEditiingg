@@ -56,7 +56,7 @@ func validateCreateJobCommand(cmd CreateJobCmd) (map[string]any, error) {
 		}
 	}
 	if err := contract.ValidateCompiledRenderPlanV2Payload(renderSpec); err != nil {
-		return nil, fmt.Errorf("%w: render_spec compiled_render_plan_v2: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: render_spec compiled_render_plan_v2: %w", ErrInvalidPayload, err)
 	}
 	return renderSpec, nil
 }

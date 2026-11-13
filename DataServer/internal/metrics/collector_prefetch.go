@@ -14,6 +14,14 @@ type PrefetchTelemetrySink interface {
 
 var _ PrefetchTelemetrySink = (*Collector)(nil)
 
+// TaskOfferDispatchSink is the optional placement-latency surface. Handlers
+// type-assert it so test/lite deployments without a Collector stay log-only.
+type TaskOfferDispatchSink interface {
+	RecordTaskOfferDispatch(workerID string, duration time.Duration)
+}
+
+var _ TaskOfferDispatchSink = (*Collector)(nil)
+
 func (c *Collector) initPrefetchFamilies() {
 	c.prefetchJobs = NewCounterFamily(
 		"velox_prefetch_jobs_total",
@@ -41,10 +49,16 @@ func (c *Collector) initPrefetchFamilies() {
 		"Prefetch asset outcomes by worker, origin and result (hit or miss)",
 		[]string{"worker_id", "origin", "result"},
 	)
+	c.taskOfferDispatch = NewHistogramFamily(
+		"velox_task_offer_dispatch_seconds",
+		"Time from placement wake-up to TaskOffer queued",
+		[]string{"worker_id"},
+		[]float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
+	)
 }
 
 func (c *Collector) prefetchFamilies() []*Family {
-	return []*Family{c.prefetchJobs, c.prefetchBytes, c.prefetchFailures, c.prefetchDuration, c.prefetchCache}
+	return []*Family{c.prefetchJobs, c.prefetchBytes, c.prefetchFailures, c.prefetchDuration, c.prefetchCache, c.taskOfferDispatch}
 }
 
 func (c *Collector) RecordPrefetchJob(workerID, outcome string) {
@@ -85,6 +99,14 @@ func (c *Collector) RecordPrefetchDuration(workerID string, duration time.Durati
 		return
 	}
 	c.prefetchDuration.Observe([]string{workerID}, duration.Seconds())
+}
+
+func (c *Collector) RecordTaskOfferDispatch(workerID string, duration time.Duration) {
+	workerID = boundedWorkerID(workerID)
+	if workerID == "" || duration <= 0 {
+		return
+	}
+	c.taskOfferDispatch.Observe([]string{workerID}, duration.Seconds())
 }
 
 func boundedWorkerID(value string) string {
