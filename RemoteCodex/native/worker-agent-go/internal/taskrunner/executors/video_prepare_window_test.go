@@ -216,7 +216,7 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 		t.Fatalf("timestamp-window execute: status=%s err=%v detail=%s", result.Status, err, result.ErrorDetail)
 	}
 	joined := strings.Join(runner.args, " ")
-	if !strings.Contains(joined, "-ss 1.250000 -i") || !strings.Contains(joined, "-t 2.541667") || !strings.Contains(joined, "tpad=stop_mode=clone:stop=1") || !strings.Contains(joined, "-fps_mode cfr") {
+	if !strings.Contains(joined, "-i "+path+" -ss 1.250000 -t 2.541667") || !strings.Contains(joined, "tpad=stop_mode=clone:stop=1") || !strings.Contains(joined, "-fps_mode cfr") {
 		t.Fatalf("timestamp seek was not emitted as accurate normalized FFmpeg input: %v", runner.args)
 	}
 	var cert windowPreparationCertificate
