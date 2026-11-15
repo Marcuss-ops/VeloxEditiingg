@@ -23,9 +23,14 @@ func TestCanonicalVideoGeometrySetsSquarePixelAspectRatio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantRevision = "video-window-preparer.v1:3eeb93e952e54a8e525603b20804dae86dca0977619af1a3c3f2b2ef1b44d672"
+	// Chroma-location pinning intentionally changed the encoder args digest,
+	// so the prepared-window revision moved with it. Keep this golden in sync
+	// whenever the canonical bitstream identity changes on purpose: a stale
+	// value would let previously cached fragments survive a stream-identity
+	// change.
+	const wantRevision = "video-window-preparer.v1:de7a067602786d3733b7241465c095a0cc14d6066c743dd9b7d0643b76be0bd7"
 	if revision != wantRevision {
-		t.Fatalf("SAR-only filter change must preserve prepared-window revision: got %q want %q", revision, wantRevision)
+		t.Fatalf("prepared-window revision does not match the canonical encoder identity: got %q want %q", revision, wantRevision)
 	}
 	if !strings.Contains(strings.Join(CanonicalVideoEncodeArgs(profile, CanonicalPreparationQualityPolicyDefault), " "), "-c:v libx264") {
 		t.Fatal("canonical encoder argument projection unexpectedly changed")

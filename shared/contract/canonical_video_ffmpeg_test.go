@@ -21,6 +21,7 @@ func TestCanonicalVideoEncoderContractPinsAVCC(t *testing.T) {
 		"-color_primaries bt709",
 		"-color_trc bt709",
 		"-color_range tv",
+		"-chroma_sample_location unspecified",
 		"-profile:v high",
 		"-level:v 4.0",
 		"-g 48",

@@ -17,18 +17,32 @@ import (
 // BT.709 so a source carrying different VUI metadata cannot silently produce
 // a different SPS.
 const (
-	CanonicalVideoEncoderPreset      = "veryfast"
-	CanonicalVideoEncoderRefFrames   = "1"
-	CanonicalVideoColorPrimaries     = "bt709"
-	CanonicalVideoColorTransfer      = "bt709"
-	CanonicalVideoColorspace         = "bt709"
-	CanonicalVideoColorRange         = "tv"
-	CanonicalVideoEncoderContractRev = "video-encoder-args.v1"
+	CanonicalVideoEncoderPreset    = "veryfast"
+	CanonicalVideoEncoderRefFrames = "1"
+	CanonicalVideoColorPrimaries   = "bt709"
+	CanonicalVideoColorTransfer    = "bt709"
+	CanonicalVideoColorspace       = "bt709"
+	CanonicalVideoColorRange       = "tv"
+	// CanonicalVideoChromaSampleLocation pins the SPS VUI chroma location.
+	// libx264 inherits the input frame's chroma location and writes it into
+	// the SPS VUI, so a center-located source (e.g. a Remotion yuvj420p plate)
+	// produces a different avcC than the canonical 4:2:0 stream even when SAR,
+	// colour metadata, codec, profile, level, geometry and fps all agree.
+	// This was the actual cause of the r5
+	// WINDOW_EXTRADATA_IDENTITY_MISMATCH: the fragment carried
+	// chroma_loc_info_present_flag=1 / chroma_sample_loc_type=1 (center) and
+	// hashed 8d11e80f… instead of the canonical 7201ce80…. "unspecified" is
+	// H.264's default chroma location and matches the canonical reference.
+	CanonicalVideoChromaSampleLocation = "unspecified"
+	CanonicalVideoEncoderContractRev   = "video-encoder-args.v1"
 )
 
 // CanonicalVideoEncodeArgs is the single FFmpeg argument projection for the
 // canonical H.264 stream identity. Callers append container-specific options
-// and the output path after these video-only codec settings.
+// and the output path after these video-only codec settings. Chroma sample
+// location is pinned here (not in the filter chain): it is an encoder context
+// property that libx264 copies into the SPS VUI, and it is inherited from the
+// input frame unless overridden.
 func CanonicalVideoEncodeArgs(profile CanonicalVideoProfileV1, quality PreparationQualityPolicy) []string {
 	openGOP := 0
 	if !profile.ClosedGOP {
@@ -48,6 +62,7 @@ func CanonicalVideoEncodeArgs(profile CanonicalVideoProfileV1, quality Preparati
 		"-color_primaries", CanonicalVideoColorPrimaries,
 		"-color_trc", CanonicalVideoColorTransfer,
 		"-color_range", CanonicalVideoColorRange,
+		"-chroma_sample_location", CanonicalVideoChromaSampleLocation,
 		"-g", strconv.Itoa(profile.GOPSize),
 		"-bf", strconv.Itoa(profile.BFrames),
 		"-sc_threshold", "0",
