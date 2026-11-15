@@ -89,12 +89,26 @@ func (r *SQLiteUploadRepository) FindStuckStaging(ctx context.Context, olderThan
 		return nil, fmt.Errorf("artifactsstore: FindStuckStaging: %w", err)
 	}
 	defer rows.Close()
-	var sessions []UploadSession
+	ids := make([]string, 0)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, fmt.Errorf("artifactsstore: FindStuckStaging scan: %w", err)
 		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("artifactsstore: FindStuckStaging rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("artifactsstore: FindStuckStaging close: %w", err)
+	}
+
+	// Close the cursor before making nested queries. Production SQLite uses a
+	// single pooled connection; calling GetUploadSession while rows is open
+	// deadlocks waiting for the connection held by this cursor.
+	sessions := make([]UploadSession, 0, len(ids))
+	for _, id := range ids {
 		session, err := r.GetUploadSession(ctx, id)
 		if err != nil {
 			return nil, err
@@ -102,9 +116,6 @@ func (r *SQLiteUploadRepository) FindStuckStaging(ctx context.Context, olderThan
 		if session != nil {
 			sessions = append(sessions, *session)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("artifactsstore: FindStuckStaging rows: %w", err)
 	}
 	return sessions, nil
 }
