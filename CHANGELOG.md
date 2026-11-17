@@ -1,5 +1,15 @@
 ## [Unreleased] - 2026-11-08
 
+### Fixed — remove redundant prefetch wait from packet-copy assembly
+
+- `video.assemble.copy.v1` now relies on the worker's content-addressed
+  on-demand fetch instead of waiting for every assembly asset to be prefetched.
+- The Master still blocks the claim while `runtime_assets_pending` is true, so
+  PREPARE/FINALIZE ordering and the protection against `job_already_leased`
+  remain intact. Slice assembly and unknown executors retain strict prefetch.
+- Unlike the global `VELOX_PREFETCH_STRICT_CLAIM=false` workaround, this is
+  scoped to the executor proven to support on-demand fetch.
+
 ### Changed — lower video preparation and assembly wait time
 
 - Packet-copy fallback decisions now include structured eligibility and

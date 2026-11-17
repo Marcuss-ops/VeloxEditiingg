@@ -126,11 +126,13 @@ func TestAssemblyDeclaresPlanAndRuntimeInputs(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("asset keys = %v, want %v", got, want)
 	}
-	if !Default().RequiresPrefetch(spec) {
-		t.Fatal("assembly must keep the strict prefetch gate")
+	if Default().RequiresPrefetch(spec) {
+		t.Fatal("packet-copy assembly fetches content-addressed inputs on demand")
 	}
-	if got := Default().RequiresPrefetch(spec); !got {
-		t.Fatal("unexpected")
+	sliceSpec := spec
+	sliceSpec.ExecutorID = contract.VideoAssemblySliceExecutorID
+	if !Default().RequiresPrefetch(sliceSpec) {
+		t.Fatal("slice assembly must keep the strict prefetch gate")
 	}
 }
 

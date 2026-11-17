@@ -412,6 +412,13 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 			if err := taskContract.Validate(spec); err != nil {
 				return PreparationWaiting, fmt.Errorf("preparation gate: task contract rejected: %w", err)
 			}
+			// Bypassing asset prefetch must never bypass the PREPARE/FINALIZE
+			// lifecycle fence. FINALIZE clears this durable bit only after its
+			// runtime bindings are committed; claiming earlier makes FINALIZE
+			// fail with job_already_leased.
+			if runtimeAssetsPending(payload) {
+				return PreparationWaiting, nil
+			}
 			return PreparationNotRequired, nil
 		}
 	}

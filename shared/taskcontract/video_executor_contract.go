@@ -64,9 +64,10 @@ func (videoPrepareWindowContract) CompletionKind() CompletionKind {
 	return CompletionPreparedSegment
 }
 
-// videoAssemblyContract declares the final assembly inputs and requires the
-// strict preparation gate. Assembly consumes only the compiled plan and its
-// runtime bindings; raw producer scenes are not its input.
+// videoAssemblyContract declares the final assembly inputs. Packet-copy
+// assembly can fetch its content-addressed inputs on demand; slice assembly
+// still requires the strict prefetch gate. Both remain fenced by FINALIZE via
+// runtime_assets_pending in the Master preparation gate.
 type videoAssemblyContract struct {
 	executorID string
 }
@@ -130,7 +131,9 @@ func (c videoAssemblyContract) RequiredAssets(spec TaskInput) ([]RequiredAsset, 
 	return canonicalRequiredAssets(assets), nil
 }
 
-func (videoAssemblyContract) RequiresPrefetch(TaskInput) bool { return true }
+func (c videoAssemblyContract) RequiresPrefetch(TaskInput) bool {
+	return c.executorID != VideoAssemblyCopyExecutorID
+}
 
 func (videoAssemblyContract) CompletionKind() CompletionKind {
 	return CompletionArtifactCommit

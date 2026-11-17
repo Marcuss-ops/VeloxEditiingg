@@ -86,17 +86,20 @@ benchmark evidence and digest promotion — remain open below.
   persisted `TaskSpec`/spec-hash contract is unchanged. The declaration point
   covers `Validate`, `RequiredAssets`, `RequiresPrefetch` and `CompletionKind`.
   Register `video.prepare.window.v1` as one-source/no-prefetch with
-  `prepared_segment` completion, and `video.assemble.copy.v1` /
-  `video.assemble.slice.v1` as compiled-plan/runtime-asset executors with the
-  strict prep gate and `artifact_commit` completion. Unknown executors keep
+  `prepared_segment` completion, `video.assemble.copy.v1` as
+  compiled-plan/runtime-asset with on-demand fetch after FINALIZE, and
+  `video.assemble.slice.v1` as compiled-plan/runtime-asset with the strict
+  prep gate; both have `artifact_commit` completion. Unknown executors keep
   the legacy payload scan and require prefetch.
 - [x] Resolve placement `RequiredAssetKeys` from the executor contract.
   Window preparation no longer inherits every sibling asset in the job; the
   r67f 246-asset shape is pinned by a regression test.
 - [x] Make the preparation gate ask the contract instead of special-casing the
   window executor ID. Only a registered contract that explicitly returns
-  `RequiresPrefetch == false` bypasses the reservation fence; assembly and all
-  unregistered executors keep it.
+  `RequiresPrefetch == false` bypasses the asset reservation/evidence wait,
+  but never the `runtime_assets_pending` PREPARE/FINALIZE fence. Packet-copy
+  assembly opts into this because its worker fetches content-addressed inputs
+  on demand; slice assembly and unregistered executors remain strict.
 - [x] Add `velox-admin doctor --db --job [--json] [--output] [--stall-after]`.
   It opens SQLite read-only via `invariants.OpenReadOnly`, reports
   `ADVANCING`/`STALLED`/`BLOCKED`/`COMPLETE`/`UNKNOWN`, and uses closed cause
