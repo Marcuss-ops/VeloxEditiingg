@@ -196,7 +196,7 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 	request := contract.VideoPrepareWindowV1{
 		Version:       contract.VideoPrepareWindowVersion,
 		Source:        contract.AssetRefV2{AssetID: "source", SHA256: sha, SizeBytes: int64(len(data)), Kind: "video"},
-		SourceStartUS: 1_250_000, SourceDurationUS: 2_500_000, OutputFrameCount: 60,
+		SourceStartUS: 1_000, SourceDurationUS: 59_998_000, OutputFrameCount: 1653,
 		TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64), TimelineStartFrame: 24,
 		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
 	}
@@ -216,7 +216,7 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 		t.Fatalf("timestamp-window execute: status=%s err=%v detail=%s", result.Status, err, result.ErrorDetail)
 	}
 	joined := strings.Join(runner.args, " ")
-	if !strings.Contains(joined, "-i "+path+" -ss 1.250000 -t 2.541667") || !strings.Contains(joined, "tpad=stop_mode=clone:stop=1") || !strings.Contains(joined, "-fps_mode passthrough") {
+	if !strings.Contains(joined, "-stream_loop -1 -i "+path+" -ss 0.001000 -t 68.916667") || !strings.Contains(joined, "tpad=stop_mode=clone:stop=1") || !strings.Contains(joined, "-fps_mode passthrough") || !strings.Contains(joined, "-frames:v 1653") {
 		t.Fatalf("timestamp seek was not emitted as accurate normalized FFmpeg input: %v", runner.args)
 	}
 	var cert windowPreparationCertificate
@@ -371,6 +371,72 @@ func TestVideoPrepareWindow_RealFFmpegOutputPassesCertification(t *testing.T) {
 	}
 	if longCertificate.OutputEvidence.FrameCount != 1440 {
 		t.Fatalf("one-frame-long stock source output frame count = %d, want 1440", longCertificate.OutputEvidence.FrameCount)
+	}
+}
+
+func TestVideoPrepareWindow_RealFFmpegLoopsStockWindowToExactOutput(t *testing.T) {
+	if _, err := osexec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	if _, err := osexec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is not installed")
+	}
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "stock.mp4")
+	create := osexec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=2", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sourcePath)
+	if output, err := create.CombinedOutput(); err != nil {
+		t.Skipf("local ffmpeg lacks the fixture encoder: %v: %s", err, output)
+	}
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(source)
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	actualReference, err := (ffmpegWindowExtradataReference{}).ExpectedExtradataSHA256(context.Background(), profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actualReference != contract.CanonicalVideoExtradataSHA256 {
+		t.Skipf("local ffmpeg encoder identity %s does not match canonical %s", actualReference, contract.CanonicalVideoExtradataSHA256)
+	}
+	revision, err := contract.VideoWindowPreparationRevision(profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contract.VideoPrepareWindowV1{
+		Version:       contract.VideoPrepareWindowVersion,
+		Source:        contract.AssetRefV2{AssetID: "loop-stock", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(source)), Kind: "video"},
+		SourceStartUS: 1_000, SourceDurationUS: 1_999_000, OutputFrameCount: 96,
+		TimelineRevision: 1, TimelineSHA256: strings.Repeat("f", 64),
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	prepare := &videoPrepareWindowExecutor{
+		outputRoot: filepath.Join(root, "prepared"), runner: ffmpegrunner.NewProcessRunner(),
+		certifier: ffprobeWindowOutputCertifier{}, profile: profile, quality: quality,
+	}
+	spec := executor.TaskSpec{JobID: "job-loop-stock", ExecutorID: VideoPrepareWindowID,
+		Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
+	ctx := runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"loop-stock": {AssetID: "loop-stock", Path: sourcePath, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(source)), Verified: true},
+	})
+	result, err := prepare.Execute(ctx, nil, spec)
+	if err != nil {
+		t.Fatalf("looped stock window Execute: %v", err)
+	}
+	if result.Status != "succeeded" {
+		t.Fatalf("looped stock window was not certified: %+v", result)
+	}
+	var certificate windowPreparationCertificate
+	if err := json.Unmarshal([]byte(result.Segments[0].MetadataJSON), &certificate); err != nil {
+		t.Fatal(err)
+	}
+	if certificate.SourceStartUS != request.SourceStartUS || certificate.SourceDurationUS != request.SourceDurationUS {
+		t.Fatalf("source interval changed in certification: got %d/%d, want %d/%d", certificate.SourceStartUS, certificate.SourceDurationUS, request.SourceStartUS, request.SourceDurationUS)
+	}
+	if certificate.OutputEvidence.FrameCount != 96 {
+		t.Fatalf("looped stock output has %d certified frames, want 96", certificate.OutputEvidence.FrameCount)
 	}
 }
 

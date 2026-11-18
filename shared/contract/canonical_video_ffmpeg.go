@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -189,12 +190,25 @@ func CanonicalVideoWindowTimestampArgs(
 	// declared final frame. -frames:v below still caps output at the exact
 	// canonical count.
 	decodeDurationSeconds := float64(sourceDurationUS)/1_000_000 + float64(profile.FPSDen)/float64(profile.FPSNum)
+	sourceCapacity := int64(math.Ceil(float64(sourceDurationUS)*float64(profile.FPSNum)/float64(int64(1_000_000)*int64(profile.FPSDen)))) + 1
+	loopSource := outputFrameCount > sourceCapacity
+	if loopSource {
+		frameDurationSeconds := float64(profile.FPSDen) / float64(profile.FPSNum)
+		outputDurationSeconds := float64(outputFrameCount) * frameDurationSeconds
+		if outputDurationSeconds+frameDurationSeconds > decodeDurationSeconds {
+			decodeDurationSeconds = outputDurationSeconds + frameDurationSeconds
+		}
+	}
 	durationSeconds := strconv.FormatFloat(decodeDurationSeconds, 'f', 6, 64)
 	filter := fmt.Sprintf("setpts=PTS-STARTPTS,fps=%d/%d,tpad=stop_mode=clone:stop=1,%s", profile.FPSNum, profile.FPSDen, CanonicalVideoScaleGeometryFilter(profile))
-	args := []string{
-		"-hide_banner", "-loglevel", "error", "-y", "-i", inputPath,
-		"-ss", startSeconds, "-t", durationSeconds, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
+	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
+	if loopSource {
+		args = append(args, "-stream_loop", "-1")
 	}
+	args = append(args,
+		"-i", inputPath,
+		"-ss", startSeconds, "-t", durationSeconds, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
+	)
 	args = append(args, CanonicalVideoEncodeArgs(profile, quality)...)
 	args = append(args,
 		// The fps filter above has already produced CFR timestamps. Preserve

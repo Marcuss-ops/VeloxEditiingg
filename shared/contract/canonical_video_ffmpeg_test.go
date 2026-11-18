@@ -89,6 +89,52 @@ func TestCanonicalVideoEncoderArgsDigestTracksContract(t *testing.T) {
 	}
 }
 
+func TestCanonicalVideoWindowTimestampArgsLoopsStockWindowToExactOutput(t *testing.T) {
+	profile := CanonicalVideoProfileV1Default
+	quality := CanonicalPreparationQualityPolicyDefault
+	args := CanonicalVideoWindowTimestampArgs(profile, quality, "stock.mp4", "out.mp4", 1_000, 59_998_000, 1653)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"-stream_loop -1 -i stock.mp4", "-t 68.916667", "-fps_mode passthrough", "-frames:v 1653"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("looped stock window args %q do not contain %q", joined, want)
+		}
+	}
+	shortArgs := strings.Join(CanonicalVideoWindowTimestampArgs(profile, quality, "stock.mp4", "out.mp4", 1_000, 59_998_000, 1441), " ")
+	if strings.Contains(shortArgs, "-stream_loop") {
+		t.Fatalf("a source-capacity-sized output must not loop: %q", shortArgs)
+	}
+}
+
+func TestCanonicalVideoWindowTimestampArgsLoopsSixtySecondStockTo1653Frames(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is not installed")
+	}
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "stock.mp4")
+	create := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=60", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sourcePath)
+	if output, err := create.CombinedOutput(); err != nil {
+		t.Skipf("local ffmpeg lacks the fixture encoder: %v: %s", err, output)
+	}
+	profile := CanonicalVideoProfileV1Default
+	quality := CanonicalPreparationQualityPolicyDefault
+	outputPath := filepath.Join(root, "looped.mp4")
+	args := CanonicalVideoWindowTimestampArgs(profile, quality, sourcePath, outputPath, 1_000, 59_998_000, 1653)
+	if output, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+		t.Fatalf("encode looped stock window: %v: %s", err, output)
+	}
+	probe := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames", "-of", "default=noprint_wrappers=1:nokey=1", outputPath)
+	output, err := probe.Output()
+	if err != nil {
+		t.Fatalf("ffprobe looped output: %v", err)
+	}
+	if got := strings.TrimSpace(string(output)); got != "1653" {
+		t.Fatalf("looped stock output has %s frames, want 1653", got)
+	}
+}
+
 func TestCanonicalVideoAVCCMatchesBetweenMasterAndWorkerEncodes(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
