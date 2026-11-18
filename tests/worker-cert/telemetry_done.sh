@@ -15,8 +15,6 @@ import sys
 db_path = sys.argv[1]
 min_attempts = int(sys.argv[2])
 expected_workers = {
-    "velox-worker-13197",
-    "velox-worker-523925eb",
     "host_57_129_132_133",
 }
 checks = []

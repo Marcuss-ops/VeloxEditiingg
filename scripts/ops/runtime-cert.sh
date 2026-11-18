@@ -47,8 +47,6 @@ if [[ "${1:-}" == "--fleet" ]]; then
     "$0" "$wid" "$host" "$user" || rc=1
   done <<'FLEET'
 host_57_129_132_133 57.129.132.133 pierone
-velox-worker-13197 149.56.131.97 pierone
-velox-worker-523925eb 51.222.204.158 ubuntu
 FLEET
   exit "$rc"
 fi

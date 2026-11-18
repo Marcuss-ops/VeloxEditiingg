@@ -26,8 +26,6 @@
 | Principal (AppRole role) | Policy OpenBao | Accesso KV/PKI | Capabilities | Token TTL | Materiale | Consumatore |
 |---|---|---|---|---|---|---|
 | `worker-host_57_129_132_133` | `worker-host_57_129_132_133` | credential KV + `pki/sign/worker-host_57_129_132_133` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | `.velox/openbao/approle/worker-host_57_129_132_133/{role-id,secret-id}` | worker VPS 57.129.132.133 |
-| `worker-velox-worker-13197` | `worker-velox-worker-13197` | credential KV + `pki/sign/velox-worker-13197` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 149.56.131.97 |
-| `worker-velox-worker-523925eb` | `worker-velox-worker-523925eb` | credential KV + `pki/sign/velox-worker-523925eb` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 51.222.204.158 |
 | `master` | `master` | `velox/production/master/*` **+** `velox/production/workers/*` **+** `velox/production/services/registry/*` | `read, list` | 1h (max 24h) | `.velox/openbao/approle/master/{role-id,secret-id}` | deploy master (env, gRPC, fleet, registry pull) |
 | `admin` | `admin` | `velox/*` + `auth/approle/*` + `sys/policies/acl/*` + `ssh/*` + `sys/health` | `create, read, update, delete, list` (velox/approle/policies/ssh); `read` (health) | 1h (max 24h) | `.velox/openbao/approle/admin/{role-id,secret-id}` | operatore (provisioning, rotazione, gestione CA SSH) |
 | `ssh-operator` | `ssh-operator` | `ssh/sign/*` (update) + `ssh/config/ca` + `ssh/roles/*` (read) + `sys/health` | `update` (sign); `read` (ca/roles/health) | 1h (max 24h) | `.velox/openbao/approle/ssh-operator/{role-id,secret-id}` | unico percorso operativo per firma certificati SSH (fase 7) |
@@ -57,8 +55,6 @@ velox/ (KV v2)
     ├── workers/
     │   ├── host_57_129_132_133/   ← leggibile da: worker-host_57_129_132_133, master, admin
     │   │   └── credential         (unico dato worker in KV; mTLS via PKI CSR)
-    │   ├── velox-worker-13197/
-    │   └── velox-worker-523925eb/
     └── services/
         └── registry/     ← leggibile da: master, admin  (deploy master/worker image)
             ├── username

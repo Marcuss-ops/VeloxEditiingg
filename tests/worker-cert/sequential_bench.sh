@@ -8,11 +8,7 @@
 #   VELOX_MASTER_URL=https://velox.example.com \
 #   VELOX_ADMIN_TOKEN=... \
 #   ./tests/worker-cert/sequential_bench.sh \
-#       --workers host_57_129_132_133 \
-#       --workers host_57_129_132_133 \
-#       --workers velox-worker-13197 \
-#       --workers velox-worker-523925eb
-#
+#       --workers host_57_129_132_133
 # What the script does per worker:
 #   1. Pre-flight health: GET .../health?level=A, B, C — all must pass.
 #   2. Image digest check: GET /api/v1/admin/workers/{id} → image_digest.
@@ -58,11 +54,9 @@ source "${REPO_ROOT}/tests/_lib/sh/_lib.sh"
 # shellcheck source=tests/worker-cert/lib/pluck.sh
 source "${SCRIPT_DIR}/lib/pluck.sh"
 
-# ─── Default active 3-worker fleet ──────────────────────────────────────
+# ─── Default active worker ────────────────────────────────────────────────
 DEFAULT_WORKERS=(
   "host_57_129_132_133"
-  "velox-worker-13197"
-  "velox-worker-523925eb"
 )
 
 # ─── Args / env ────────────────────────────────────────────────────────────

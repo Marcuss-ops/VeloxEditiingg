@@ -7,17 +7,15 @@
 > flow at the bottom of this doc describes what "cert-ready" means in
 > observable terms; the matrix tracks who-meets-it.
 
-## Fleet matrix (3 targets)
+## Fleet matrix (1 target)
 
-The 3 active worker-cert targets per the user-spec checklist. Each cell carries
+The active worker-cert target per the user-spec checklist. Each cell carries
 a binary verdict that reflects the most recent smoke run; check the
 **Evidence** column for the `job_id` / `task_id` / `attempt_id` lineage.
 
 | Worker | Connessione verificata | Executor verificato | Render completo verificato | Evidence (job / status) |
 | --- | :-: | :-: | :-: | --- |
 | `host_57_129_132_133` | ✅ | ✅ | ✅ | `job_6138f86480ce8762` → SUCCEEDED |
-| `velox-worker-13197` | ✅ | ✅ | Da testare | placeholder — run `pass_criteria.sh` |
-| `velox-worker-523925eb` | ✅ | ✅ | Da testare | placeholder — run `pass_criteria.sh` |
 
 **Column semantics.**
 
@@ -101,8 +99,8 @@ canary first and preserve the JSON report as release evidence.
 jq -er '.verdict' tests/worker-cert/workers/<worker_id>/pass_criteria.json
 # → "PASS" (all 10 steps) | "FAIL" (first failing step recorded)
 
-# For all 3 active worker targets:
-for w in host_57_129_132_133 velox-worker-13197 velox-worker-523925eb; do
+# For the active worker target:
+for w in host_57_129_132_133; do
   printf '%-30s %s\n' "$w" \
     "$(jq -er '.verdict // "NOT_RUN"' tests/worker-cert/workers/$w/pass_criteria.json 2>/dev/null)"
 done

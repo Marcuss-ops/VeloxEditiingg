@@ -7,11 +7,11 @@
 #
 # Usage:
 #   ./scripts/ops/canary-worker-rollout.sh \
-#     --worker-id velox-worker-13197 --dry-run
+#     --worker-id host_57_129_132_133 --dry-run
 #   ./scripts/ops/canary-worker-rollout.sh \
-#     --worker-id velox-worker-13197 --apply
+#     --worker-id host_57_129_132_133 --apply
 #   ./scripts/ops/canary-worker-rollout.sh \
-#     --worker-id velox-worker-13197 --rollback
+#     --worker-id host_57_129_132_133 --rollback
 #
 # Mutations are opt-in. `--dry-run` is read-only; `--apply` updates exactly
 # the requested worker; `--rollback` explicitly invokes fleetctl rollback for

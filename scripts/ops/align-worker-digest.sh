@@ -5,7 +5,7 @@
 # =============================================================================
 # Usage:
 #   ./scripts/ops/align-worker-digest.sh \
-#       --worker-id velox-worker-13197 \
+#       --worker-id host_57_129_132_133 \
 #       --digest sha256:a1774003... \
 #       [--registry ghcr.io] \
 #       [--owner <ghcr-org>] \
@@ -78,8 +78,6 @@ done
 if (( ${#ALL_WORKERS[@]} == 0 )); then
   ALL_WORKERS=(
     "host_57_129_132_133"
-    "velox-worker-13197"
-    "velox-worker-523925eb"
   )
 fi
 

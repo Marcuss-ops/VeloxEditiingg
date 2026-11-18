@@ -78,16 +78,15 @@ WorkerCard summary (one row per worker):
 ```
 WORKER_ID                       STATUS      HEALTH     JOBS      EXECUTOR@VERSION         LAST_SMOKE
 ---------                       ------      ------     ----      --------------         ----------
-velox-worker-13197              CONNECTED   HEALTHY    0/1       scene.composite.v1@1    SUCCEEDED
-velox-worker-523925eb           CONNECTED   DEGRADED   1/1       scene.composite.v1@1    FAILED
+host_57_129_132_133              CONNECTED   HEALTHY    0/1       scene.composite.v1@1    SUCCEEDED
 …
 ```
 
 ### 3.2 `scripts/fleetctl inspect <worker_id> [--json]`
 
 ```bash
-VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl inspect velox-worker-13197
-VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl inspect --json velox-worker-13197
+VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl inspect host_57_129_132_133
+VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl inspect --json host_57_129_132_133
 ```
 
 Fetches the WorkerCard for one worker from
@@ -97,7 +96,7 @@ deliberately separate views, so an old FAILED rollout never makes a
 worker whose running digest matches the target look unhealthy:
 
 ```
-worker_id:    velox-worker-13197
+worker_id:    host_57_129_132_133
 worker_name:  velox-worker-01
 status:       CONNECTED
 health:       HEALTHY
@@ -135,9 +134,9 @@ remain for compatibility.
 ### 3.3 `scripts/fleetctl drain <worker_id>`
 
 ```bash
-VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl drain velox-worker-13197
+VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl drain host_57_129_132_133
 # optional reason is the second positional argument:
-# scripts/fleetctl drain velox-worker-13197 "manual drain for cert rotation"
+# scripts/fleetctl drain host_57_129_132_133 "manual drain for cert rotation"
 ```
 
 Sets the worker's `Worker.Drain = true` via the Step 6/15
@@ -147,7 +146,7 @@ until terminal status. Default wait budget: **10 min**.
 ### 3.4 `scripts/fleetctl quarantine <worker_id>`
 
 ```bash
-scripts/fleetctl quarantine velox-worker-13197 "asset failures"
+scripts/fleetctl quarantine host_57_129_132_133 "asset failures"
 ```
 
 Quarantines a worker through the authenticated Master operation path.
@@ -155,7 +154,7 @@ Quarantines a worker through the authenticated Master operation path.
 ### 3.5 `scripts/fleetctl restart <worker_id>`
 
 ```bash
-scripts/fleetctl restart velox-worker-13197 "after config change"
+scripts/fleetctl restart host_57_129_132_133 "after config change"
 ```
 
 Publishes the restart operation; the Master owns the worker-side action.
@@ -163,7 +162,7 @@ Publishes the restart operation; the Master owns the worker-side action.
 ### 3.6 `scripts/fleetctl worker-config set <worker_id>`
 
 ```bash
-scripts/fleetctl worker-config set velox-worker-13197 \
+scripts/fleetctl worker-config set host_57_129_132_133 \
   --audio-mix-strategy optimized --audio-mix-profile 0
 ```
 
@@ -188,7 +187,7 @@ unmanaged key is preserved byte-for-byte. Download tuning is bounded and keeps
 foreground asset resolution:
 
 ```bash
-scripts/fleetctl worker-config set velox-worker-523925eb \
+scripts/fleetctl worker-config set host_57_129_132_133 \
   --asset-download-concurrency 30 --prefetch-max-concurrent 29 \
   "stock saturation canary"
 ```
@@ -207,7 +206,7 @@ this command, because `deploy/runtime/worker.env.example` only seeds fresh
 hosts:
 
 ```bash
-scripts/fleetctl worker-config set velox-worker-13197 \
+scripts/fleetctl worker-config set host_57_129_132_133 \
   --fmp4-stream-profile 1 "fMP4 final-mux rollout (canary)"
 ```
 
@@ -218,7 +217,7 @@ The flag is an admission gate, not a job selector: jobs must still arrive with
 ### 3.7 `scripts/fleetctl operations [worker_id] [status]`
 
 ```bash
-scripts/fleetctl operations velox-worker-13197
+scripts/fleetctl operations host_57_129_132_133
 ```
 
 Reads the `fleet_operations` audit ledger; it does not mutate the worker.
@@ -227,7 +226,7 @@ Reads the `fleet_operations` audit ledger; it does not mutate the worker.
 
 ```bash
 IMAGE=ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex>
-scripts/fleetctl update velox-worker-13197 "$IMAGE" "canary rollout"
+scripts/fleetctl update host_57_129_132_133 "$IMAGE" "canary rollout"
 ```
 
 Drives the Step 9/15 image update cascade end-to-end via the
@@ -240,7 +239,7 @@ exit code 7, no Master call. Default wait budget: **30 min**.
 ### 3.8 `scripts/fleetctl smoke <worker_id>`
 
 ```bash
-scripts/fleetctl smoke velox-worker-13197
+scripts/fleetctl smoke host_57_129_132_133
 ```
 
 Issues a Step 12/15 Level-D smoke (lease → download asset →
@@ -262,7 +261,7 @@ Clears a previous drain / quarantine via the Step 6/15
 
 ```bash
 IMAGE=ghcr.io/<owner>/velox-worker@sha256:<previous-64-lowercase-hex>
-scripts/fleetctl rollback velox-worker-13197 "$IMAGE" "image pinned incorrect"
+scripts/fleetctl rollback host_57_129_132_133 "$IMAGE" "image pinned incorrect"
 ```
 
 Drives the Step 9/15 rollback cascade (`previous_digest`

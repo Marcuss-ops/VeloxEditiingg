@@ -341,7 +341,7 @@ Il mount PKI dedicato emette i certificati client senza ricevere la private key:
 ./scripts/initialize-pki-intermediate.sh --set-signed /secure/velox/signed-intermediate-chain.pem
 
 # Only after the issuer is ready, provision the per-worker signing roles.
-./scripts/provision-pki.sh --workers "host_57_129_132_133 velox-worker-13197 velox-worker-523925eb"
+./scripts/provision-pki.sh --workers "host_57_129_132_133"
 ```
 
 `initialize-pki-intermediate.sh` rifiuta una nuova ceremony se l’issuer è già

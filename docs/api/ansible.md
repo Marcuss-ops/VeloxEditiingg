@@ -21,7 +21,7 @@ Implemented`; no Ansible subprocess or remote rollout is started.
 ```json
 {
   "action": "deploy_workers",
-  "targets": ["149.56.131.97", "57.129.132.133"]
+  "targets": ["57.129.132.133"]
 }
 ```
 
@@ -37,7 +37,7 @@ release activation.
 {
   "run_id": "run_abc123",
   "action": "deploy_workers",
-  "targets": ["149.56.131.97"],
+  "targets": ["57.129.132.133"],
   "status": "started"
 }
 ```

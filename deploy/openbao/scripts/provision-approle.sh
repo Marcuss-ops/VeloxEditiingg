@@ -39,7 +39,7 @@ OPENBAO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_DIR="${OPENBAO_STATE_DIR:-"$OPENBAO_DIR/../../.velox/openbao"}"
 ADDR="${BAO_ADDR:-https://127.0.0.1:8200}"
 TOKEN_FILE="$STATE_DIR/root-token"
-DEFAULT_WORKERS=(host_57_129_132_133 velox-worker-13197 velox-worker-523925eb)
+DEFAULT_WORKERS=(host_57_129_132_133)
 
 TOKEN_TTL="${OPENBAO_TOKEN_TTL:-1h}"
 TOKEN_MAX_TTL="${OPENBAO_TOKEN_MAX_TTL:-24h}"

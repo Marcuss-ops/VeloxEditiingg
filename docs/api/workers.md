@@ -56,7 +56,7 @@ List all registered workers with canonical status.
 {
   "workers": [
     {
-      "worker_id": "velox-worker-13197",
+      "worker_id": "host_57_129_132_133",
       "worker_name": "velox-worker-01",
       "status": "CONNECTED",
       "reason": "",
@@ -75,17 +75,6 @@ List all registered workers with canonical status.
       "cpu_utilization_ratio": 0.42,
       "memory_used_bytes": 4123411200,
       "disk_free_bytes": 94371840000
-    },
-    {
-      "worker_id": "velox-worker-523925eb",
-      "worker_name": "velox-worker-02",
-      "status": "DISCONNECTED",
-      "reason": "detached_session",
-      "session_active": false,
-      "last_heartbeat_at": "2026-06-23T11:55:01Z",
-      "heartbeat_age_seconds": 299,
-      "active_tasks": 0,
-      "task_slots": 1
     }
   ]
 }
@@ -100,7 +89,7 @@ Same shape as a single element of the list. Returns `404` if the worker is not r
 
 ```json
 {
-  "worker_id": "velox-worker-523925eb",
+  "worker_id": "host_57_129_132_133",
   "status": "STALE",
   "reason": "heartbeat_stale",
   "session_active": true,
@@ -137,7 +126,7 @@ Example (abridged):
 
 ```json
 {
-  "worker_id": "velox-worker-13197",
+  "worker_id": "host_57_129_132_133",
   "worker_name": "velox-worker-01",
   "status": "CONNECTED",
   "health_state": "HEALTHY",

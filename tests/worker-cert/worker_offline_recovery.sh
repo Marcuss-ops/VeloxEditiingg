@@ -23,9 +23,9 @@
 #   VELOX_ADMIN_TOKEN=... \
 #   VELOX_DB_PATH=/var/lib/velox/velox.db \
 #   ./tests/worker-cert/worker_offline_recovery.sh \
-#       --target-worker-id velox-worker-13197 \
-#       --target-worker-stop-cmd 'ssh velox-worker-13197-host systemctl stop velox-worker.service' \
-#       --target-worker-inspect-cmd 'ssh velox-worker-13197-host bash -s' <restart-owner-probe.sh
+#       --target-worker-id host_57_129_132_133 \
+#       --target-worker-stop-cmd 'ssh host_57_129_132_133-host systemctl stop velox-worker.service' \
+#       --target-worker-inspect-cmd 'ssh host_57_129_132_133-host bash -s' <restart-owner-probe.sh
 #
 # What the script does:
 #   1. Sources tests/_lib/sh/_lib.sh (logging + pid-trap + ensure +
