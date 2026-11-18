@@ -197,7 +197,11 @@ func CanonicalVideoWindowTimestampArgs(
 	}
 	args = append(args, CanonicalVideoEncodeArgs(profile, quality)...)
 	args = append(args,
-		"-fps_mode", "cfr", "-force_key_frames", "expr:eq(n,0)",
+		// The fps filter above has already produced CFR timestamps. Preserve
+		// those frames exactly: asking the output synchronizer for CFR again
+		// can duplicate a terminal frame when the source container duration
+		// extends one frame beyond the requested timestamp window.
+		"-fps_mode", "passthrough", "-force_key_frames", "expr:eq(n,0)",
 		"-frames:v", strconv.FormatInt(outputFrameCount, 10),
 		"-avoid_negative_ts", "make_zero", "-reset_timestamps", "1",
 		"-movflags", "+faststart", outputPath,

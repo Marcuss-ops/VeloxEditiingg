@@ -216,7 +216,7 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 		t.Fatalf("timestamp-window execute: status=%s err=%v detail=%s", result.Status, err, result.ErrorDetail)
 	}
 	joined := strings.Join(runner.args, " ")
-	if !strings.Contains(joined, "-i "+path+" -ss 1.250000 -t 2.541667") || !strings.Contains(joined, "tpad=stop_mode=clone:stop=1") || !strings.Contains(joined, "-fps_mode cfr") {
+	if !strings.Contains(joined, "-i "+path+" -ss 1.250000 -t 2.541667") || !strings.Contains(joined, "tpad=stop_mode=clone:stop=1") || !strings.Contains(joined, "-fps_mode passthrough") {
 		t.Fatalf("timestamp seek was not emitted as accurate normalized FFmpeg input: %v", runner.args)
 	}
 	var cert windowPreparationCertificate
@@ -342,6 +342,35 @@ func TestVideoPrepareWindow_RealFFmpegOutputPassesCertification(t *testing.T) {
 	}
 	if shortCertificate.OutputEvidence.FrameCount != 120 {
 		t.Fatalf("short timestamp window frame count = %d, want 120", shortCertificate.OutputEvidence.FrameCount)
+	}
+	longSource := filepath.Join(root, "one-frame-long-source.mp4")
+	longSourceCmd := osexec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-frames:v", "1441", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "48", "-y", longSource)
+	if output, err := longSourceCmd.CombinedOutput(); err != nil {
+		t.Skipf("local ffmpeg lacks the 1441-frame fixture encoder: %v: %s", err, output)
+	}
+	longBytes, err := os.ReadFile(longSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	longSum := sha256.Sum256(longBytes)
+	request.Source = contract.AssetRefV2{AssetID: "one-frame-long-source", SHA256: hex.EncodeToString(longSum[:]), SizeBytes: int64(len(longBytes)), Kind: "video"}
+	request.SourceStartUS, request.SourceDurationUS = 0, 60_000_000
+	request.OutputFrameCount = 1440
+	request.TimelineStartFrame = 288
+	spec.Payload[contract.VideoPrepareWindowPayloadKey] = request
+	longCtx := runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"one-frame-long-source": {AssetID: "one-frame-long-source", Path: longSource, SHA256: hex.EncodeToString(longSum[:]), Size: int64(len(longBytes)), Verified: true},
+	})
+	longResult, err := exec.Execute(longCtx, nil, spec)
+	if err != nil || longResult.Status != "succeeded" {
+		t.Fatalf("1441-frame stock source did not produce a certified 1440-frame window: result=%+v err=%v", longResult, err)
+	}
+	var longCertificate windowPreparationCertificate
+	if err := json.Unmarshal([]byte(longResult.Segments[0].MetadataJSON), &longCertificate); err != nil {
+		t.Fatal(err)
+	}
+	if longCertificate.OutputEvidence.FrameCount != 1440 {
+		t.Fatalf("one-frame-long stock source output frame count = %d, want 1440", longCertificate.OutputEvidence.FrameCount)
 	}
 }
 
