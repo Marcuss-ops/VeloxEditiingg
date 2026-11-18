@@ -9,7 +9,7 @@
 #   VELOX_MASTER_URL=https://velox.example.com \
 #     VELOX_ADMIN_TOKEN=... \
 #     PASS_DESTINATION_ID=drive-production \
-#     ./tests/worker-cert/pass_criteria.sh host_57_131_20_173
+#     ./tests/worker-cert/pass_criteria.sh host_57_129_132_133
 #
 # The 10 PASS criteria (matches the user-spec checklist):
 #   1. CONNECTED          — GET /api/v1/workers/<worker_id>.status == "CONNECTED"

@@ -7,7 +7,7 @@
 #   VELOX_MASTER_URL=https://velox.example.com \
 #     VELOX_ADMIN_TOKEN=... \
 #     SMOKE_DESTINATION_ID=drive-production \
-#     ./tests/worker-cert/smoke_one.sh host_57_131_20_173
+#     ./tests/worker-cert/smoke_one.sh host_57_129_132_133
 #
 # What the script does:
 #   1. Sources tests/_lib/sh/_lib.sh (logging + pid-trap + ensure +

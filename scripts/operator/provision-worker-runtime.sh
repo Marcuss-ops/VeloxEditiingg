@@ -77,7 +77,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --fleet)
       WORKERS+=(
-        "host_57_131_20_173:57.131.20.173:pierone"
         "velox-worker-13197:149.56.131.97:pierone"
         "velox-worker-523925eb:51.222.204.158:ubuntu"
       )

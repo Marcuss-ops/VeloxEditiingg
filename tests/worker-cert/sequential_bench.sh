@@ -9,7 +9,7 @@
 #   VELOX_ADMIN_TOKEN=... \
 #   ./tests/worker-cert/sequential_bench.sh \
 #       --workers host_57_129_132_133 \
-#       --workers host_57_131_20_173 \
+#       --workers host_57_129_132_133 \
 #       --workers velox-worker-13197 \
 #       --workers velox-worker-523925eb
 #
@@ -58,10 +58,9 @@ source "${REPO_ROOT}/tests/_lib/sh/_lib.sh"
 # shellcheck source=tests/worker-cert/lib/pluck.sh
 source "${SCRIPT_DIR}/lib/pluck.sh"
 
-# ─── Default canonical 4-worker fleet ──────────────────────────────────────
+# ─── Default active 3-worker fleet ──────────────────────────────────────
 DEFAULT_WORKERS=(
   "host_57_129_132_133"
-  "host_57_131_20_173"
   "velox-worker-13197"
   "velox-worker-523925eb"
 )

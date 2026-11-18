@@ -8,7 +8,7 @@
 #
 #   VELOX_MASTER_URL=https://velox.example.com \
 #   VELOX_ADMIN_TOKEN=... \
-#   ./tests/worker-cert/restart_reconnect.sh host_57_131_20_173 \
+#   ./tests/worker-cert/restart_reconnect.sh host_57_129_132_133 \
 #       --target-worker-restart-cmd 'ssh worker-host systemctl restart velox-worker'
 #
 # What the script does:

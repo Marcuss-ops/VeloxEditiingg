@@ -30,7 +30,7 @@ ADDR="${BAO_ADDR:-https://127.0.0.1:8200}"
 POLICIES_DIR="$OPENBAO_DIR/policies"
 TOKEN_FILE="$STATE_DIR/root-token"
 # Fleet canonica (scripts/ops/align-worker-digest.sh / runtime-cert.sh)
-DEFAULT_WORKERS=(host_57_129_132_133 host_57_131_20_173 velox-worker-13197 velox-worker-523925eb)
+DEFAULT_WORKERS=(host_57_129_132_133 velox-worker-13197 velox-worker-523925eb)
 
 DRY_RUN=0
 WORKERS=()

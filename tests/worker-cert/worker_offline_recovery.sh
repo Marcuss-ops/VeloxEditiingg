@@ -4,7 +4,7 @@
 # =============================================================================
 # Usage:
 #   ./tests/worker-cert/worker_offline_recovery.sh \
-#       --target-worker-id host_57_131_20_173 \
+#       --target-worker-id host_57_129_132_133 \
 #       --target-worker-stop-cmd 'ssh worker-host systemctl stop velox-worker.service' \
 #       --target-worker-inspect-cmd 'ssh worker-host bash -s' <restart-owner-probe.sh
 #

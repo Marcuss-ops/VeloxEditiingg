@@ -26,7 +26,6 @@
 | Principal (AppRole role) | Policy OpenBao | Accesso KV/PKI | Capabilities | Token TTL | Materiale | Consumatore |
 |---|---|---|---|---|---|---|
 | `worker-host_57_129_132_133` | `worker-host_57_129_132_133` | credential KV + `pki/sign/worker-host_57_129_132_133` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | `.velox/openbao/approle/worker-host_57_129_132_133/{role-id,secret-id}` | worker VPS 57.129.132.133 |
-| `worker-host_57_131_20_173` | `worker-host_57_131_20_173` | credential KV + `pki/sign/worker-host_57_131_20_173` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 57.131.20.173 |
 | `worker-velox-worker-13197` | `worker-velox-worker-13197` | credential KV + `pki/sign/velox-worker-13197` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 149.56.131.97 |
 | `worker-velox-worker-523925eb` | `worker-velox-worker-523925eb` | credential KV + `pki/sign/velox-worker-523925eb` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 51.222.204.158 |
 | `master` | `master` | `velox/production/master/*` **+** `velox/production/workers/*` **+** `velox/production/services/registry/*` | `read, list` | 1h (max 24h) | `.velox/openbao/approle/master/{role-id,secret-id}` | deploy master (env, gRPC, fleet, registry pull) |
@@ -58,7 +57,6 @@ velox/ (KV v2)
     ├── workers/
     │   ├── host_57_129_132_133/   ← leggibile da: worker-host_57_129_132_133, master, admin
     │   │   └── credential         (unico dato worker in KV; mTLS via PKI CSR)
-    │   ├── host_57_131_20_173/
     │   ├── velox-worker-13197/
     │   └── velox-worker-523925eb/
     └── services/

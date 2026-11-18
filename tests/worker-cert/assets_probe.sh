@@ -7,7 +7,7 @@
 #   VELOX_MASTER_URL=https://velox.example.com \
 #     VELOX_ADMIN_TOKEN=... \
 #     PROBE_DESTINATION_ID=drive-production \
-#     ./tests/worker-cert/assets_probe.sh host_57_131_20_173
+#     ./tests/worker-cert/assets_probe.sh host_57_129_132_133
 #
 # What the script does (8 probes per the user-spec checklist):
 #   1. velox-asset:// resolution   — /api/v1/jobs submit accepts the URL

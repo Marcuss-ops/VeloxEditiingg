@@ -18,7 +18,6 @@ expected_workers = {
     "velox-worker-13197",
     "velox-worker-523925eb",
     "host_57_129_132_133",
-    "host_57_131_20_173",
 }
 checks = []
 

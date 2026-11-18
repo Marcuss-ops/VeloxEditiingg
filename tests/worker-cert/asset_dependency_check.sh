@@ -7,7 +7,7 @@
 #   VELOX_MASTER_URL=https://velox.example.com \
 #     VELOX_ADMIN_TOKEN=... \
 #     ASSET_CHK_MIN_DISK_KB=5242880 \
-#     ./tests/worker-cert/asset_dependency_check.sh host_57_131_20_173
+#     ./tests/worker-cert/asset_dependency_check.sh host_57_129_132_133
 #
 # What the script does per the user-spec checklist:
 #   7 service probes (the "service matrix"):

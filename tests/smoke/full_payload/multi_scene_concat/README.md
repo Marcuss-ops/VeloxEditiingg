@@ -29,12 +29,12 @@ tests/smoke/full_payload/multi_scene_concat/run.sh --mode=selftest
 # Full HTTP submit (requires VELOX_MASTER_URL + VELOX_ADMIN_TOKEN)
 VELOX_MASTER_URL=https://velox.example.com \
 VELOX_ADMIN_TOKEN=$(cat ~/.config/velox/admin-token) \
-MULTISCENE_TARGET_WORKER_ID=host_57_131_20_173 \
+MULTISCENE_TARGET_WORKER_ID=host_57_129_132_133 \
 tests/smoke/full_payload/multi_scene_concat/run.sh
 
 # Override defaults
 tests/smoke/full_payload/multi_scene_concat/run.sh \
-  --worker-id host_57_131_20_173 \
+  --worker-id host_57_129_132_133 \
   --scenes-count=12 \
   --duration-per-scene=3 \
   --artifact-verify=1 \
@@ -99,7 +99,7 @@ Each run writes a JSON envelope to
 ```json
 {
   "schema": "tests/smoke/full_payload/multi_scene_concat@1",
-  "worker_id": "host_57_131_20_173",
+  "worker_id": "host_57_129_132_133",
   "job_id": "J-2026-...",
   "task_id": "T-...",
   "attempt_id": "A-...",
