@@ -149,12 +149,23 @@ func (s *SQLiteStore) GetArtifact(id string) (*Artifact, error) {
 // needed by polling consumers (smoke_one.sh, perf_matrix.sh).
 // Lightweight — no attemptmetrics / taskattempts import needed.
 type TaskAttemptSnapshot struct {
-	TaskID        string `json:"task_id"`
-	AttemptID     string `json:"attempt_id"`
-	JobID         string `json:"job_id"`
-	WorkerID      string `json:"worker_id"`
-	LeaseID       string `json:"lease_id"`
-	AttemptNumber int    `json:"attempt_number"`
+	TaskID            string `json:"task_id"`
+	AttemptID         string `json:"attempt_id"`
+	JobID             string `json:"job_id"`
+	WorkerID          string `json:"worker_id"`
+	WorkerSnapshotID  string `json:"worker_snapshot_id,omitempty"`
+	WorkerName        string `json:"worker_name,omitempty"`
+	WorkerGitSHA      string `json:"worker_git_sha,omitempty"`
+	WorkerVersion     string `json:"worker_version,omitempty"`
+	BundleVersion     string `json:"bundle_version,omitempty"`
+	BundleHash        string `json:"bundle_hash,omitempty"`
+	EngineVersion     string `json:"engine_version,omitempty"`
+	FFmpegVersion     string `json:"ffmpeg_version,omitempty"`
+	DockerImageDigest string `json:"docker_image_digest,omitempty"`
+	ConfigHash        string `json:"config_hash,omitempty"`
+	ProtocolVersion   string `json:"protocol_version,omitempty"`
+	LeaseID           string `json:"lease_id"`
+	AttemptNumber     int    `json:"attempt_number"`
 	// Status/Error fields expose the attempt's terminal state so M2M
 	// polling clients can see WHY an attempt failed without operator
 	// shell access. Empty status = attempt not yet materialized.

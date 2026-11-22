@@ -140,6 +140,11 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 		 VALUES (?, 'SUCCEEDED', 0, 3, ?, ?, ?, ?, ?)`, jobID, createdAt, leaseAt, completedAt, completedAt, completedAt); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
+	if _, err := db.DB().ExecContext(ctx, `INSERT INTO worker_runtime_snapshots
+		(snapshot_id,worker_id,session_id,worker_name,git_sha,worker_version,bundle_version,bundle_hash,engine_version,ffmpeg_version,docker_image_digest,config_hash,protocol_version)
+		VALUES ('snapshot-enrichment','velox-worker-523925eb','session-enrichment','render-worker-a','worker-git-123','worker-v7','bundle-v4','bundle-hash','chronon-v2','ffmpeg-7','sha256:image-digest','config-hash','protocol-v3')`); err != nil {
+		t.Fatalf("seed worker runtime snapshot: %v", err)
+	}
 	if err := db.InsertArtifact(&store.Artifact{
 		ID: "artifact-scoped", JobID: jobID, Type: "video/mp4",
 		StorageURL: "https://cdn.example/scoped.mp4", SHA256: strings.Repeat("a", 64), SizeBytes: 42, Status: "READY",
@@ -147,8 +152,8 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 		t.Fatalf("seed artifact: %v", err)
 	}
 	if _, err := db.DB().ExecContext(ctx, `INSERT INTO task_attempts
-		(id,task_id,job_id,attempt_number,worker_id,lease_id,status,started_at,completed_at,created_at,updated_at)
-		VALUES ('attempt-enrichment','task-enrichment',? ,1,'velox-worker-523925eb','lease-enrichment','SUCCEEDED',?,?,?,?)`,
+		(id,task_id,job_id,attempt_number,worker_id,worker_snapshot_id,lease_id,status,started_at,completed_at,created_at,updated_at)
+		VALUES ('attempt-enrichment','task-enrichment',? ,1,'velox-worker-523925eb','snapshot-enrichment','lease-enrichment','SUCCEEDED',?,?,?,?)`,
 		jobID, workerStarted, finishedAt, leaseAt, completedAt); err != nil {
 		t.Fatalf("seed task attempt: %v", err)
 	}
@@ -207,6 +212,20 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 	}
 	if ownerBody["worker_id"] != "velox-worker-523925eb" || ownerBody["sha256"] != strings.Repeat("a", 64) {
 		t.Fatalf("worker/artifact identity = %v/%v", ownerBody["worker_id"], ownerBody["sha256"])
+	}
+	runtime, ok := ownerBody["worker_runtime"].(map[string]any)
+	if !ok {
+		t.Fatalf("worker_runtime = %T, want object", ownerBody["worker_runtime"])
+	}
+	for field, want := range map[string]any{
+		"snapshot_id": "snapshot-enrichment", "name": "render-worker-a", "git_sha": "worker-git-123",
+		"worker_version": "worker-v7", "bundle_version": "bundle-v4", "bundle_hash": "bundle-hash",
+		"engine_version": "chronon-v2", "ffmpeg_version": "ffmpeg-7", "docker_image_digest": "sha256:image-digest",
+		"config_hash": "config-hash", "protocol_version": "protocol-v3",
+	} {
+		if runtime[field] != want {
+			t.Errorf("worker_runtime.%s = %v, want %v", field, runtime[field], want)
+		}
 	}
 	if ownerBody["created_at"] != createdAt || ownerBody["started_at"] != leaseAt || ownerBody["completed_at"] != completedAt {
 		t.Fatalf("top-level timestamps = created:%v leased:%v completed:%v", ownerBody["created_at"], ownerBody["started_at"], ownerBody["completed_at"])

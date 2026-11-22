@@ -323,7 +323,13 @@ func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, j
 		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT ta.task_id, ta.id, ta.job_id, ta.worker_id, ta.lease_id, ta.attempt_number,
+		`SELECT ta.task_id, ta.id, ta.job_id, ta.worker_id, ta.worker_snapshot_id,
+		        COALESCE(wrs.worker_name,''),
+		        COALESCE(wrs.git_sha,''), COALESCE(wrs.worker_version,''),
+		        COALESCE(wrs.bundle_version,''), COALESCE(wrs.bundle_hash,''),
+		        COALESCE(wrs.engine_version,''), COALESCE(wrs.ffmpeg_version,''),
+		        COALESCE(wrs.docker_image_digest,''), COALESCE(wrs.config_hash,''),
+		        COALESCE(wrs.protocol_version,''), ta.lease_id, ta.attempt_number,
 		        ta.status, ta.error_code, ta.error_message,
 		        COALESCE(ta.created_at,''), COALESCE(ta.started_at,''), COALESCE(ta.completed_at,''),
 		        COALESCE(m.engine_asset_download_ms,0) + COALESCE(m.engine_audio_download_ms,0),
@@ -339,13 +345,18 @@ func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, j
 		        COALESCE(m.frames_encoded,0)
 		 FROM task_attempts ta
 		 LEFT JOIN task_attempt_metrics m ON m.attempt_id=ta.id
+		 LEFT JOIN worker_runtime_snapshots wrs ON wrs.snapshot_id=ta.worker_snapshot_id
 		 WHERE ta.job_id = ?
 		   AND EXISTS (SELECT 1 FROM creator_forwardings cf
 		               WHERE cf.target_job_id = ta.job_id
 		                 AND cf.external_client_id = ?)
 		 ORDER BY ta.created_at DESC LIMIT 1`, jobID, strings.TrimSpace(clientID))
 	var snap TaskAttemptSnapshot
-	if err := row.Scan(&snap.TaskID, &snap.AttemptID, &snap.JobID, &snap.WorkerID, &snap.LeaseID, &snap.AttemptNumber,
+	if err := row.Scan(&snap.TaskID, &snap.AttemptID, &snap.JobID, &snap.WorkerID,
+		&snap.WorkerSnapshotID, &snap.WorkerName,
+		&snap.WorkerGitSHA, &snap.WorkerVersion, &snap.BundleVersion, &snap.BundleHash,
+		&snap.EngineVersion, &snap.FFmpegVersion, &snap.DockerImageDigest, &snap.ConfigHash,
+		&snap.ProtocolVersion, &snap.LeaseID, &snap.AttemptNumber,
 		&snap.Status, &snap.ErrorCode, &snap.ErrorMessage,
 		&snap.LeasedAt, &snap.StartedAt, &snap.FinishedAt,
 		&snap.DownloadMS, &snap.DecodeMS, &snap.ComposeMS, &snap.EncodeMS,

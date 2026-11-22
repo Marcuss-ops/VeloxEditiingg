@@ -144,6 +144,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// master (the error is already persisted on task_attempts by
 		// CompleteFinal; this only exposes the same fact to the owner).
 		var workerID, taskID, attemptID, leaseID string
+		var workerRuntime gin.H
 		var leaseAt string
 		var attemptStatus, attemptErrorCode, attemptErrorMessage string
 		var workerTiming gin.H
@@ -174,6 +175,21 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 					"frames":      snap.Frames,
 					"encode_fps":  encodeFPS(snap.Frames, snap.EncodeMS),
 				}
+				if snap.WorkerSnapshotID != "" || snap.WorkerGitSHA != "" || snap.WorkerVersion != "" || snap.EngineVersion != "" || snap.DockerImageDigest != "" {
+					workerRuntime = gin.H{
+						"snapshot_id":         snap.WorkerSnapshotID,
+						"name":                snap.WorkerName,
+						"git_sha":             snap.WorkerGitSHA,
+						"worker_version":      snap.WorkerVersion,
+						"bundle_version":      snap.BundleVersion,
+						"bundle_hash":         snap.BundleHash,
+						"engine_version":      snap.EngineVersion,
+						"ffmpeg_version":      snap.FFmpegVersion,
+						"docker_image_digest": snap.DockerImageDigest,
+						"config_hash":         snap.ConfigHash,
+						"protocol_version":    snap.ProtocolVersion,
+					}
+				}
 			}
 		}
 
@@ -201,6 +217,9 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 		if workerTiming != nil {
 			resp["worker_timing"] = workerTiming
+		}
+		if workerRuntime != nil {
+			resp["worker_runtime"] = workerRuntime
 		}
 		if artifactURL != "" {
 			resp["artifact_size_bytes"] = artifactSizeBytes
