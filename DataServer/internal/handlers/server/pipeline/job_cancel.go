@@ -25,7 +25,7 @@ func (h *Handlers) CancelSubmittedJob() gin.HandlerFunc {
 			writeM2MJobNotFound(c)
 			return
 		}
-		if h.jobs.Writer == nil {
+		if h.jobs.Writer == nil || h.jobs.Reader == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "job_cancellation_unavailable"})
 			return
 		}
@@ -42,10 +42,31 @@ func (h *Handlers) CancelSubmittedJob() gin.HandlerFunc {
 			writeM2MJobNotFound(c)
 			return
 		}
+		current, err := h.jobs.Reader.Get(c.Request.Context(), jobID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure"})
+			return
+		}
+		if current == nil {
+			writeM2MJobNotFound(c)
+			return
+		}
+		if current.Status.IsTerminal() {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID, "status": string(current.Status), "terminal": true, "status_url": "/api/v1/jobs/" + jobID})
+			return
+		}
 		if err := h.jobs.Writer.Cancel(c.Request.Context(), jobID, "cancelled by job owner", -1); err != nil {
+			// The render may have completed between the status read and cancel
+			// CAS. Re-read the authority and return that terminal outcome so the
+			// caller can reconcile a successful artifact instead of guessing.
+			latest, readErr := h.jobs.Reader.Get(c.Request.Context(), jobID)
+			if readErr == nil && latest != nil && latest.Status.IsTerminal() {
+				c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID, "status": string(latest.Status), "terminal": true, "status_url": "/api/v1/jobs/" + jobID})
+				return
+			}
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "job_not_cancellable"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID, "status": "CANCELLED"})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID, "status": "CANCELLED", "terminal": true, "status_url": "/api/v1/jobs/" + jobID})
 	}
 }
