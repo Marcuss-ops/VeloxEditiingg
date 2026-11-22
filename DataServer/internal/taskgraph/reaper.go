@@ -97,11 +97,11 @@ func (r *TaskLeaseReaper) Run(ctx context.Context) error {
 			log.Printf("[TASK-LEASE-REAPER] stopped reason=%v", ctx.Err())
 			return ctx.Err()
 		case <-ticker.C:
-			cancelledPrepares, prepareErr := r.lifecycle.CancelStaleRuntimeAssetPrepares(ctx, r.now(), r.limit)
+			failedPrepares, prepareErr := r.lifecycle.FailStaleRuntimeAssetPrepares(ctx, r.now(), r.limit)
 			if prepareErr != nil {
 				log.Printf("[TASK-LEASE-REAPER] stale runtime prepare sweep error=%v", prepareErr)
-			} else if cancelledPrepares > 0 {
-				log.Printf("[TASK-LEASE-REAPER] cancelled stale runtime prepares=%d ttl=%s", cancelledPrepares, DefaultRuntimeAssetsPrepareTTL)
+			} else if failedPrepares > 0 {
+				log.Printf("[TASK-LEASE-REAPER] failed stale runtime prepares=%d ttl=%s", failedPrepares, DefaultRuntimeAssetsPrepareTTL)
 			}
 			nowStr := r.now().Format(time.RFC3339)
 			candidates, err := r.lifecycle.RequeueExpiredLeases(ctx, nowStr, r.limit)

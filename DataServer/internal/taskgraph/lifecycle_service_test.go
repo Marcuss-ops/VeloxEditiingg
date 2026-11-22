@@ -606,8 +606,10 @@ func TestLifecycleService_RequeueExpiredLeases_PropagatesError(t *testing.T) {
 
 type stalePrepareRepo struct {
 	*stubRepo
-	tasks    []Task
-	payloads map[string]map[string]interface{}
+	tasks         []Task
+	payloads      map[string]map[string]interface{}
+	failedTaskID  string
+	failureReason string
 }
 
 func (s *stalePrepareRepo) List(context.Context, Filter) ([]Task, error) { return s.tasks, nil }
@@ -618,21 +620,13 @@ func (s *stalePrepareRepo) MergeTaskSpecPayload(context.Context, string, map[str
 	panic("not used")
 }
 
-type stalePrepareJobs struct {
-	cancelCalls   int
-	jobID, reason string
+func (s *stalePrepareRepo) FailStaleRuntimePrepare(_ context.Context, taskID, reason string) (bool, error) {
+	s.failedTaskID = taskID
+	s.failureReason = reason
+	return true, nil
 }
 
-func (s *stalePrepareJobs) Get(context.Context, string) (*JobRetryView, error) { return nil, nil }
-func (s *stalePrepareJobs) Fail(context.Context, string, string) error         { panic("not used") }
-func (s *stalePrepareJobs) Cancel(_ context.Context, jobID, reason string, _ int) error {
-	s.cancelCalls++
-	s.jobID = jobID
-	s.reason = reason
-	return nil
-}
-
-func TestCancelStaleRuntimeAssetPrepareUsesFifteenMinuteBound(t *testing.T) {
+func TestFailStaleRuntimeAssetPrepareUsesFifteenMinuteBound(t *testing.T) {
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	if DefaultRuntimeAssetsPrepareTTL != 15*time.Minute {
 		t.Fatalf("prepare TTL=%s, want 15m", DefaultRuntimeAssetsPrepareTTL)
@@ -644,20 +638,18 @@ func TestCancelStaleRuntimeAssetPrepareUsesFifteenMinuteBound(t *testing.T) {
 		"task-expired": {"runtime_assets_pending": true},
 		"task-fresh":   {"runtime_assets_pending": true},
 	}}
-	jobs := &stalePrepareJobs{}
 	lifecycle, err := NewLifecycleService(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lifecycle.SetJobsRepo(jobs)
-	n, err := lifecycle.CancelStaleRuntimeAssetPrepares(context.Background(), now, 100)
+	n, err := lifecycle.FailStaleRuntimeAssetPrepares(context.Background(), now, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 || jobs.cancelCalls != 1 || jobs.jobID != "job-expired" {
-		t.Fatalf("cancelled=%d calls=%d job=%s", n, jobs.cancelCalls, jobs.jobID)
+	if n != 1 || repo.failedTaskID != "task-expired" {
+		t.Fatalf("failed=%d task=%s", n, repo.failedTaskID)
 	}
-	if !strings.Contains(jobs.reason, "runtime assets were not finalized") {
-		t.Fatalf("cancel reason=%q", jobs.reason)
+	if !strings.Contains(repo.failureReason, "runtime assets were not finalized") {
+		t.Fatalf("failure reason=%q", repo.failureReason)
 	}
 }

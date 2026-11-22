@@ -74,6 +74,12 @@ func (r *SQLiteTaskRepository) FailRuntimeFinalization(ctx context.Context, task
 	return err
 }
 
+// FailStaleRuntimePrepare closes a Master job whose immutable runtime assets
+// were never finalized before the prepare watchdog expired.
+func (r *SQLiteTaskRepository) FailStaleRuntimePrepare(ctx context.Context, taskID, message string) (bool, error) {
+	return r.failRuntimeFinalization(ctx, taskID, "RUNTIME_ASSET_PREFETCH_TIMEOUT", message, false)
+}
+
 func (r *SQLiteTaskRepository) failRuntimeFinalization(ctx context.Context, taskID, code, message string, dependency bool) (bool, error) {
 	if r == nil || r.store == nil || r.store.db == nil || strings.TrimSpace(taskID) == "" {
 		return false, errors.New("runtime finalization failure: initialized store and task ID are required")
@@ -96,11 +102,13 @@ func (r *SQLiteTaskRepository) failRuntimeFinalization(ctx context.Context, task
 		return false, err
 	}
 	var jobID, executor, payloadJSON, state string
+	var assetsPending bool
 	var version int
 	if err := tx.QueryRowContext(ctx, `SELECT t.job_id,t.executor_id,s.spec_version,s.payload_json,
-		COALESCE(json_extract(s.payload_json,'$.runtime_finalize_status'),'')
+		COALESCE(json_extract(s.payload_json,'$.runtime_finalize_status'),''),
+		COALESCE(json_extract(s.payload_json,'$.runtime_assets_pending'),0)
 		FROM tasks t JOIN task_specs s ON s.task_id=t.task_id WHERE t.task_id=?`, taskID).
-		Scan(&jobID, &executor, &version, &payloadJSON, &state); err != nil {
+		Scan(&jobID, &executor, &version, &payloadJSON, &state, &assetsPending); err != nil {
 		return false, fmt.Errorf("runtime finalization failure read: %w", err)
 	}
 	if dependency {
@@ -145,7 +153,7 @@ func (r *SQLiteTaskRepository) failRuntimeFinalization(ctx context.Context, task
 			}
 		}
 		message = fmt.Sprintf("preparation task %s ended %s: %s %s", childID, childStatus, errorCode, errorMessage)
-	} else if state != "RUNNING" {
+	} else if state != "RUNNING" && !(code == "RUNTIME_ASSET_PREFETCH_TIMEOUT" && state == "WAITING_PREPARATION" && assetsPending) {
 		return false, nil
 	}
 	message = strings.TrimSpace(message)

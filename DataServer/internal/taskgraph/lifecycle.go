@@ -52,8 +52,8 @@ type JobsRetryQuerier interface {
 	Fail(ctx context.Context, id string, reason string) error
 }
 
-type stalePrepareCanceller interface {
-	Cancel(ctx context.Context, id, reason string, revision int) error
+type staleRuntimePrepareFailer interface {
+	FailStaleRuntimePrepare(ctx context.Context, taskID, reason string) (bool, error)
 }
 
 // DefaultRuntimeAssetsPrepareTTL bounds a Master PREPARE that never receives
@@ -100,10 +100,10 @@ func (l *LifecycleService) WithTaskReadyHook(hook func(context.Context, string))
 // Repo exposes the canonical taskgraph.Repository.
 func (l *LifecycleService) Repo() Repository { return l.repo }
 
-// CancelStaleRuntimeAssetPrepares cancels tasks that are still waiting for
-// runtime assets after the prepare TTL. Job cancellation owns the atomic
-// parent/task/attempt transition; this sweep only selects eligible candidates.
-func (l *LifecycleService) CancelStaleRuntimeAssetPrepares(ctx context.Context, now time.Time, limit int) (int, error) {
+// FailStaleRuntimeAssetPrepares fails jobs still waiting for runtime assets
+// after the prepare TTL. The repository owns the atomic parent/task transition;
+// this sweep only selects eligible candidates.
+func (l *LifecycleService) FailStaleRuntimeAssetPrepares(ctx context.Context, now time.Time, limit int) (int, error) {
 	if l == nil || l.repo == nil {
 		return 0, fmt.Errorf("taskgraph: lifecycle repository is required")
 	}
@@ -111,9 +111,9 @@ func (l *LifecycleService) CancelStaleRuntimeAssetPrepares(ctx context.Context, 
 	if !ok {
 		return 0, fmt.Errorf("taskgraph: runtime prepare expiry requires task spec storage")
 	}
-	canceller, ok := l.jobsRepo.(stalePrepareCanceller)
+	failer, ok := l.repo.(staleRuntimePrepareFailer)
 	if !ok {
-		return 0, fmt.Errorf("taskgraph: runtime prepare expiry requires job cancellation")
+		return 0, fmt.Errorf("taskgraph: runtime prepare expiry requires atomic job failure")
 	}
 	if now.IsZero() {
 		now = l.now().UTC()
@@ -126,25 +126,29 @@ func (l *LifecycleService) CancelStaleRuntimeAssetPrepares(ctx context.Context, 
 		return 0, fmt.Errorf("taskgraph: list pending runtime prepares: %w", err)
 	}
 	cutoff := now.Add(-DefaultRuntimeAssetsPrepareTTL)
-	cancelled := 0
+	failed := 0
 	for _, task := range tasks {
 		if task.JobID == "" || task.CreatedAt.IsZero() || task.CreatedAt.After(cutoff) {
 			continue
 		}
 		payload, err := specs.GetTaskSpecPayload(ctx, task.ID)
 		if err != nil {
-			return cancelled, fmt.Errorf("taskgraph: read prepare payload %s: %w", task.ID, err)
+			return failed, fmt.Errorf("taskgraph: read prepare payload %s: %w", task.ID, err)
 		}
 		pending, _ := payload["runtime_assets_pending"].(bool)
 		if !pending {
 			continue
 		}
-		if err := canceller.Cancel(ctx, task.JobID, "runtime assets were not finalized before the prepare TTL expired", -1); err != nil {
+		changed, err := failer.FailStaleRuntimePrepare(ctx, task.ID, "runtime assets were not finalized before the prepare TTL expired")
+		if err != nil {
 			continue // A concurrent FINALIZE, cancellation or terminal result won.
 		}
-		cancelled++
+		if !changed {
+			continue
+		}
+		failed++
 	}
-	return cancelled, nil
+	return failed, nil
 }
 
 // Transition validates and executes a status transition.

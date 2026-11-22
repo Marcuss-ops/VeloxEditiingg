@@ -192,6 +192,51 @@ func TestRuntimeFinalizerFailureClosesJob(t *testing.T) {
 	}
 }
 
+func TestStaleRuntimeAssetPrepareFailsJobWithSpecificCause(t *testing.T) {
+	repo, db := runtimeFailureFixture(t, "READY", "SUCCEEDED", "WAITING_PREPARATION", false)
+	changed, err := repo.FailStaleRuntimePrepare(context.Background(), "assembly", "runtime assets were not finalized before the prepare TTL expired")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	var jobStatus, taskStatus, finalizeStatus, code, message string
+	if err := db.QueryRow(`SELECT j.status,t.status,json_extract(s.payload_json,'$.runtime_finalize_status'),
+		json_extract(s.payload_json,'$.runtime_finalize_error_code'),j.error_message
+		FROM jobs j JOIN tasks t ON t.job_id=j.job_id JOIN task_specs s ON s.task_id=t.task_id
+		WHERE t.task_id='assembly'`).Scan(&jobStatus, &taskStatus, &finalizeStatus, &code, &message); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "FAILED" || taskStatus != "FAILED" || finalizeStatus != "FAILED" || code != "RUNTIME_ASSET_PREFETCH_TIMEOUT" || !strings.Contains(message, "runtime assets were not finalized") {
+		t.Fatalf("job/task/finalize/code/message=%s/%s/%s/%s/%q", jobStatus, taskStatus, finalizeStatus, code, message)
+	}
+	var failedEvents, history, outboxCount int
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM job_events WHERE event='job_failed'),
+		(SELECT count(*) FROM job_history WHERE status='FAILED'),(SELECT count(*) FROM test_outbox WHERE event_type='JOB_FAILED')`).
+		Scan(&failedEvents, &history, &outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if failedEvents != 1 || history != 1 || outboxCount != 1 {
+		t.Fatalf("job_failed/history/outbox=%d/%d/%d", failedEvents, history, outboxCount)
+	}
+}
+
+func TestStaleRuntimeAssetPrepareDoesNotFailAfterFinalizeWins(t *testing.T) {
+	repo, db := runtimeFailureFixture(t, "READY", "SUCCEEDED", "WAITING_PREPARATION", false)
+	if _, err := db.Exec(`UPDATE task_specs SET payload_json=json_set(payload_json,'$.runtime_assets_pending',json('false')) WHERE task_id='assembly'`); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := repo.FailStaleRuntimePrepare(context.Background(), "assembly", "runtime assets were not finalized before the prepare TTL expired")
+	if err != nil || changed {
+		t.Fatalf("changed=%v err=%v; finalize must win atomically", changed, err)
+	}
+	var jobStatus, taskStatus string
+	if err := db.QueryRow(`SELECT j.status,t.status FROM jobs j JOIN tasks t ON t.job_id=j.job_id WHERE t.task_id='assembly'`).Scan(&jobStatus, &taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "RUNNING" || taskStatus != "READY" {
+		t.Fatalf("job/task=%s/%s; concurrent finalization must be preserved", jobStatus, taskStatus)
+	}
+}
+
 func TestRuntimeFinalizerTransientRetryIsDurableAndBounded(t *testing.T) {
 	repo, db := runtimeFailureFixture(t, "READY", "SUCCEEDED", "RUNNING", false)
 	ctx := context.Background()
