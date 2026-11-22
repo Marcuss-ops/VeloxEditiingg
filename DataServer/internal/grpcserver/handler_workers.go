@@ -152,30 +152,31 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		}
 	}
 
-	// Version correlation (Step 4 / Velox Metrics Center): store the
-	// worker's software versions on the session so handleTaskResult can
-	// stamp them on task_attempts at report time.
-	//
-	// git_sha → hb.GetCodeVersion() (the deployed commit hash)
-	// engine_version → hb.GetEngineVersion()
-	// worker_version / ffmpeg_version → hb.GetExtra() map (if present)
+	// Version correlation: keep the source commit distinct from the worker's
+	// semantic software version. Heartbeat.CodeVersion is the worker version
+	// (for example v1.4.54), not a Git SHA. The release certificate under the
+	// nested capabilities map is authoritative for source_commit; legacy
+	// capabilities.git_sha remains a compatible projection of that field.
 	if sess != nil {
-		if v := hb.GetCodeVersion(); v != "" {
-			sess.gitSHA.Store(v)
-		}
+		workerVersion := hb.GetCodeVersion()
 		if v := hb.GetEngineVersion(); v != "" {
 			sess.engineVersion.Store(v)
 		}
-		// worker_version and ffmpeg_version come from the extra map
-		// (proto v3 does not carry top-level fields for these).
 		if hb.GetExtra() != nil {
 			extraMap := hb.GetExtra().AsMap()
-			if v, ok := extraMap["worker_version"].(string); ok && v != "" {
-				sess.workerVersion.Store(v)
+			caps, _ := extraMap["capabilities"].(map[string]interface{})
+			if identity, ok := controltransport.ReleaseIdentityFromCapabilities(caps); ok && identity.SourceCommit != "" {
+				sess.gitSHA.Store(identity.SourceCommit)
 			}
-			if v, ok := extraMap["ffmpeg_version"].(string); ok && v != "" {
+			if v, ok := caps["worker_version"].(string); ok && v != "" {
+				workerVersion = v
+			}
+			if v, ok := caps["ffmpeg_version"].(string); ok && v != "" {
 				sess.ffmpegVersion.Store(v)
 			}
+		}
+		if workerVersion != "" {
+			sess.workerVersion.Store(workerVersion)
 		}
 	}
 
