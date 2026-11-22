@@ -81,18 +81,20 @@ func (s *httpAssetSource) Open(ctx context.Context, offset int64) (io.ReadCloser
 			// returning the full body would corrupt the partial, so signal
 			// range-unsupported instead of silently returning bytes from zero.
 			resp.Body.Close()
-			return nil, downloader.SourceMetadata{}, errRangeIgnored
+			return nil, downloader.SourceMetadata{HTTPStatus: resp.StatusCode}, errRangeIgnored
 		}
 		meta := downloader.SourceMetadata{
-			SizeBytes: resp.ContentLength,
-			MIMEType:  resp.Header.Get("Content-Type"),
+			SizeBytes:  resp.ContentLength,
+			MIMEType:   resp.Header.Get("Content-Type"),
+			HTTPStatus: resp.StatusCode,
 		}
 		if offset > 0 {
 			contentRange := strings.TrimSpace(resp.Header.Get("Content-Range"))
 			start, _, total, parseErr := parseAssetContentRange(contentRange)
 			if parseErr != nil || start != offset {
+				status := resp.StatusCode
 				resp.Body.Close()
-				return nil, downloader.SourceMetadata{}, errRangeIgnored
+				return nil, downloader.SourceMetadata{HTTPStatus: status}, errRangeIgnored
 			}
 			if total > 0 {
 				meta.SizeBytes = total
@@ -101,25 +103,25 @@ func (s *httpAssetSource) Open(ctx context.Context, offset int64) (io.ReadCloser
 		return resp.Body, meta, nil
 	case resp.StatusCode == http.StatusNotFound:
 		resp.Body.Close()
-		return nil, downloader.SourceMetadata{}, errAssetNotFound
+		return nil, downloader.SourceMetadata{HTTPStatus: resp.StatusCode}, errAssetNotFound
 	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
 		resp.Body.Close()
-		return nil, downloader.SourceMetadata{}, errRangeNotSatisfiable
+		return nil, downloader.SourceMetadata{HTTPStatus: resp.StatusCode}, errRangeNotSatisfiable
 	case downloader.IsPermanentStatus(resp.StatusCode):
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, downloader.SourceMetadata{}, downloader.NewHTTPStatusError(
+		return nil, downloader.SourceMetadata{HTTPStatus: resp.StatusCode}, downloader.NewHTTPStatusError(
 			resp.StatusCode, strings.TrimSpace(string(body)), 0)
 	case downloader.IsRetryableStatus(resp.StatusCode):
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, downloader.SourceMetadata{}, downloader.NewHTTPStatusError(
+		return nil, downloader.SourceMetadata{HTTPStatus: resp.StatusCode}, downloader.NewHTTPStatusError(
 			resp.StatusCode, strings.TrimSpace(string(body)), downloader.RetryAfter(resp))
 	default:
 		// Any other status (3xx, unexpected 2xx) cannot safely satisfy the
 		// requested window.
 		resp.Body.Close()
-		return nil, downloader.SourceMetadata{}, errRangeIgnored
+		return nil, downloader.SourceMetadata{HTTPStatus: resp.StatusCode}, errRangeIgnored
 	}
 }
 

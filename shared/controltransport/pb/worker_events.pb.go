@@ -290,6 +290,8 @@ type AssetDownloadProgress struct {
 	JobRefs            []*AssetJobReference   `protobuf:"bytes,25,rep,name=job_refs,json=jobRefs,proto3" json:"job_refs,omitempty"`
 	CheckpointSequence int64                  `protobuf:"varint,26,opt,name=checkpoint_sequence,json=checkpointSequence,proto3" json:"checkpoint_sequence,omitempty"`
 	TransferGeneration int64                  `protobuf:"varint,27,opt,name=transfer_generation,json=transferGeneration,proto3" json:"transfer_generation,omitempty"`
+	HttpStatus         int32                  `protobuf:"varint,28,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
+	HashVerified       bool                   `protobuf:"varint,29,opt,name=hash_verified,json=hashVerified,proto3" json:"hash_verified,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -511,6 +513,20 @@ func (x *AssetDownloadProgress) GetTransferGeneration() int64 {
 		return x.TransferGeneration
 	}
 	return 0
+}
+
+func (x *AssetDownloadProgress) GetHttpStatus() int32 {
+	if x != nil {
+		return x.HttpStatus
+	}
+	return 0
+}
+
+func (x *AssetDownloadProgress) GetHashVerified() bool {
+	if x != nil {
+		return x.HashVerified
+	}
+	return false
 }
 
 // PrefetchLifecycleEvent is a lightweight worker-to-master event for
@@ -761,7 +777,7 @@ const file_velox_control_worker_events_proto_rawDesc = "" +
 	"\x11AssetJobReference\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12\x1b\n" +
-	"\tscene_ids\x18\x03 \x03(\tR\bsceneIds\"\xc7\a\n" +
+	"\tscene_ids\x18\x03 \x03(\tR\bsceneIds\"\x8d\b\n" +
 	"\x15AssetDownloadProgress\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1f\n" +
 	"\vtransfer_id\x18\x02 \x01(\tR\n" +
@@ -794,7 +810,10 @@ const file_velox_control_worker_events_proto_rawDesc = "" +
 	"\ferror_detail\x18\x18 \x01(\tR\verrorDetail\x12;\n" +
 	"\bjob_refs\x18\x19 \x03(\v2 .velox.control.AssetJobReferenceR\ajobRefs\x12/\n" +
 	"\x13checkpoint_sequence\x18\x1a \x01(\x03R\x12checkpointSequence\x12/\n" +
-	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\xe6\x06\n" +
+	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\x12\x1f\n" +
+	"\vhttp_status\x18\x1c \x01(\x05R\n" +
+	"httpStatus\x12#\n" +
+	"\rhash_verified\x18\x1d \x01(\bR\fhashVerified\"\xe6\x06\n" +
 	"\x16PrefetchLifecycleEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x15\n" +

@@ -18,6 +18,9 @@ type AssetDownloadProgressView struct {
 	UpdatedAt       string   `json:"updated_at"`
 	ErrorCode       string   `json:"error_code,omitempty"`
 	ErrorDetail     string   `json:"error_detail,omitempty"`
+	HTTPStatus      int      `json:"http_status,omitempty"`
+	HashVerified    bool     `json:"hash_verified"`
+	SHA256          string   `json:"sha256,omitempty"`
 	TaskID          string   `json:"task_id,omitempty"`
 	SceneIDs        []string `json:"scene_ids,omitempty"`
 }

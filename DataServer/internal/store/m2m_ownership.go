@@ -366,7 +366,8 @@ func (s *SQLiteStore) ListAssetDownloadProgressForJobForClient(ctx context.Conte
 		SELECT r.job_id, d.worker_id, d.asset_key, d.asset_id, d.role, d.state,
 		       d.bytes_downloaded, d.bytes_total, d.bytes_per_second, d.eta_seconds,
 		       d.attempt, d.shared_waiters, d.cache_hit, d.updated_at,
-		       d.error_code, d.error_detail, r.task_id, r.scene_ids_json
+		       d.error_code, d.error_detail, r.task_id, r.scene_ids_json,
+		       d.http_status, d.hash_verified, d.sha256
 		FROM job_asset_refs r
 	JOIN worker_asset_downloads d ON d.worker_id=r.worker_id AND d.asset_key=r.asset_key
 	WHERE r.job_id=?
@@ -390,7 +391,7 @@ func scanAssetDownloadProgress(rows *sql.Rows, jobID string) ([]AssetDownloadPro
 		if err := rows.Scan(&v.JobID, &v.WorkerID, &v.AssetKey, &v.AssetID, &v.Role, &v.State,
 			&v.BytesDownloaded, &v.BytesTotal, &v.BytesPerSecond, &v.ETASeconds,
 			&v.Attempt, &v.SharedWaiters, &cacheHit, &v.UpdatedAt,
-			&v.ErrorCode, &v.ErrorDetail, &v.TaskID, &sceneJSON); err != nil {
+			&v.ErrorCode, &v.ErrorDetail, &v.TaskID, &sceneJSON, &v.HTTPStatus, &v.HashVerified, &v.SHA256); err != nil {
 			return nil, fmt.Errorf("asset download progress: scan job %s: %w", jobID, err)
 		}
 		v.CacheHit = cacheHit != 0

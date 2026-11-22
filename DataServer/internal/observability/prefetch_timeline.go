@@ -2,8 +2,15 @@ package observability
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+)
+
+var (
+	prefetchURLPattern    = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
+	prefetchBearerPattern = regexp.MustCompile(`(?i)bearer\s+[a-z0-9._~+/-]+=*`)
+	prefetchSecretPattern = regexp.MustCompile(`(?i)(token|sig|signature|credential|key)=([^&\s]+)`)
 )
 
 // PrefetchTimeline is the canonical operator projection for one future asset.
@@ -11,7 +18,9 @@ import (
 // the projection never fabricates timing from the job waterfall.
 type PrefetchTimeline struct {
 	AssetKey            string `json:"asset_key"`
+	AssetID             string `json:"asset_id,omitempty"`
 	JobID               string `json:"job_id"`
+	Phase               string `json:"phase,omitempty"`
 	TaskID              string `json:"task_id,omitempty"`
 	WorkerID            string `json:"worker_id,omitempty"`
 	PlanID              string `json:"plan_id,omitempty"`
@@ -25,6 +34,15 @@ type PrefetchTimeline struct {
 	PrefetchReadyLeadMS int64  `json:"prefetch_ready_lead_ms,omitempty"`
 	CacheHit            bool   `json:"cache_hit,omitempty"`
 	Origin              string `json:"origin,omitempty"`
+	Attempts            int    `json:"attempts,omitempty"`
+	LastHTTPStatus      int    `json:"last_http_status,omitempty"`
+	BytesReceived       int64  `json:"bytes_received,omitempty"`
+	BytesExpected       int64  `json:"bytes_expected,omitempty"`
+	SHA256              string `json:"sha256,omitempty"`
+	HashVerified        bool   `json:"hash_verified"`
+	LastErrorCode       string `json:"last_error_code,omitempty"`
+	LastError           string `json:"last_error,omitempty"`
+	LastProgressAt      string `json:"last_progress_at,omitempty"`
 }
 
 // BuildPrefetchTimeline groups the durable prefetch events for a job by the
@@ -47,7 +65,7 @@ func BuildPrefetchTimeline(events []JobEvent) []PrefetchTimeline {
 			}
 			entry := byKey[key]
 			if entry == nil {
-				entry = &PrefetchTimeline{AssetKey: key, JobID: event.JobID}
+				entry = &PrefetchTimeline{AssetKey: key, JobID: event.JobID, Phase: "PLANNED"}
 				byKey[key] = entry
 			}
 			mergePrefetchEvent(entry, event)
@@ -66,6 +84,59 @@ func BuildPrefetchTimeline(events []JobEvent) []PrefetchTimeline {
 	return result
 }
 
+// mergePrefetchAssetProgress joins the planned asset keys from the event
+// journal with the worker's latest transfer checkpoints. The response contains
+// only opaque asset keys and transfer metadata; signed source URLs never enter
+// the operator read model.
+func mergePrefetchAssetProgress(planned []PrefetchTimeline, progress []AssetProgressView, jobID string) []PrefetchTimeline {
+	byKey := make(map[string]int, len(planned)+len(progress))
+	for i := range planned {
+		byKey[planned[i].AssetKey] = i
+	}
+	for _, asset := range progress {
+		if asset.AssetKey == "" {
+			continue
+		}
+		index, exists := byKey[asset.AssetKey]
+		if !exists {
+			planned = append(planned, PrefetchTimeline{AssetKey: asset.AssetKey, JobID: jobID})
+			index = len(planned) - 1
+			byKey[asset.AssetKey] = index
+		}
+		entry := &planned[index]
+		entry.Phase = asset.State
+		entry.AssetID = asset.AssetID
+		entry.WorkerID = firstNonEmpty(asset.WorkerID, entry.WorkerID)
+		entry.TaskID = firstNonEmpty(asset.TaskID, entry.TaskID)
+		entry.Attempts = asset.Attempt
+		entry.LastHTTPStatus = asset.HTTPStatus
+		entry.BytesReceived = asset.BytesDownloaded
+		entry.BytesExpected = asset.BytesTotal
+		entry.SHA256 = asset.SHA256
+		entry.HashVerified = asset.HashVerified
+		entry.LastErrorCode = asset.ErrorCode
+		entry.LastError = sanitizePrefetchError(asset.ErrorDetail)
+		entry.LastProgressAt = asset.UpdatedAt
+		if asset.CacheHit {
+			entry.CacheHit = true
+			entry.Phase = "CACHE_HIT"
+		}
+	}
+	sort.Slice(planned, func(i, j int) bool {
+		if planned[i].Distance != planned[j].Distance {
+			return planned[i].Distance < planned[j].Distance
+		}
+		return planned[i].AssetKey < planned[j].AssetKey
+	})
+	return planned
+}
+
+func sanitizePrefetchError(message string) string {
+	message = prefetchURLPattern.ReplaceAllString(message, "[source URL redacted]")
+	message = prefetchBearerPattern.ReplaceAllString(message, "Bearer [redacted]")
+	return prefetchSecretPattern.ReplaceAllString(message, "$1=[redacted]")
+}
+
 func mergePrefetchEvent(entry *PrefetchTimeline, event JobEvent) {
 	p := event.Payload
 	entry.TaskID = firstNonEmpty(entry.TaskID, stringValue(p, "task_id"))
@@ -80,11 +151,14 @@ func mergePrefetchEvent(entry *PrefetchTimeline, event JobEvent) {
 	}
 	switch event.Event {
 	case "prefetch.future_plan_sent":
+		entry.Phase = "PLANNED"
 		entry.PlanSentAt = firstNonEmpty(entry.PlanSentAt, stringValue(p, "plan_sent_at"))
 	case "prefetch.download_started":
+		entry.Phase = "DOWNLOADING"
 		entry.DownloadStartedAt = firstNonEmpty(entry.DownloadStartedAt, stringValue(p, "download_started_at"))
 		entry.Origin = firstNonEmpty(entry.Origin, stringValue(p, "origin"))
 	case "prefetch.asset_ready":
+		entry.Phase = "READY"
 		entry.DownloadStartedAt = firstNonEmpty(entry.DownloadStartedAt, stringValue(p, "download_started_at"))
 		entry.AssetReadyAt = firstNonEmpty(entry.AssetReadyAt, stringValue(p, "asset_ready_at"))
 		entry.CacheHit = boolValue(p, "cache_hit")
@@ -94,6 +168,9 @@ func mergePrefetchEvent(entry *PrefetchTimeline, event JobEvent) {
 		entry.JobStartedAt = firstNonEmpty(entry.JobStartedAt, stringValue(p, "job_started_at"))
 		entry.PrefetchReadyLeadMS = intValue(p, "prefetch_ready_lead_ms")
 		entry.Origin = firstNonEmpty(entry.Origin, stringValue(p, "origin"))
+	}
+	if strings.Contains(event.Event, "failed") || strings.Contains(event.Event, "error") {
+		entry.Phase = "FAILED"
 	}
 }
 

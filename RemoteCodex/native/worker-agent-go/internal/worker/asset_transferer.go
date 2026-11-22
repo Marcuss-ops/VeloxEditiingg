@@ -166,6 +166,7 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 	}
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
 	var result downloader.TransferResult
+	lastHTTPStatus := 0
 	err := downloader.Retry(ctx, downloader.RetryConfig{
 		MaxAttempts: downloader.DefaultMaxAttempts,
 		Backoff:     backoffs,
@@ -178,7 +179,14 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 		}
 
 		body, meta, openErr := source.Open(ctx, resumeOffset)
+		if meta.HTTPStatus != 0 {
+			lastHTTPStatus = meta.HTTPStatus
+		}
 		if openErr != nil {
+			var statusErr *downloader.HTTPStatusError
+			if errors.As(openErr, &statusErr) {
+				lastHTTPStatus = statusErr.StatusCode
+			}
 			switch {
 			case errors.Is(openErr, errAssetNotFound):
 				return downloader.AttemptResult{Err: fmt.Errorf("asset not found (source=%s)", assetSourceDiagnosticLabel(req.SourceURI))}
@@ -194,6 +202,9 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 				// restart from byte zero within this attempt.
 				removeAssetPartial(cacheDir, assetID, string(req.SHA256))
 				body, meta, openErr = source.Open(ctx, 0)
+				if meta.HTTPStatus != 0 {
+					lastHTTPStatus = meta.HTTPStatus
+				}
 				if openErr != nil {
 					if errors.Is(openErr, errAssetNotFound) {
 						return downloader.AttemptResult{Err: fmt.Errorf("asset not found (source=%s)", assetSourceDiagnosticLabel(req.SourceURI))}
@@ -258,9 +269,10 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			}
 		}
 		result = downloader.TransferResult{
-			LocalPath: localPath,
-			Bytes:     downloadedBytes,
-			SHA256:    verifiedHash,
+			LocalPath:  localPath,
+			Bytes:      downloadedBytes,
+			SHA256:     verifiedHash,
+			HTTPStatus: meta.HTTPStatus,
 			Timing: downloader.TransferSubPhases{
 				HashVerifyMS:       hashVerifyMS.Milliseconds(),
 				MaterializeLocalMS: materializeLocalMS.Milliseconds(),
@@ -269,8 +281,11 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 		}
 		return downloader.AttemptResult{}
 	})
+	if result.HTTPStatus == 0 {
+		result.HTTPStatus = lastHTTPStatus
+	}
 	if err != nil {
-		return downloader.TransferResult{}, fmt.Errorf("failed to download velox asset %s: %w", assetID, err)
+		return result, fmt.Errorf("failed to download velox asset %s: %w", assetID, err)
 	}
 	return result, nil
 }

@@ -120,6 +120,8 @@ func (t *Transfer) snapshotLocked(now time.Time) DownloadSnapshot {
 		CacheHit:           t.cacheHit,
 		ErrorCode:          errorCodeOf(t.err),
 		ErrorDetail:        errorDetailOf(t.err),
+		HTTPStatus:         t.res.HTTPStatus,
+		HashVerified:       t.state == DownloadReady && t.res.SHA256 != "" && (t.req.SHA256 == "" || t.res.SHA256 == t.req.SHA256),
 		CheckpointSequence: t.checkpointSequence,
 		JobIDs:             sortedJobIDs(t.jobRefs),
 		JobRefs:            snapshotJobRefs(t.jobRefs),

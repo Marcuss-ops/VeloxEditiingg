@@ -110,12 +110,25 @@ type AssetProgressReader interface {
 // by the /live endpoint. It mirrors the store's AssetDownloadProgressView
 // but avoids importing the store package from the observability layer.
 type AssetProgressView struct {
+	JobID           string  `json:"job_id"`
+	WorkerID        string  `json:"worker_id"`
+	AssetKey        string  `json:"asset_key"`
+	AssetID         string  `json:"asset_id"`
+	Role            string  `json:"role"`
 	State           string  `json:"state"`
 	BytesDownloaded int64   `json:"bytes_downloaded"`
 	BytesTotal      int64   `json:"bytes_total"`
 	BytesPerSecond  float64 `json:"bytes_per_second"`
 	ETASeconds      int64   `json:"eta_seconds"`
+	Attempt         int     `json:"attempt"`
 	CacheHit        bool    `json:"cache_hit"`
+	UpdatedAt       string  `json:"updated_at"`
+	HTTPStatus      int     `json:"http_status"`
+	SHA256          string  `json:"sha256,omitempty"`
+	HashVerified    bool    `json:"hash_verified"`
+	ErrorCode       string  `json:"error_code,omitempty"`
+	ErrorDetail     string  `json:"error_detail,omitempty"`
+	TaskID          string  `json:"task_id,omitempty"`
 }
 
 // JobInspectionReader is the optional read model behind the operator-facing

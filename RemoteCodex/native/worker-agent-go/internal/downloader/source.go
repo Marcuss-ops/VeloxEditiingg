@@ -32,9 +32,10 @@ import (
 // remaining after the requested offset. SHA256 and MIMEType are optional
 // source hints and do not replace the manager's final integrity verification.
 type SourceMetadata struct {
-	SizeBytes int64
-	SHA256    assetref.ContentHash
-	MIMEType  string
+	SizeBytes  int64
+	SHA256     assetref.ContentHash
+	MIMEType   string
+	HTTPStatus int
 }
 
 // AssetSource is the canonical byte source contract for resumable downloads.
@@ -76,9 +77,10 @@ type CacheCheckResult struct {
 
 // TransferResult is the outcome of a Transferer.Transfer.
 type TransferResult struct {
-	LocalPath string
-	Bytes     int64
-	SHA256    assetref.ContentHash
+	LocalPath  string
+	Bytes      int64
+	SHA256     assetref.ContentHash
+	HTTPStatus int
 	// Timing carries the technical sub-phase breakdown (probe, verify,
 	// materialize, byte-work). The manager copies it onto DownloadedAsset so
 	// the per-attempt aggregator can drill down without re-instrumenting the

@@ -52,6 +52,13 @@ func (s *Service) InspectJob(ctx context.Context, jobID string) (*JobInspection,
 	} else {
 		return nil, fmt.Errorf("observability: list job events: %w", eventErr)
 	}
+	if s.assetProgress != nil {
+		assets, assetErr := s.assetProgress.ListAssetDownloadProgressForJob(ctx, jobID)
+		if assetErr != nil {
+			return nil, fmt.Errorf("observability: list prefetch asset progress: %w", assetErr)
+		}
+		result.Prefetch = mergePrefetchAssetProgress(result.Prefetch, assets, jobID)
+	}
 	if artifacts, artifactErr := s.jobInspection.ListArtifacts(ctx, jobID, 100); artifactErr == nil {
 		result.Artifacts = artifacts
 	} else {

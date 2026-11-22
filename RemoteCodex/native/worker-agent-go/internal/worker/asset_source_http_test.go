@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -54,6 +56,9 @@ func TestHTTPAssetSourceOpenReturnsFullBodyAndMetadata(t *testing.T) {
 	if meta.MIMEType != "audio/mpeg" {
 		t.Fatalf("MIMEType = %q, want audio/mpeg", meta.MIMEType)
 	}
+	if meta.HTTPStatus != http.StatusOK {
+		t.Fatalf("HTTPStatus = %d, want 200", meta.HTTPStatus)
+	}
 }
 
 func TestHTTPAssetSourceOpenReturnsRangeSuffix(t *testing.T) {
@@ -78,6 +83,54 @@ func TestHTTPAssetSourceOpenReturnsRangeSuffix(t *testing.T) {
 	}
 	if meta.SizeBytes != int64(len(data)) {
 		t.Fatalf("SizeBytes = %d, want total %d", meta.SizeBytes, len(data))
+	}
+	if meta.HTTPStatus != http.StatusPartialContent {
+		t.Fatalf("HTTPStatus = %d, want 206", meta.HTTPStatus)
+	}
+}
+
+func TestHTTPAssetSourceAcceptsAndVerifiesTwentyNinePartialAssets(t *testing.T) {
+	assets := make([][]byte, 29)
+	for i := range assets {
+		assets[i] = []byte("asset-" + strconv.Itoa(i) + "-content-addressed-prefetch")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		index, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
+		if err != nil || index < 0 || index >= len(assets) {
+			http.NotFound(w, r)
+			return
+		}
+		const offset = 4
+		if got := r.Header.Get("Range"); got != "bytes=4-" {
+			http.Error(w, "range required", http.StatusBadRequest)
+			return
+		}
+		data := assets[index]
+		w.Header().Set("Content-Range", "bytes 4-"+strconv.Itoa(len(data)-1)+"/"+strconv.Itoa(len(data)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)-offset))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(data[offset:])
+	}))
+	defer srv.Close()
+
+	for i, expected := range assets {
+		src := newHTTPAssetSource(srv.URL+"/"+strconv.Itoa(i), noToken, srv.Client())
+		body, meta, err := src.Open(context.Background(), 4)
+		if err != nil {
+			t.Fatalf("asset %d Open(4): %v", i, err)
+		}
+		got, err := io.ReadAll(body)
+		_ = body.Close()
+		if err != nil {
+			t.Fatalf("asset %d read: %v", i, err)
+		}
+		if string(got) != string(expected[4:]) || meta.SizeBytes != int64(len(expected)) || meta.HTTPStatus != http.StatusPartialContent {
+			t.Fatalf("asset %d range response bytes=%q total=%d status=%d", i, got, meta.SizeBytes, meta.HTTPStatus)
+		}
+		actualHash := sha256.Sum256(expected)
+		if gotHash := sha256.Sum256(append(append([]byte(nil), expected[:4]...), got...)); gotHash != actualHash {
+			t.Fatalf("asset %d reconstructed SHA-256 mismatch", i)
+		}
 	}
 }
 

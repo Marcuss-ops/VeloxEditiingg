@@ -63,12 +63,25 @@ func (a *sqliteAssetProgressAdapter) ListAssetDownloadProgressForJob(ctx context
 	out := make([]observability.AssetProgressView, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, observability.AssetProgressView{
+			JobID:           r.JobID,
+			WorkerID:        r.WorkerID,
+			AssetKey:        r.AssetKey,
+			AssetID:         r.AssetID,
+			Role:            r.Role,
 			State:           r.State,
 			BytesDownloaded: r.BytesDownloaded,
 			BytesTotal:      r.BytesTotal,
 			BytesPerSecond:  r.BytesPerSecond,
 			ETASeconds:      r.ETASeconds,
+			Attempt:         r.Attempt,
 			CacheHit:        r.CacheHit,
+			UpdatedAt:       r.UpdatedAt,
+			HTTPStatus:      r.HTTPStatus,
+			SHA256:          r.SHA256,
+			HashVerified:    r.HashVerified,
+			ErrorCode:       r.ErrorCode,
+			ErrorDetail:     r.ErrorDetail,
+			TaskID:          r.TaskID,
 		})
 	}
 	return out, nil

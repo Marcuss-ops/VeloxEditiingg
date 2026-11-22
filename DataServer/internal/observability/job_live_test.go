@@ -362,16 +362,16 @@ func TestJobLive_PopulatesAssetsWhenReaderWired(t *testing.T) {
 	}}
 
 	svc.WithJobs(&inspectionJobReader{job: &jobs.Job{ID: "J-asset", Status: jobs.StatusRunning}}).
-		WithJobInspection(inspectionExtras{}).
+		WithJobInspection(&prefetchJobInspectionStub{events: []JobEvent{{Event: "prefetch.future_plan_sent", JobID: "J-asset", Payload: map[string]any{"asset_keys": []any{"asset-ready", "asset-never-started"}}}}}).
 		WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
 			TaskID: "T-asset", JobID: "J-asset", AttemptID: "A-asset", AttemptNumber: 1,
 			WorkerID: "worker-asset", RuntimeStatus: "RUNNING",
 			ProgressPercent: 10, ProgressPhase: "prefetching",
 		}}).
 		WithAssetProgress(&stubAssetProgressReader{assets: []AssetProgressView{
-			{State: "READY", BytesTotal: 500, BytesDownloaded: 500, CacheHit: true},
-			{State: "DOWNLOADING", BytesTotal: 1000, BytesDownloaded: 300, BytesPerSecond: 100, ETASeconds: 7},
-			{State: "QUEUED", BytesTotal: 500, BytesDownloaded: 0},
+			{AssetKey: "asset-ready", AssetID: "asset-id-1", WorkerID: "worker-asset", State: "READY", BytesTotal: 500, BytesDownloaded: 500, CacheHit: true, HTTPStatus: 206, SHA256: "abc", HashVerified: true},
+			{AssetKey: "asset-downloading", State: "DOWNLOADING", BytesTotal: 1000, BytesDownloaded: 300, BytesPerSecond: 100, ETASeconds: 7},
+			{AssetKey: "asset-queued", State: "QUEUED", BytesTotal: 500, BytesDownloaded: 0},
 		}})
 
 	r := gin.New()
@@ -388,8 +388,8 @@ func TestJobLive_PopulatesAssetsWhenReaderWired(t *testing.T) {
 	if resp.Assets == nil {
 		t.Fatal("assets is nil")
 	}
-	if resp.Assets.Total != 3 {
-		t.Errorf("assets.total = %d, want 3", resp.Assets.Total)
+	if resp.Assets.Total != 4 {
+		t.Errorf("assets.total = %d, want 4 including the planned asset", resp.Assets.Total)
 	}
 	if resp.Assets.Ready != 1 {
 		t.Errorf("assets.ready = %d, want 1", resp.Assets.Ready)
@@ -402,6 +402,16 @@ func TestJobLive_PopulatesAssetsWhenReaderWired(t *testing.T) {
 	}
 	if resp.Assets.CacheHits != 1 {
 		t.Errorf("assets.cache_hits = %d, want 1", resp.Assets.CacheHits)
+	}
+	byKey := make(map[string]JobLiveAssetDetail, len(resp.Assets.Items))
+	for _, item := range resp.Assets.Items {
+		byKey[item.AssetKey] = item
+	}
+	if len(byKey) != 4 || byKey["asset-ready"].HTTPStatus != 206 || !byKey["asset-ready"].HashVerified {
+		t.Errorf("asset details = %+v, want planned + live per-asset evidence", resp.Assets.Items)
+	}
+	if item := byKey["asset-never-started"]; item.Phase != "PLANNED" {
+		t.Errorf("unstarted planned asset = %+v, want PLANNED diagnostic", item)
 	}
 }
 
@@ -563,3 +573,15 @@ func (s *stubAssetProgressReader) ListAssetDownloadProgressForJob(_ context.Cont
 }
 
 var _ AssetProgressReader = (*stubAssetProgressReader)(nil)
+
+type prefetchJobInspectionStub struct{ events []JobEvent }
+
+func (s *prefetchJobInspectionStub) ListJobEvents(context.Context, string, int) ([]JobEvent, error) {
+	return s.events, nil
+}
+func (s *prefetchJobInspectionStub) ListArtifacts(context.Context, string, int) ([]ArtifactSnapshot, error) {
+	return nil, nil
+}
+func (s *prefetchJobInspectionStub) ListDeliveries(context.Context, string) ([]DeliverySnapshot, error) {
+	return nil, nil
+}

@@ -116,17 +116,38 @@ type JobLiveExecution struct {
 
 // JobLiveAssets contains the aggregated asset download progress for the job.
 type JobLiveAssets struct {
-	Percent         float64 `json:"percent"`
-	BytesDownloaded int64   `json:"bytes_downloaded"`
-	BytesTotal      int64   `json:"bytes_total"`
-	ThroughputBPS   float64 `json:"throughput_bytes_per_second"`
-	ETASeconds      int64   `json:"eta_seconds"`
-	Ready           int     `json:"ready"`
-	Downloading     int     `json:"downloading"`
-	Queued          int     `json:"queued"`
-	Failed          int     `json:"failed"`
-	CacheHits       int     `json:"cache_hits"`
-	Total           int     `json:"total"`
+	Percent         float64              `json:"percent"`
+	BytesDownloaded int64                `json:"bytes_downloaded"`
+	BytesTotal      int64                `json:"bytes_total"`
+	ThroughputBPS   float64              `json:"throughput_bytes_per_second"`
+	ETASeconds      int64                `json:"eta_seconds"`
+	Ready           int                  `json:"ready"`
+	Downloading     int                  `json:"downloading"`
+	Queued          int                  `json:"queued"`
+	Failed          int                  `json:"failed"`
+	CacheHits       int                  `json:"cache_hits"`
+	Total           int                  `json:"total"`
+	Items           []JobLiveAssetDetail `json:"items,omitempty"`
+}
+
+// JobLiveAssetDetail is the URL-free, per-asset progress exposed by the
+// authenticated admin job read model.
+type JobLiveAssetDetail struct {
+	AssetKey       string `json:"asset_key"`
+	AssetID        string `json:"asset_id,omitempty"`
+	Role           string `json:"role,omitempty"`
+	Phase          string `json:"phase"`
+	WorkerID       string `json:"worker_id,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+	Attempts       int    `json:"attempts"`
+	HTTPStatus     int    `json:"last_http_status,omitempty"`
+	BytesReceived  int64  `json:"bytes_received"`
+	BytesExpected  int64  `json:"bytes_expected"`
+	SHA256         string `json:"sha256,omitempty"`
+	HashVerified   bool   `json:"hash_verified"`
+	LastErrorCode  string `json:"last_error_code,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+	LastProgressAt string `json:"last_progress_at,omitempty"`
 }
 
 // JobLivePublication contains the upload/commit progress for the job.
@@ -172,6 +193,7 @@ func (s *Service) JobLive(ctx context.Context, jobID string) (*JobLiveStatus, er
 		JobID:  jobID,
 		Status: string(job.Status),
 	}
+	s.populateLiveAssetProgress(ctx, jobID, result)
 
 	if task == nil {
 		return result, nil
@@ -269,61 +291,78 @@ func (s *Service) JobLive(ctx context.Context, jobID string) (*JobLiveStatus, er
 		stallNoProgressMS, stallFreshMS, stagnationMS,
 	)
 
-	// Asset download progress.
+	return result, nil
+}
+
+func (s *Service) populateLiveAssetProgress(ctx context.Context, jobID string, result *JobLiveStatus) {
+	if s == nil || result == nil {
+		return
+	}
+	var assets []AssetProgressView
 	if s.assetProgress != nil {
-		assets, assetErr := s.assetProgress.ListAssetDownloadProgressForJob(ctx, jobID)
-		if assetErr == nil && len(assets) > 0 {
-			var downloaded, total int64
-			var throughput float64
-			var etaMax int64
-			ready, downloading, queued, failed, cacheHits := 0, 0, 0, 0, 0
-			for _, a := range assets {
-				total += a.BytesTotal
-				downloaded += a.BytesDownloaded
-				switch a.State {
-				case "READY", "CACHE_HIT":
-					ready++
-					if a.CacheHit {
-						cacheHits++
-					}
-					if a.BytesTotal > a.BytesDownloaded {
-						downloaded += a.BytesTotal - a.BytesDownloaded
-					}
-				case "DOWNLOADING":
-					downloading++
-					if a.BytesPerSecond > 0 {
-						throughput += a.BytesPerSecond
-					}
-					if a.ETASeconds > etaMax {
-						etaMax = a.ETASeconds
-					}
-				case "QUEUED", "CACHE_CHECK", "RETRY_WAIT":
-					queued++
-				case "FAILED", "CANCELLED":
-					failed++
-				}
-			}
-			var percent float64
-			if total > 0 {
-				percent = float64(downloaded) / float64(total) * 100
-			}
-			result.Assets = &JobLiveAssets{
-				Percent:         percent,
-				BytesDownloaded: downloaded,
-				BytesTotal:      total,
-				ThroughputBPS:   throughput,
-				ETASeconds:      etaMax,
-				Ready:           ready,
-				Downloading:     downloading,
-				Queued:          queued,
-				Failed:          failed,
-				CacheHits:       cacheHits,
-				Total:           len(assets),
-			}
+		loaded, err := s.assetProgress.ListAssetDownloadProgressForJob(ctx, jobID)
+		if err == nil {
+			assets = loaded
 		}
 	}
-
-	return result, nil
+	planned := []PrefetchTimeline(nil)
+	if s.jobInspection != nil {
+		if events, err := s.jobInspection.ListJobEvents(ctx, jobID, 500); err == nil {
+			planned = BuildPrefetchTimeline(events)
+		}
+	}
+	itemsTimeline := mergePrefetchAssetProgress(planned, assets, jobID)
+	if len(itemsTimeline) == 0 {
+		return
+	}
+	var downloaded, total int64
+	var throughput float64
+	var etaMax int64
+	ready, downloading, queued, failed, cacheHits := 0, 0, 0, 0, 0
+	for _, a := range assets {
+		total += a.BytesTotal
+		downloaded += a.BytesDownloaded
+		switch a.State {
+		case "READY", "CACHE_HIT":
+			ready++
+			if a.CacheHit {
+				cacheHits++
+			}
+			if a.BytesTotal > a.BytesDownloaded {
+				downloaded += a.BytesTotal - a.BytesDownloaded
+			}
+		case "DOWNLOADING", "VERIFYING":
+			downloading++
+			throughput += a.BytesPerSecond
+			if a.ETASeconds > etaMax {
+				etaMax = a.ETASeconds
+			}
+		case "QUEUED", "CACHE_CHECK", "RETRY_WAIT":
+			queued++
+		case "FAILED", "CANCELLED":
+			failed++
+		}
+	}
+	items := make([]JobLiveAssetDetail, 0, len(itemsTimeline))
+	for _, a := range itemsTimeline {
+		items = append(items, JobLiveAssetDetail{
+			AssetKey: a.AssetKey, AssetID: a.AssetID, Phase: firstNonEmpty(a.Phase, "PLANNED"),
+			WorkerID: a.WorkerID, TaskID: a.TaskID, Attempts: a.Attempts,
+			HTTPStatus: a.LastHTTPStatus, BytesReceived: a.BytesReceived, BytesExpected: a.BytesExpected,
+			SHA256: a.SHA256, HashVerified: a.HashVerified, LastErrorCode: a.LastErrorCode,
+			LastError: a.LastError, LastProgressAt: a.LastProgressAt,
+		})
+	}
+	var percent float64
+	if total > 0 {
+		percent = float64(downloaded) / float64(total) * 100
+	}
+	result.Assets = &JobLiveAssets{
+		Percent: percent, BytesDownloaded: downloaded, BytesTotal: total,
+		ThroughputBPS: throughput, ETASeconds: etaMax,
+		Ready: ready, Downloading: downloading, Queued: queued, Failed: failed,
+		CacheHits: cacheHits, Total: len(items), Items: items,
+	}
 }
 
 // detectStall evaluates three stall conditions and returns the first

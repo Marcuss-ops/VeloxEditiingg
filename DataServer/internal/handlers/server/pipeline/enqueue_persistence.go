@@ -178,6 +178,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 
 		prefetchDispatchStatus, futureAssetPlan, prefetchIssue := h.prefetchReadModel(ctx, jobID, clientID)
+		prefetchDispatchStatus, futureAssetPlan, prefetchIssue = terminalPrefetchProjection(status, jobErrorMessage, prefetchDispatchStatus, futureAssetPlan, prefetchIssue)
 
 		created := forwarding.SourceProvider == ExternalAPISourceProvider
 		statusURL := "/api/v1/jobs/" + jobID
@@ -392,4 +393,22 @@ func prefetchIssueFromEvents(events []store.JobEvent) map[string]interface{} {
 		}
 	}
 	return issue
+}
+
+// terminalPrefetchProjection keeps the advisory prefetch projection aligned
+// with the authoritative terminal job state returned by the Master.
+func terminalPrefetchProjection(status, jobError, dispatchStatus, assetPlan string, issue map[string]interface{}) (string, string, map[string]interface{}) {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "SUCCEEDED":
+		return "completed", "completed", nil
+	case "FAILED":
+		if issue == nil && strings.TrimSpace(jobError) != "" {
+			issue = map[string]interface{}{"event": "job.failed", "message": jobError}
+		}
+		return "job_failed", "failed", issue
+	case "CANCELLED", "CANCELED":
+		return "job_cancelled", "cancelled", nil
+	default:
+		return dispatchStatus, assetPlan, issue
+	}
 }

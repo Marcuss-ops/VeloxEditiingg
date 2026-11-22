@@ -68,6 +68,8 @@ message AssetDownloadProgress {
   repeated AssetJobReference job_refs = 25;
   int64 checkpoint_sequence = 26;
   int64 transfer_generation = 27;
+  int32 http_status = 28;
+  bool hash_verified = 29;
 }
 
 // PrefetchLifecycleEvent is a lightweight worker-to-master event for

@@ -62,6 +62,8 @@ func (h *Handler) handleAssetDownloadProgress(workerID string, p *pb.AssetDownlo
 		SHA256:             p.GetSha256(),
 		ErrorCode:          p.GetErrorCode(),
 		ErrorDetail:        p.GetErrorDetail(),
+		HTTPStatus:         int(p.GetHttpStatus()),
+		HashVerified:       p.GetHashVerified(),
 		ReceivedAt:         time.Now().UTC(),
 	}
 	if err := sink.IngestAssetDownloadProgress(context.Background(), record); err != nil {

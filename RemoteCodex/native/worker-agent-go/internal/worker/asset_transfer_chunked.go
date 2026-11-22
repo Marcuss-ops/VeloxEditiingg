@@ -203,11 +203,12 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 	var wg sync.WaitGroup
 	var primaryOnce sync.Once
 	primaryErr := make(chan error, 1)
+	var lastHTTPStatus atomic.Int32
 	for _, c := range chunks {
 		wg.Add(1)
 		go func(c chunkRange) {
 			defer wg.Done()
-			if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, limiter, networkPacer, c.start == 0); err != nil {
+			if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, limiter, networkPacer, c.start == 0, &lastHTTPStatus); err != nil {
 				primaryOnce.Do(func() {
 					primaryErr <- err
 					cancel()
@@ -221,7 +222,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 	select {
 	case err := <-primaryErr:
 		_ = os.Remove(partialPath)
-		return downloader.TransferResult{}, err
+		return downloader.TransferResult{HTTPStatus: int(lastHTTPStatus.Load())}, err
 	default:
 	}
 
@@ -246,6 +247,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 	recordCacheProjectionEvent(reportCtx, "hash_verify", hashVerifyMS+materializeLocalMS, telemetry.StatusOK, "", 0)
 	return downloader.TransferResult{
 		LocalPath: finalPath, Bytes: written, SHA256: assetref.ContentHash(actualSHA),
+		HTTPStatus: int(lastHTTPStatus.Load()),
 		Timing: downloader.TransferSubPhases{
 			HashVerifyMS:       hashVerifyMS.Milliseconds(),
 			MaterializeLocalMS: materializeLocalMS.Milliseconds(),
@@ -261,7 +263,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 // error. shared/report aggregate progress across all chunk goroutines. The
 // authToken getter is re-read per attempt so a retry after a master restart
 // uses the freshly re-issued session token.
-func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL string, authToken func() string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, networkPacer prefetch.NetworkPacer, sniffHTML bool) error {
+func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL string, authToken func() string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, networkPacer prefetch.NetworkPacer, sniffHTML bool, lastHTTPStatus *atomic.Int32) error {
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
 	return downloader.Retry(ctx, downloader.RetryConfig{
 		MaxAttempts: downloader.DefaultMaxAttempts,
@@ -279,6 +281,9 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL strin
 		resp, err := client.Do(reqHTTP)
 		if err != nil {
 			return downloader.AttemptResult{Err: err, Retry: ctx.Err() == nil}
+		}
+		if lastHTTPStatus != nil {
+			lastHTTPStatus.Store(int32(resp.StatusCode))
 		}
 
 		switch {
