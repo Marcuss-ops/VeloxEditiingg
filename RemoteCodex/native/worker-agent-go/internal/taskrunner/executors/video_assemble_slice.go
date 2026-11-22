@@ -314,7 +314,13 @@ func (e *videoAssembleSliceExecutor) compileStockPoolPlan(_ context.Context, spe
 					poolCursor++
 				}
 				if poolCursor >= len(ordered) {
-					return nil, errors.New("selected stock pool duration is shorter than its timeline slots")
+					// The selected pool is intentionally reusable. Start a fresh
+					// deterministic cycle, resetting each clip's source duration.
+					poolCursor = 0
+					for _, member := range ordered {
+						assetID := "stockpool:" + member.DriveFileID
+						framesLeft[assetID] = member.DurationMS * int64(plan.Output.FPSNum) / (1000 * int64(plan.Output.FPSDen))
+					}
 				}
 				member := ordered[poolCursor]
 				part++

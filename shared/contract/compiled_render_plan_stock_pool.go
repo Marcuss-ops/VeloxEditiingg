@@ -34,10 +34,11 @@ type StockPoolSnapshotV1 struct {
 	Members        []StockPoolCandidateV2 `json:"members"`
 }
 
-// SelectCompiledStockPoolMembers deterministically selects enough Drive stock
-// members to cover all stock-pool slots. The seed and ordering match the
-// worker assembly contract so the Master can persist the exact selection
-// before dispatch and retries can reuse it unchanged.
+// SelectCompiledStockPoolMembers deterministically selects Drive stock
+// members for all stock-pool slots. If the pool is shorter than the timeline,
+// the worker cycles through these members until every slot is covered. The
+// seed and ordering match the worker assembly contract so the Master can
+// persist the exact selection before dispatch and retries can reuse it.
 func SelectCompiledStockPoolMembers(
 	plan *CompiledRenderPlanV2,
 	jobID string,
@@ -114,7 +115,13 @@ func SelectCompiledStockPoolMembers(
 			return selected, ValidateCompiledStockPoolMembers(plan, selected)
 		}
 	}
-	return nil, fmt.Errorf("compiled render plan v2: stock_pool duration metadata covers %d of %d required frames", framesAvailable, framesNeeded)
+	// A shorter pool is still usable: assembly repeats the deterministically
+	// shuffled member list from the beginning. Keep the metadata check so an
+	// empty or malformed pool still fails before the job becomes claimable.
+	if err := ValidateCompiledStockPoolMembers(plan, selected); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 // ValidateCompiledStockPoolMembers checks a persisted stock-pool snapshot
@@ -163,8 +170,8 @@ func ValidateCompiledStockPoolMembers(plan *CompiledRenderPlanV2, members []Stoc
 			framesAvailable += frames
 		}
 	}
-	if framesAvailable < framesNeeded {
-		return fmt.Errorf("compiled render plan v2: stock_pool duration metadata covers %d of %d required frames", framesAvailable, framesNeeded)
+	if len(seen) == 0 || framesAvailable <= 0 {
+		return fmt.Errorf("compiled render plan v2: stock_pool has no positive member duration")
 	}
 	return nil
 }
