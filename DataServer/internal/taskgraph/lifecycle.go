@@ -56,10 +56,11 @@ type stalePrepareCanceller interface {
 	Cancel(ctx context.Context, id, reason string, revision int) error
 }
 
-// DefaultRuntimeAssetsPrepareTTL bounds PREPARE jobs whose creator never
-// sends FINALIZE. The generous day-long window allows long asset-generation
-// runs while ensuring abandoned PENDING tasks are eventually reclaimed.
-const DefaultRuntimeAssetsPrepareTTL = 24 * time.Hour
+// DefaultRuntimeAssetsPrepareTTL bounds a Master PREPARE that never receives
+// FINALIZE. PREPARE is sent only after the producer has built its media plan;
+// a 15-minute budget covers transient handoff outages while preventing an
+// abandoned PENDING render from occupying the queue for a day.
+const DefaultRuntimeAssetsPrepareTTL = 15 * time.Minute
 
 // NewLifecycleService constructs the transactional LifecycleService.
 func NewLifecycleService(repo Repository) (*LifecycleService, error) {
