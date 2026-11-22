@@ -141,7 +141,7 @@ func expiryCandidate(taskID, jobID string, revision int) *placement.TaskCandidat
 		TaskID:    taskID,
 		JobID:     jobID,
 		Revision:  revision,
-		Executor:  placement.ExecutorKey{ID: "video.assemble.copy.v1", Version: 1},
+		Executor:  placement.ExecutorKey{ID: "test.assembly", Version: 1},
 		Priority:  1,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -237,12 +237,14 @@ func (n *noopAssetProgressSink) IngestAssetDownloadProgress(_ context.Context, _
 // ── Test helpers ───────────────────────────────────────────────────────────
 
 // taskCandidate builds a minimal TaskCandidate for the preparation gate.
+// The test executor is intentionally unregistered so these tests exercise the
+// reservation state machine without depending on a production render plan.
 func taskCandidate(taskID, jobID string, revision int) *placement.TaskCandidate {
 	return &placement.TaskCandidate{
 		TaskID:    taskID,
 		JobID:     jobID,
 		Revision:  revision,
-		Executor:  placement.ExecutorKey{ID: "video.assemble.copy.v1", Version: 1},
+		Executor:  placement.ExecutorKey{ID: "test.assembly", Version: 1},
 		Priority:  1,
 		CreatedAt: time.Now().UTC(),
 	}
