@@ -87,6 +87,68 @@ the following variables:
 | `SOCIAL_API_TIMEOUT_MS` | `30000` | Per-request timeout (ms) for Velox→Social HTTP calls. Default 30s. |
 | `SOCIAL_CALLBACK_BASE_URL` | (none — required) | Public base URL the Social API calls back to (e.g. `https://velox.example.com`). Used for webhook delivery. |
 
+### 0.1.1 Configure the remote target
+
+The YouTube account and its OAuth grant stay in InstaEdit. Velox stores only
+an opaque destination reference; it does not store a channel ID, YouTube
+credentials, or a second copy of the account.
+
+On production, configure the resolver inputs before restarting the master:
+
+```bash
+VELOX_SOCIAL_API_URL=https://api.instaedit.org
+VELOX_SOCIAL_CALLBACK_BASE_URL=https://<public-velox-host>
+VELOX_SOCIAL_API_TIMEOUT_MS=30000
+```
+
+The OpenBao resolver writes these as `SOCIAL_API_URL`,
+`SOCIAL_CALLBACK_BASE_URL`, and `SOCIAL_API_TIMEOUT_MS` in
+`/etc/velox-server.env`. It reads the bearer secret from
+`production/master/social-api-token` and writes it as `SOCIAL_API_TOKEN`.
+That secret must match InstaEdit's server-side `VELOX_API_TOKEN`; it is
+separate from both the YouTube OAuth secret and a customer's workspace API key.
+The callback base is Velox's public HTTPS origin, reachable by InstaEdit.
+
+Once the account is connected to the InstaEdit workspace, create its Velox
+destination there with `workspace_id` and `platform_account_id`. A customer
+API key can do this with the `accounts` permission. Velox discovers and
+refreshes channels through InstaEdit's `GET /api/v1/publishing/targets`
+(workspace API key with `read` permission). The catalog includes channel and
+account IDs, name, connection/publishability status, and the last publication
+recorded by InstaEdit (`last_published_at` and
+`last_published_video_id`, when available), plus groups. The caller submits
+the returned Velox `destination_id` in the job's `delivery_plan`; it never
+needs to send channel IDs or credentials in the job.
+
+For the InstaEdit job adapter, send the selected opaque destination and the
+requested final YouTube visibility in publication metadata. `privacy` accepts
+`public`, `unlisted`, or `private`; Velox maps it to `final_privacy` for
+InstaEdit. The initial YouTube upload remains private until InstaEdit finishes
+thumbnail and metadata processing. A per-channel override can be supplied as
+`destinations[].metadata_override`:
+
+```json
+{
+  "publications": [{
+    "publication_id": "main",
+    "output_ref": { "variant_id": "final" },
+    "metadata": { "title": "Video", "privacy": "public" },
+    "destinations": [{ "destination_id": "extdst_opaque_id" }]
+  }]
+}
+```
+
+Use the opaque destination ID returned by the InstaEdit catalog, never a
+YouTube channel name or OAuth credential.
+
+At delivery time, Velox posts the finished artifact and the opaque
+`external_destination_id` to InstaEdit's `/internal/v1/deliveries` endpoint.
+InstaEdit downloads the artifact, uploads it privately to the selected
+channel, applies the thumbnail, and performs the requested final publish.
+The existing transport and selection paths are implemented in
+`DataServer/internal/socialclient`, `DataServer/internal/deliveries/providers/social_gateway.go`,
+and `DataServer/internal/handlers/server/pipeline/publishing_target_selection.go`.
+
 **No other `SOCIAL_*` variable is honored.** In particular, the
 deprecated one-release-cycle aliases from PR-15.10
 (`SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`,

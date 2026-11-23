@@ -251,7 +251,7 @@ canary defaults (`asset-canary-001` + a 5-second ffmpeg passthrough
 ### 3.9 `scripts/fleetctl resume <worker_id>`
 
 ```bash
-scripts/fleetctl resume velox-worker-13197 "after cert rotation"
+scripts/fleetctl resume host_57_129_132_133 "after cert rotation"
 ```
 
 Clears a previous drain / quarantine via the Step 6/15
@@ -268,7 +268,20 @@ Drives the Step 9/15 rollback cascade (`previous_digest`
 re-issued, cosign re-verified, container restarted). Default
 wait budget: **30 min**.
 
-### 3.11 `fleetctl job inspect <job_id>`
+### 3.11 `fleetctl job download <job_id> [-o FILE]`
+
+```bash
+fleetctl job download job_10b41a3c469bd84d
+fleetctl job download job_10b41a3c469bd84d -o ./final-video.mp4
+```
+
+Finds the job's READY final video, streams it directly from the Master to a
+temporary file, checks the byte count and SHA-256 against the artifact record,
+then atomically saves it. Defaults to `<job_id>.mp4`; uses the standard
+`VELOX_MASTER_URL` and admin-token configuration, so it can run from an
+operator workstation or a remote worker with Master access.
+
+### 3.12 `fleetctl job inspect <job_id>`
 
 ```bash
 fleetctl job inspect job_10b41a3c469bd84d
@@ -278,7 +291,7 @@ Returns one JSON read model containing lifecycle, attempts, phase timing,
 typed resource/cache metrics, per-scene segment telemetry, artifacts,
 deliveries, and persisted execution events.
 
-### 3.12 `fleetctl job metrics <job_id>`
+### 3.13 `fleetctl job metrics <job_id>`
 
 ```bash
 fleetctl job metrics job_10b41a3c469bd84d
@@ -287,7 +300,7 @@ fleetctl job metrics job_10b41a3c469bd84d
 Prints the execution and cache metrics projection, including FFmpeg, frame,
 phase, and cache hit/miss counters.
 
-### 3.13 `fleetctl job watch <job_id>`
+### 3.14 `fleetctl job watch <job_id>`
 
 ```bash
 fleetctl job watch job_10b41a3c469bd84d
@@ -297,7 +310,7 @@ Polls the Master event timeline and prints newly observed events until the
 job reaches `SUCCEEDED`, `FAILED`, or `CANCELLED`. `docker logs` remains a
 break-glass diagnostic only.
 
-### 3.14 `fleetctl doctor --production`
+### 3.15 `fleetctl doctor --production`
 
 ```bash
 fleetctl doctor --production

@@ -61,6 +61,7 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 				return nil, fmt.Errorf("%w: invalid metadata for destination[%d]: %w", ErrInvalidPayload, i, err)
 			}
 		}
+		normalizePublishingVisibility(metadata)
 		if cmd.PublishAt != "" {
 			metadata["publish_at"] = cmd.PublishAt
 		}
@@ -154,6 +155,16 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		payload["publications"] = publications
 	}
 	return payload, nil
+}
+
+// normalizePublishingVisibility maps the submit contract's requested
+// visibility to InstaEdit Social's final transition field. The initial
+// YouTube upload remains private until thumbnail and metadata steps finish.
+func normalizePublishingVisibility(metadata map[string]any) {
+	if privacy, ok := metadata["privacy"].(string); ok {
+		metadata["final_privacy"] = privacy
+		delete(metadata, "privacy")
+	}
 }
 
 // destinationsFromPublications lets a language bundle be submitted with one

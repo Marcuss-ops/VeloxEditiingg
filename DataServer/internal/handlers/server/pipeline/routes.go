@@ -67,6 +67,26 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	jobs.POST("/:id/cancel", h.CancelSubmittedJob())
 	jobs.POST("/:id/finalize", h.FinalizeJob())
 	jobs.GET("/:id/asset-progress", h.AssetDownloadProgress())
+	jobs.GET("/:id/prefetch", h.PrefetchDiagnostic())
+
+	// Operator diagnosis lives under the admin surface: the /api/v1/jobs
+	// group is gated by the M2M guard, which rejects the admin token before
+	// the handler runs.
+	if adminAuth != nil {
+		r.GET("/api/v1/admin/jobs/:job_id/prefetch", adminAuth, h.PrefetchDiagnostic())
+	}
+
+	// Read-only media catalogue (M2M scope media.read): the Master is the
+	// system of record for produced assets, so listing, inspecting and serving
+	// them belongs here rather than on a second service.
+	mediaAuth := NewM2MJwScopeAuthMiddleware(h.cfg, h.store, nil, "media.read")
+	media := r.Group("/api/v1/media", mediaAuth)
+	media.GET("/facets", h.MediaFacets())
+	media.GET("/assets", h.MediaAssets())
+	media.GET("/assets/:asset_id", h.MediaAsset())
+	media.GET("/assets/:asset_id/download", h.MediaAssetDownload())
+	media.POST("/search", h.MediaSearch())
+	r.GET("/api/v1/jobs/:id/artifact", mediaAuth, h.JobArtifact())
 
 	publications := r.Group("/api/v1/publications")
 	publications.Use(m2mJobsAuth)

@@ -172,13 +172,22 @@ func KeyFromContext(c *gin.Context) *m2mkeys.M2MAPIKey {
 //     fast — the typical "jobs.submit + future.read" combination
 //     needs the operator to allocate separate keys).
 func NewM2MJwAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *m2mRateLimiter) gin.HandlerFunc {
+	return NewM2MJwScopeAuthMiddleware(cfg, st, limiter, "jobs.submit")
+}
+
+// NewM2MJwScopeAuthMiddleware is the same M2M gate for a different capability
+// surface. The key must carry requiredScope; the audit row records the client
+// and status exactly like the jobs surface.
+func NewM2MJwScopeAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *m2mRateLimiter, requiredScope string) gin.HandlerFunc {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
 	if limiter == nil {
 		limiter = newM2MRateLimiter()
 	}
-	requiredScope := "jobs.submit"
+	if requiredScope == "" {
+		requiredScope = "jobs.submit"
+	}
 
 	return func(c *gin.Context) {
 		// Dev-mode loopback bypass: SSH forwards / curl from the

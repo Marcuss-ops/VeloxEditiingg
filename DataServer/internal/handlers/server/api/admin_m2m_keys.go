@@ -88,8 +88,8 @@ type issueM2MKeyResponse struct {
 
 // validateIssueM2MKeyRequest vets the request before insertion.
 // Reject: empty ClientID, ClientID containing `:`, scopes list with
-// unknown scope. Known / accepted scopes: `jobs.submit` (the only
-// scope supported at v1).
+// unknown scope. Known / accepted scopes: `jobs.submit` (write) and
+// `media.read` (read-only catalogue).
 func validateIssueM2MKeyRequest(req *issueM2MKeyRequest) error {
 	if req == nil {
 		return errAdminBadRequest("request body is required")
@@ -101,8 +101,8 @@ func validateIssueM2MKeyRequest(req *issueM2MKeyRequest) error {
 	}
 	for _, s := range req.Scopes {
 		s = strings.TrimSpace(s)
-		if s != "" && s != "jobs.submit" {
-			return errAdminBadRequest("unsupported scope: " + s + " (only jobs.submit is supported in v1)")
+		if s != "" && s != "jobs.submit" && s != "media.read" {
+			return errAdminBadRequest("unsupported scope: " + s + " (supported: jobs.submit, media.read)")
 		}
 	}
 	// Range guards: RPS+Burst non-negative; quotas non-negative.

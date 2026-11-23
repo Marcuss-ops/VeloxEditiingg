@@ -27,6 +27,11 @@ func validateCreateJobCommand(cmd CreateJobCmd) (map[string]any, error) {
 			return nil, fmt.Errorf("%w: publish_at must be in the future", ErrInvalidPayload)
 		}
 	}
+	for index, destination := range cmd.Destinations {
+		if err := validateMetadataObject(destination.Metadata, fmt.Sprintf("delivery_plan.destinations[%d].metadata", index)); err != nil {
+			return nil, err
+		}
+	}
 	if cmd.Target != nil {
 		if err := validatePublicationTarget(*cmd.Target); err != nil {
 			return nil, err
@@ -142,6 +147,24 @@ func validateMetadataObject(raw json.RawMessage, field string) error {
 	var metadata map[string]any
 	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return fmt.Errorf("%w: %s must be a JSON object", ErrInvalidPayload, field)
+	}
+	for _, key := range []string{"privacy", "privacy_status", "final_privacy"} {
+		value, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		privacy, ok := value.(string)
+		if !ok || (privacy != "public" && privacy != "unlisted" && privacy != "private") {
+			return fmt.Errorf("%w: %s.%s must be public, unlisted or private", ErrInvalidPayload, field, key)
+		}
+	}
+	if privacy, ok := metadata["privacy"].(string); ok {
+		if final, exists := metadata["final_privacy"].(string); exists && final != privacy {
+			return fmt.Errorf("%w: %s.privacy and final_privacy conflict", ErrInvalidPayload, field)
+		}
+	}
+	if status, ok := metadata["privacy_status"].(string); ok && status != "private" {
+		return fmt.Errorf("%w: %s.privacy_status must be private during initial upload", ErrInvalidPayload, field)
 	}
 	return nil
 }

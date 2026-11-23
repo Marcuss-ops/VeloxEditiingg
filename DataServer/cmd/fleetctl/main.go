@@ -93,6 +93,7 @@ Sub-commands:
   rollout [--digest IMAGE] [--workers all|id1,id2] [--reason R] [--wait-ready]
                           serial image rollout across selected workers
   ssh-check               per-worker SSH connectivity (ssh/hostkey/sudo -n)
+  job download <job_id> [-o FILE]   download a READY final video; verifies size and SHA-256
   job cancel <job_id> [--reason R]  cancel a direct job through the canonical lifecycle
   job inspect <job_id> [--waterfall]  complete job diagnostics; --waterfall renders only
                           the attempt waterfall block (buckets/coverage/missing)

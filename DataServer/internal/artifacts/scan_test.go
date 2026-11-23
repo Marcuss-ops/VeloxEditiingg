@@ -84,7 +84,7 @@ var allowedWriters = map[string]bool{
 	// previously allowlisted as internal/store/completion_repository_finalize.go
 	// — it is NOT the verified-finalization lifecycle and does not
 	// route through FinalizeVerified.
-	filepath.Join("internal", "store", "completion_repository.go"):                    true,
+	filepath.Join("internal", "store", "completion_repository.go"):                             true,
 	filepath.Join("internal", "store", "completionstore", "completion_repository_finalize.go"): true,
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.

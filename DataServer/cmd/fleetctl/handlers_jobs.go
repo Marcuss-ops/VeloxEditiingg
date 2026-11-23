@@ -20,6 +20,13 @@ func runJob(client *fleetClient, args []string) int {
 		return ExitMisuse
 	}
 	switch args[0] {
+	case "download":
+		jobID, outputPath, err := parseJobDownloadArgs(args[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%v", err))
+			return ExitMisuse
+		}
+		return runJobDownload(client, jobID, outputPath)
 	case "submit":
 		return runJobSubmit(client, args[1:], false)
 	case "certify":
