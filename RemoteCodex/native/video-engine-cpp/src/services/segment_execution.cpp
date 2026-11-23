@@ -41,7 +41,9 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
     // source must provide the same bytes; missing extradata cannot establish
     // compatibility with a configured target.
     if (!target.extradata.empty() && source.extradata != target.extradata) {
-        mismatch(reason, "extradata (decoder configuration)");
+        mismatch(reason, source.kind == MediaKind::Video
+            ? "video avcC extradata (decoder configuration)"
+            : "audio codec extradata (decoder configuration)");
         return false;
     }
     if (source.kind == MediaKind::Video) {
