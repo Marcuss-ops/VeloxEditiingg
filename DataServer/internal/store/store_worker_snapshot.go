@@ -156,10 +156,24 @@ func (s *SQLiteStore) GetWorkerByWorkspace(workerID string, workspaceID int64) (
 	return m, nil
 }
 
-// DeleteWorker removes a worker record.
+// DeleteWorker removes a worker record together with its durable
+// deployment projection. Both rows describe the same registration, so
+// leaving worker_deployment_state behind would resurrect the deleted
+// worker on the admin card after the next registry reload.
 func (s *SQLiteStore) DeleteWorker(workerID string) error {
-	_, err := s.db.Exec(`DELETE FROM workers WHERE worker_id = ?`, workerID)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM workers WHERE worker_id = ?`, workerID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM worker_deployment_state WHERE worker_id = ?`, workerID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListWorkers returns all workers as raw JSON maps, ordered by last heartbeat descending.

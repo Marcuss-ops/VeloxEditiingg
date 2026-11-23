@@ -127,9 +127,10 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		nil, // clock.System default (production)
 		artifacts.ReconcilerConfig{
 			OrphanBlobAge: 24 * time.Hour, StuckArtifactAge: 24 * time.Hour,
-			QuarantineMinAge:    60 * time.Second,
-			QuarantineRetention: time.Duration(cfg.Retention.ArtifactQuarantineDays) * 24 * time.Hour,
-			BatchLimit:          200,
+			QuarantineMinAge:       60 * time.Second,
+			QuarantineRetention:    time.Duration(cfg.Retention.ArtifactQuarantineDays) * 24 * time.Hour,
+			ArtifactReadyRetention: time.Duration(cfg.Retention.ArtifactReadyDays) * 24 * time.Hour,
+			BatchLimit:             200,
 		},
 	)
 	if recErr != nil {

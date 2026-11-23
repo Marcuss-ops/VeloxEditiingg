@@ -61,6 +61,7 @@ jobs:
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "image=${{ env.REGISTRY }}/${OWNER}/${{ env.IMAGE_NAME }}:bench-${SHA}" >> "$GITHUB_OUTPUT"
           echo "cache=${{ env.REGISTRY }}/${OWNER}/${{ env.IMAGE_NAME }}:bench-buildcache" >> "$GITHUB_OUTPUT"
+          echo "commit_time=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
 
       - name: Build fast benchmark image
         id: build
@@ -72,6 +73,7 @@ jobs:
           tags: ${{ steps.meta.outputs.image }}
           build-args: |
             VERSION=bench-${{ steps.meta.outputs.sha }}
+            BUILD_TIME=bench-${{ steps.meta.outputs.sha }}-${{ steps.meta.outputs.commit_time }}
             BUILD_COMMIT=${{ steps.meta.outputs.sha }}
           # Keep a registry-backed cache because GitHub-hosted runners are
           # ephemeral.  The GHA cache remains a fallback for an empty/new

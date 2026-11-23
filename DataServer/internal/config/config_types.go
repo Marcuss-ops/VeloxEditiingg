@@ -285,6 +285,10 @@ type RetentionConfig struct {
 	WorkerEventsDays       int
 	JobEventsDays          int
 	ArtifactQuarantineDays int
+	// ArtifactReadyDays controls age-based deletion of READY local
+	// artifacts. Default 0 disables the pass: the reconciler keeps every
+	// READY artifact forever unless an operator opts in.
+	ArtifactReadyDays int
 
 	// WorkerResourceRawDays controls raw worker_resource_samples retention.
 	// Default 90 days; <= 0 disables pruning.

@@ -24,7 +24,10 @@ type ReconcilerConfig struct {
 	StuckArtifactAge    time.Duration
 	QuarantineMinAge    time.Duration
 	QuarantineRetention time.Duration
-	BatchLimit          int
+	// ArtifactReadyRetention > 0 enables age-based deletion of READY
+	// local artifacts (0 keeps them forever).
+	ArtifactReadyRetention time.Duration
+	BatchLimit             int
 }
 
 func DefaultReconcilerConfig() ReconcilerConfig {
@@ -40,6 +43,7 @@ type ReconcileStats struct {
 	GCDeleted             int
 	GCFailed              int
 	GCQueuedQuarantined   int
+	GCQueuedReady         int
 }
 
 func NewReconciler(artifactRepo *artifactsstore.ArtifactReconcilerRepository, blobStore repository.BlobStore, repo repository.UploadRepository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
@@ -97,8 +101,8 @@ func (r *Reconciler) runOnce(ctx context.Context, source string) {
 		log.Printf("[RECONCILER] %s pass failed: %v", source, err)
 		return
 	}
-	if stats.ExpiredUploads+stats.OrphanFinalBlobs+stats.QuarantinedWithEvent+stats.QuarantinedStatusOnly+stats.StuckArtifacts+stats.GCQueuedQuarantined+stats.GCDeleted+stats.GCFailed > 0 {
-		log.Printf("[RECONCILER] %s pass expired=%d orphan_blobs=%d quarantined_event=%d quarantined_status_only=%d stuck_artifacts=%d gc_queued_quarantined=%d gc_deleted=%d gc_failed=%d", source, stats.ExpiredUploads, stats.OrphanFinalBlobs, stats.QuarantinedWithEvent, stats.QuarantinedStatusOnly, stats.StuckArtifacts, stats.GCQueuedQuarantined, stats.GCDeleted, stats.GCFailed)
+	if stats.ExpiredUploads+stats.OrphanFinalBlobs+stats.QuarantinedWithEvent+stats.QuarantinedStatusOnly+stats.StuckArtifacts+stats.GCQueuedQuarantined+stats.GCQueuedReady+stats.GCDeleted+stats.GCFailed > 0 {
+		log.Printf("[RECONCILER] %s pass expired=%d orphan_blobs=%d quarantined_event=%d quarantined_status_only=%d stuck_artifacts=%d gc_queued_quarantined=%d gc_queued_ready=%d gc_deleted=%d gc_failed=%d", source, stats.ExpiredUploads, stats.OrphanFinalBlobs, stats.QuarantinedWithEvent, stats.QuarantinedStatusOnly, stats.StuckArtifacts, stats.GCQueuedQuarantined, stats.GCQueuedReady, stats.GCDeleted, stats.GCFailed)
 	}
 }
 
@@ -125,6 +129,14 @@ func (r *Reconciler) Reconcile(ctx context.Context) (ReconcileStats, error) {
 		log.Printf("[RECONCILER] quarantined artifact retention enqueue error: %v", err)
 	} else {
 		stats.GCQueuedQuarantined = n
+	}
+	if r.config.ArtifactReadyRetention > 0 {
+		readyCutoff := r.clock.Now().Add(-r.config.ArtifactReadyRetention)
+		if n, err := r.artifactRepo.GCStore().EnqueueReadyArtifactsForRetention(ctx, readyCutoff, r.clock.Now(), r.config.BatchLimit); err != nil {
+			log.Printf("[RECONCILER] ready artifact retention enqueue error: %v", err)
+		} else {
+			stats.GCQueuedReady = n
+		}
 	}
 	if deleted, failed, err := RunArtifactGC(ctx, r.artifactRepo.GCStore(), r.blobStore, "reconciler", r.clock.Now(), 15*time.Minute, r.config.BatchLimit); err != nil {
 		log.Printf("[RECONCILER] artifact GC error: %v", err)

@@ -4,6 +4,7 @@
 //
 //	GET /api/v1/admin/workers           — operator fleet overview
 //	GET /api/v1/admin/workers/:worker_id — operator per-worker card
+//	DELETE /api/v1/admin/workers/:worker_id — remove a disconnected registration
 //
 // URL and auth contrast:
 //
@@ -26,6 +27,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -192,6 +194,73 @@ func (h *AdminWorkersHandler) GetAdminWorker() gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, card)
+	}
+}
+
+// workerDeleteBlockedReason returns a non-empty reason when the worker must
+// not be removed from the registry. A registration owns a live control
+// channel until it is DISCONNECTED; deleting the row under a running agent
+// would leave it reconnecting against a Master that no longer knows it.
+// The check is a pure function so tests can exercise every connection state
+// without a SQLite-backed registry.
+func workerDeleteBlockedReason(info *workersreg.Worker) string {
+	if info == nil {
+		return ""
+	}
+	switch strings.ToUpper(strings.TrimSpace(info.ConnectionStatus)) {
+	case "CONNECTED":
+		return "worker is connected; drain and stop the agent before delete"
+	case "STALE":
+		return "worker heartbeat is stale; confirm the agent is stopped first"
+	case "DRAINING":
+		return "worker is draining; finish the drain before delete"
+	}
+	if strings.TrimSpace(info.CurrentJob) != "" {
+		return "worker still reports a current job; wait for it to finish"
+	}
+	return ""
+}
+
+// DeleteAdminWorker returns DELETE /api/v1/admin/workers/:worker_id — the
+// operator cleanup path for registrations that will never come back
+// (re-imaged hosts, retired agents). It removes the registry row and its
+// worker_deployment_state projection; the operation history in
+// fleet_operations / deployment_records is audit data and is preserved.
+//
+// Failure modes:
+//
+//	reg == nil                   → 503 Service Unavailable
+//	empty worker_id (after trim) → 400 Bad Request
+//	unknown worker_id            → 404 Not Found
+//	worker not DISCONNECTED      → 409 Conflict (stop the agent first)
+//	store failure                → 500 Internal Server Error
+func (h *AdminWorkersHandler) DeleteAdminWorker() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h.reg == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker registry not available"})
+			return
+		}
+		workerID := strings.TrimSpace(c.Param("worker_id"))
+		if workerID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id path parameter is required"})
+			return
+		}
+		info := h.reg.GetWorker(c.Request.Context(), workerID)
+		if info == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
+			return
+		}
+		if reason := workerDeleteBlockedReason(info); reason != "" {
+			c.JSON(http.StatusConflict, gin.H{"error": reason, "connection_status": info.ConnectionStatus})
+			return
+		}
+		if err := h.reg.UnregisterWorker(c.Request.Context(), workerID); err != nil {
+			log.Printf("[ADMIN-WORKERS] delete %s failed: %v", workerID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "worker delete failed"})
+			return
+		}
+		log.Printf("[ADMIN-WORKERS] deleted worker %s (connection_status=%s)", workerID, info.ConnectionStatus)
+		c.JSON(http.StatusOK, gin.H{"worker_id": workerID, "deleted": true})
 	}
 }
 

@@ -91,15 +91,15 @@ func (r *Registry) UnregisterWorker(ctx context.Context, workerID string) error 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	delete(r.inMem, identity.ParseWorkerID(workerID))
-
 	if r.dbStore != nil {
 		if err := r.dbStore.DeleteWorker(workerID); err != nil {
 			registryLog.ErrorWithMsg(logging.CodeRegistryDeleteWorkerFail,
 				"Failed to delete worker",
 				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+			return fmt.Errorf("unregister worker %s: %w", workerID, err)
 		}
 	}
+	delete(r.inMem, identity.ParseWorkerID(workerID))
 	return nil
 }
 

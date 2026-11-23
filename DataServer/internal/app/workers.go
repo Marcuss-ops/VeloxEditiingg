@@ -339,6 +339,10 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		}
 		adminWorkers.GET("", m.adminWorkersHandler.ListAdminWorkers())
 		adminWorkers.GET("/:worker_id", m.adminWorkersHandler.GetAdminWorker())
+		// Operator cleanup for registrations that will never return.
+		// 409 while the worker is CONNECTED/STALE/DRAINING so a live
+		// agent is never orphaned by a registry delete.
+		adminWorkers.DELETE("/:worker_id", m.adminWorkersHandler.DeleteAdminWorker())
 		// Step 6/15 — admin worker mutations (drain / resume /
 		// quarantine / update). Mounted inside the same adminAuth-gated
 		// group as the read endpoints so the operator dashboard's

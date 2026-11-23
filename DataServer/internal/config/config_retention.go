@@ -8,6 +8,7 @@ package config
 //   - VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS (default 90)
 //   - VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS (default 365)
 //   - VELOX_RETENTION_JOB_EVENTS_DAYS (default 30)
+//   - VELOX_RETENTION_ARTIFACT_READY_DAYS (default 0 = keep READY artifacts forever)
 //   - VELOX_QUARANTINE_GC_DAYS (default 7; legacy alias supported)
 //
 // The resource windows can be set to 0 to opt out of the corresponding
@@ -31,6 +32,7 @@ func loadRetentionConfig(raw RawConfig) RetentionConfig {
 		WorkerResourceRollupDays: raw.Int("VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS", 365, 0),
 		JobEventsDays:            raw.Int("VELOX_RETENTION_JOB_EVENTS_DAYS", 30, 1),
 		ArtifactQuarantineDays:   quarantineDays,
+		ArtifactReadyDays:        raw.Int("VELOX_RETENTION_ARTIFACT_READY_DAYS", 0, 0),
 		// 0 opts out for the resource tables. Defaults: 7 / 30 / 90 / 365.
 	}
 }

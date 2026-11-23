@@ -121,6 +121,66 @@ func (g *ArtifactGCStore) EnqueueQuarantinedArtifactsForRetention(ctx context.Co
 	return queued, nil
 }
 
+// EnqueueReadyArtifactsForRetention makes old READY local artifacts eligible
+// for deletion. READY is the terminal state of a delivered output, so the age
+// gate is the only thing that keeps storage bounded when nothing ever
+// quarantines a successful artifact.
+//
+// Two invariants protect live work:
+//   - only storage_provider='local' rows are queued (remote providers keep
+//     their own lifecycle);
+//   - a job that is still non-terminal is skipped, so an artifact produced by
+//     a running job is never deleted under the job's feet.
+//
+// Rows that already have a candidate are skipped: the GC lease path is the
+// only byte-deletion path and must not be re-queued while in flight.
+func (g *ArtifactGCStore) EnqueueReadyArtifactsForRetention(ctx context.Context, before, eligibleAt time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if eligibleAt.IsZero() {
+		eligibleAt = time.Now().UTC()
+	}
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT a.id
+		FROM artifacts a
+		LEFT JOIN jobs j ON j.job_id = a.job_id
+		LEFT JOIN artifact_gc_candidates c ON c.artifact_id = a.id
+		WHERE a.status='READY' AND a.storage_provider='local'
+		  AND a.created_at <= ?
+		  AND (j.job_id IS NULL OR j.status IN ('SUCCEEDED','FAILED','CANCELLED'))
+		  AND c.artifact_id IS NULL
+		ORDER BY a.created_at ASC, a.id ASC LIMIT ?`,
+		before.UTC().Format(time.RFC3339Nano), limit)
+	if err != nil {
+		return 0, fmt.Errorf("artifact gc list ready retention: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("artifact gc scan ready retention: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("artifact gc rows ready retention: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("artifact gc close rows ready retention: %w", err)
+	}
+	queued := 0
+	for _, id := range ids {
+		if err := g.EnqueueArtifactGCCandidate(ctx, id, "ready_retention", eligibleAt); err != nil {
+			return queued, err
+		}
+		queued++
+	}
+	return queued, nil
+}
+
 // LeaseArtifactGCCandidates claims rows so only one worker removes a file.
 func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner string, now time.Time, lease time.Duration, limit int) ([]ArtifactGCCandidate, error) {
 	if owner == "" {

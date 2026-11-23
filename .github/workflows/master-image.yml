@@ -235,6 +235,9 @@ jobs:
             fi
           fi
           echo "push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
+          # Reproducible build timestamp: anchored to the HEAD commit so
+          # two rebuilds of the same commit carry the same BuildTime.
+          echo "commit_time=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -304,6 +307,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.version.outputs.tag }}
+            BUILD_TIME=${{ steps.version.outputs.tag }}-${{ steps.version.outputs.commit_time }}
             BUILD_COMMIT=${{ github.sha }}
           provenance: true
           sbom: true
