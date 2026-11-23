@@ -158,6 +158,32 @@ The same `image_state` / `operation_state` split feeds the health
 probe's `image_digest_match` check and the `status --production`
 CLEAN/DRIFT view.
 
+## `DELETE /api/v1/admin/workers/:worker_id`
+
+Operator cleanup for registrations that will never come back
+(re-imaged hosts, retired agents). Auth: `VELOX_ADMIN_TOKEN`.
+
+The endpoint removes the registry row and its
+`worker_deployment_state` projection in one transaction. The operation
+history (`fleet_operations`, `deployment_records`) is audit data and is
+preserved.
+
+| Status | Meaning |
+|--------|---------|
+| `200` | `{"worker_id": "...", "deleted": true}` |
+| `400` | empty `worker_id` after trim |
+| `404` | worker not registered |
+| `409` | worker is `CONNECTED`, `STALE` or `DRAINING`, or still reports a `current_job` — stop the agent first |
+| `503` | worker registry not wired at this boot |
+
+```bash
+curl -sS -X DELETE -H "Authorization: Bearer $VELOX_ADMIN_TOKEN" \
+  http://127.0.0.1:8000/api/v1/admin/workers/host_57_131_20_173
+```
+
+The 409 gate is deliberate: deleting the row under a live agent would
+leave it reconnecting against a Master that no longer knows it.
+
 ## API-surface namespaces (Phase 6)
 
 The worker control-plane API is split into three canonical namespaces.

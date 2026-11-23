@@ -1,3 +1,4 @@
+DELETE :worker_id
 DELETE ansible/computers/:id
 DELETE keys/:client_id
 GET :operation_id
