@@ -245,8 +245,16 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	} else {
 		if strings.EqualFold(tr.GetStatus(), "succeeded") && canonicalExecutorID == contract.VideoPrepareWindowExecutorID {
 			if err := h.commitPreparedWindowResult(ctx, workerID, jobID, taskID, attemptID, leaseID, int(revision), segmentTimings); err != nil {
-				logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskResultFailed, "[GRPC] prepared-window completion commit failed task=%s attempt=%s: %v", taskID, attemptID, err)
-				return
+				if !isStalePreparationFence(err) {
+					logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskResultFailed, "[GRPC] prepared-window completion commit failed task=%s attempt=%s: %v", taskID, attemptID, err)
+					return
+				}
+				// The task was reassigned or cancelled while this attempt was
+				// in flight, so the registry will never accept the result.
+				// ACK it below (as for report conflicts): without the ACK the
+				// worker replays the same stale completion forever.
+				ackError = "stale_preparation_fence"
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskResultRejected, "[GRPC] stale prepared-window result for task=%s attempt=%s; acked to stop replay", taskID, attemptID)
 			}
 		}
 		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCTaskResult, "[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q", taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
@@ -296,6 +304,13 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	}
 }
 
+// errStalePreparationFence marks a prepared-window result whose task attempt
+// has already been reassigned or cancelled. Retrying cannot succeed, so the
+// handler ACKs it instead of letting the worker replay it forever.
+var errStalePreparationFence = errors.New("current task fence no longer matches this preparation attempt")
+
+func isStalePreparationFence(err error) bool { return errors.Is(err, errStalePreparationFence) }
+
 func (h *Handler) commitPreparedWindowResult(ctx context.Context, workerID, jobID, taskID, attemptID, leaseID string, revision int, segments []taskattempts.SegmentTiming) error {
 	if h.completionCoord == nil {
 		return fmt.Errorf("completion coordinator is not configured")
@@ -306,7 +321,7 @@ func (h *Handler) commitPreparedWindowResult(ctx context.Context, workerID, jobI
 	}
 	canonicalTask, err := h.taskRepo.Get(ctx, taskID)
 	if err != nil || canonicalTask == nil || canonicalTask.ID != taskID || canonicalTask.JobID != jobID || canonicalTask.AttemptID != attemptID || canonicalTask.WorkerID != workerID || canonicalTask.LeaseID != leaseID {
-		return fmt.Errorf("current task fence no longer matches this preparation attempt")
+		return errStalePreparationFence
 	}
 	// Ingestion validates the worker's revision against the leased attempt.
 	// Use the Master row's current revision for the completion transaction:
