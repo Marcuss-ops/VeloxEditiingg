@@ -38,6 +38,11 @@ FFprobe profile. These failures must be resolved or classified before the full
 verification gate can be reported green. This working-tree change has not
 been deployed.
 
+The C++ `media_packet_pipeline_tests` and
+`render_copy_only_zero_intermediates_tests` also pass against the local LibAV
+build, covering exact non-zero keyframe offsets and packet-copy assembly
+without video intermediates.
+
 ## 2026-11-25 — zero-reencode assembly correction
 
 The local implementation now has one video-preparation behavior: packet-copy
