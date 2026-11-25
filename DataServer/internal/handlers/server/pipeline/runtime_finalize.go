@@ -50,13 +50,6 @@ func isNilInterface(value interface{}) bool {
 	}
 }
 
-// RuntimeStockWindowPreparer is the expensive Master-owned part of FINALIZE.
-// It runs after the request has been durably accepted, never in the HTTP
-// handler's request context.
-type RuntimeStockWindowPreparer interface {
-	PrepareDriveStockWindows(context.Context, string, []map[string]interface{}) (string, string, error)
-}
-
 type RuntimeStockWindowTaskPlanner interface {
 	PlanDriveStockWindowTasks(string, []map[string]interface{}) ([]contract.VideoPrepareWindowTaskV1, error)
 }
@@ -90,16 +83,16 @@ type RuntimeFinalizationProcessor struct {
 	failures  taskgraph.RuntimeFinalizationFailures
 	expander  RuntimeTaskGraphExpander
 	evidence  taskattempts.SuccessfulSegmentTimingReader
-	assets    RuntimeStockWindowPreparer
+	assets    interface{}
 	notifier  RuntimeTaskUpdateNotifier
 }
 
 // NewRuntimeFinalizationProcessor fails bootstrap when the persistent queue,
-// real asset preparer or post-commit planner hook is missing. A production
+// worker stock-window planner or post-commit hook is missing. A production
 // FINALIZE must never be accepted into an in-memory-only/noop path.
 func NewRuntimeFinalizationProcessor(
 	repository taskgraph.Repository,
-	assets RuntimeStockWindowPreparer,
+	assets RuntimeStockWindowTaskPlanner,
 	notifier RuntimeTaskUpdateNotifier,
 ) (*RuntimeFinalizationProcessor, error) {
 	if isNilInterface(repository) {
@@ -122,7 +115,7 @@ func NewRuntimeFinalizationProcessor(
 		return nil, errors.New("runtime finalizer: atomic failure reconciliation is not configured")
 	}
 	if isNilInterface(assets) {
-		return nil, errors.New("runtime finalizer: stock window preparer is not configured")
+		return nil, errors.New("runtime finalizer: worker stock-window planner is not configured")
 	}
 	if isNilInterface(notifier) {
 		return nil, errors.New("runtime finalizer: task update notifier is not configured")
@@ -619,7 +612,7 @@ func buildRuntimeFinalizePatch(
 	planJSON string,
 	req FinalizeJobRequest,
 	current map[string]interface{},
-	assets RuntimeStockWindowPreparer,
+	assets interface{},
 ) (map[string]interface{}, error) {
 	bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 	var err error

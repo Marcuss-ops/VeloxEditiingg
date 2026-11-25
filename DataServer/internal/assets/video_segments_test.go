@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"velox-server/internal/inputsecurity"
 	"velox-server/internal/platform/clock"
@@ -167,42 +166,6 @@ func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	}
 }
 
-func TestPrepareDriveStockWindowsRejectsIncompatibleMedia(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg is required for the stock-window acceptance test")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe is required for the stock-window acceptance test")
-	}
-	root := t.TempDir()
-	sourcePath := filepath.Join(root, "stock.mp4")
-	generate := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=24", "-frames:v", "120", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sourcePath)
-	if output, err := generate.CombinedOutput(); err != nil {
-		t.Fatalf("generate incompatible fixture: %v: %s", err, output)
-	}
-	sha, size, err := hashFile(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := videoContract.CanonicalVideoProfileV1Default
-	plan := videoContract.CompiledRenderPlanV2{
-		PlanVersion: 2, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64), DurationUS: 3_125_000,
-		Output:      videoContract.OutputContractV2{Container: "mp4", VideoCodec: "h264", Width: profile.Width, Height: profile.Height, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, PixelFormat: profile.PixelFormat, ProfileID: profile.ProfileID, CodecProfile: profile.CodecProfile, CodecLevel: profile.CodecLevel, GOPSize: profile.GOPSize, BFrames: profile.BFrames, ClosedGOP: true, TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen},
-		FinalAudio:  videoContract.FinalAudioV2{Mode: videoContract.AudioModeFinalAudioCopyV2, AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 3_125_000, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64)},
-		VideoTracks: []videoContract.VideoTrackV2{{TrackID: "main", Segments: []videoContract.VideoSegmentV2{{SegmentID: "segment-stock-001", AssetID: sha, SHA256: sha, TimelineStartFrame: 0, FrameCount: 75, SourceInUS: 0, SourceDurationUS: 3_125_000}}}},
-		Assets:      []videoContract.AssetRefV2{{AssetID: sha, SHA256: sha, SizeBytes: size, Kind: "video", MIME: "video/mp4", DurationUS: 5_000_000, FrameCount: 120}, {AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Kind: "final_audio", MIME: "audio/mp4", DurationUS: 3_125_000}},
-	}
-	planJSON, err := json.Marshal(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	service := &AssetService{repo: &segmentTestRepository{}, blobStore: &segmentTestBlobStore{root: filepath.Join(root, "assets")}, clock: clock.System{}, videoTrimmer: NewVideoTrimmer(), security: inputsecurity.NewFetcher(inputsecurity.DefaultPolicy()), mediaMetadata: NewMediaMetadataResolver()}
-	bindings := []map[string]interface{}{{"role": "stock", "asset_id": sha, "drive_file_id": "drive-stock-001", "source_uri": sourcePath, "sha256": sha, "size_bytes": size}}
-	if _, _, err := service.PrepareDriveStockWindows(context.Background(), string(planJSON), bindings); err == nil || !strings.Contains(err.Error(), "VIDEO_SOURCE_INCOMPATIBLE") {
-		t.Fatalf("incompatible source error = %v", err)
-	}
-}
-
 func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is required for the prepared-window registry test")
@@ -290,97 +253,6 @@ func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
 	}
 	if second.AssetID != asset.AssetID || len(repo.inserted) != 1 {
 		t.Fatalf("second registration=%+v inserts=%d, want content-addressed reuse", second, len(repo.inserted))
-	}
-}
-
-func TestCachedStockWindowEvidenceBindsPreparationRevisionAndWindow(t *testing.T) {
-	profile := videoContract.CanonicalVideoProfileV1Default
-	trimmer := NewVideoTrimmer()
-	revision := trimmer.PreparationRevision()
-	metadata, err := json.Marshal(map[string]interface{}{
-		"start_seconds": 1.25, "end_seconds": 4.375,
-		"canonical_profile_id":        profile.ProfileID,
-		"canonical_stream_profile_id": profile.StreamProfile(),
-		"canonical_profile_version":   profile.Version,
-		"preparation_revision":        revision,
-		"source_sha256":               strings.Repeat("a", 64),
-		"frame_count":                 75, "first_frame_keyframe": true,
-		"closed_gop": true, "copy_eligible": true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	asset := &Asset{MetadataJSON: string(metadata)}
-	if !cachedDriveStockWindowEvidence(asset, strings.Repeat("a", 64), 1_250_000, 3_125_000, 75, profile, revision) {
-		t.Fatal("matching certified evidence was rejected")
-	}
-	if cachedDriveStockWindowEvidence(asset, strings.Repeat("a", 64), 1_250_000, 3_125_000, 75, profile, revision+"-changed") {
-		t.Fatal("cache evidence from a different preparation revision was accepted")
-	}
-	if cachedDriveStockWindowEvidence(asset, strings.Repeat("a", 64), 1_250_000, 3_000_000, 75, profile, revision) {
-		t.Fatal("cache evidence for a different source interval was accepted")
-	}
-}
-
-func TestRunBoundedStockJobsUsesConfiguredParallelism(t *testing.T) {
-	const limit = 3
-	started := make(chan struct{}, 6)
-	release := make(chan struct{})
-	jobs := make([]func(context.Context) error, 6)
-	for i := range jobs {
-		jobs[i] = func(context.Context) error {
-			started <- struct{}{}
-			<-release
-			return nil
-		}
-	}
-	done := make(chan error, 1)
-	go func() { done <- runBoundedStockJobs(context.Background(), limit, jobs) }()
-	for i := 0; i < limit; i++ {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatalf("only %d jobs started concurrently; want %d", i, limit)
-		}
-	}
-	select {
-	case <-started:
-		t.Fatalf("more than the configured %d stock jobs started before a slot was released", limit)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("run bounded stock jobs: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("bounded stock jobs did not finish")
-	}
-	for i := limit; i < cap(started); i++ {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatalf("only %d stock jobs ran", i)
-		}
-	}
-}
-
-func TestRunBoundedStockJobsReturnsParentCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	called := false
-	err := runBoundedStockJobs(ctx, 2, []func(context.Context) error{
-		func(context.Context) error {
-			called = true
-			return nil
-		},
-	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("run bounded stock jobs error = %v, want context.Canceled", err)
-	}
-	if called {
-		t.Fatal("job ran after its parent context was canceled")
 	}
 }
 

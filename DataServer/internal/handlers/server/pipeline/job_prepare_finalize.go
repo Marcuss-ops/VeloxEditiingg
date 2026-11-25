@@ -30,7 +30,10 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid_json", "message": "request body must be valid JSON without unknown fields: " + err.Error()})
 			return
 		}
-		req.RuntimeAssetsPending = !runtimeAssetsCompleteForPrepare(req)
+		assetsComplete := runtimeAssetsCompleteForPrepare(req)
+		assets, bindingErr := appendRuntimeAssetBindings(append([]map[string]interface{}(nil), req.RuntimeAssets...), req.RuntimePayload["runtime_assets"])
+		needsWorkerPreparation := bindingErr == nil && requiresAsyncStockPreparation(req.CompiledRenderPlanJSON, assets)
+		req.RuntimeAssetsPending = !assetsComplete || needsWorkerPreparation
 		out := h.submitJobCore(c.Request.Context(), req, intakeIdentity{
 			ClientID:     ClientIDFromContext(c),
 			IntakeSource: creatorflow.IntakeSourceCanonical,
@@ -40,7 +43,11 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 		if out.Status < http.StatusMultipleChoices {
 			out.Body["phase"] = "PREPARE"
 			if req.RuntimeAssetsPending {
-				out.Body["dispatch_status"] = "waiting_runtime_assets"
+				if assetsComplete && needsWorkerPreparation {
+					out.Body["dispatch_status"] = "stock_preparation_requires_finalize"
+				} else {
+					out.Body["dispatch_status"] = "waiting_runtime_assets"
+				}
 			} else {
 				out.Body["dispatch_status"] = "prefetch_queued"
 			}
@@ -71,9 +78,6 @@ func runtimeAssetsCompleteForPrepare(req SubmitJobRequest) bool {
 			if err != nil {
 				return false
 			}
-		}
-		if requiresAsyncStockPreparation(req.CompiledRenderPlanJSON, assets) {
-			return false
 		}
 		if req.RuntimeAssetsComplete != nil && !*req.RuntimeAssetsComplete {
 			return false

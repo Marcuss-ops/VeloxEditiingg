@@ -6,11 +6,15 @@ Status updated: 2026-11-09
 
 The local implementation now has one video-preparation behavior: packet-copy
 an already certified compatible window or fail. Existing video is not
-normalized or encoded during `video.prepare.window.v1`, Master stock-window
-preparation, or native mixed assembly. The Master snapshots stock selection,
-expands pool slots into explicit source windows, and certifies them before
-dispatch. The worker rejects unresolved `stock_pool` or `stock_pool_slot`
-entries; assembly does not select stock or invoke nested preparation.
+normalized or encoded during `video.prepare.window.v1`, worker-owned stock
+preparation, or native mixed assembly. The Master snapshots stock selection
+and expands pool slots into explicit source windows using metadata only. The
+worker downloads, certifies and prepares those windows. The worker rejects
+unresolved `stock_pool` or `stock_pool_slot` entries; assembly does not select
+stock or invoke nested preparation. The ordinary `/jobs` submit path persists
+this work as queued FINALIZE instead of materializing windows synchronously on
+the Master. The old Master download/probe/trim/cache implementation has been
+removed.
 
 Incompatible sources fail before publication. The local FFmpeg build currently
 produces avcC `667044…`, while the repository contract pins `7201ce…`; the

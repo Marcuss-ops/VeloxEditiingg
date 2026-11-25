@@ -122,8 +122,8 @@ func (q *runtimeFinalizeTestQueue) ScheduleRuntimeFinalizationRetry(_ context.Co
 
 type runtimeFinalizeTestPreparer struct{}
 
-func (runtimeFinalizeTestPreparer) PrepareDriveStockWindows(context.Context, string, []map[string]interface{}) (string, string, error) {
-	return "", "", nil
+func (runtimeFinalizeTestPreparer) PlanDriveStockWindowTasks(string, []map[string]interface{}) ([]contract.VideoPrepareWindowTaskV1, error) {
+	return nil, nil
 }
 
 type runtimeFinalizeTestNotifier struct{ jobs []string }
@@ -155,7 +155,7 @@ func TestRuntimeFinalizationPublishesDurablePreparationFanOut(t *testing.T) {
 		SegmentIDs: []string{"segment-1", "segment-2"},
 	}
 	bindings := []map[string]interface{}{{"asset_id": "source-1", "source_uri": "https://media.example/source.mp4"}}
-	if err := processor.publishWorkerPreparations(context.Background(), taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-1", JobID: "job-1"}, bindings, []contract.VideoPrepareWindowTaskV1{preparation}, nil); err != nil {
+	if err := processor.publishWorkerPreparations(context.Background(), taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-1", JobID: "job-1"}, bindings, []contract.VideoPrepareWindowTaskV1{preparation}, nil, "", "", nil); err != nil {
 		t.Fatalf("publishWorkerPreparations: %v", err)
 	}
 	wantTaskID := "assembly-1-prep-" + identity[:24]

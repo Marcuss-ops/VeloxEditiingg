@@ -8,7 +8,7 @@ import (
 	"velox-shared/contract"
 )
 
-func TestMasterWindowPreparationRecognizesHTTPSOverlaySources(t *testing.T) {
+func TestPlanHasDriveStockRecognizesHTTPSOverlaySources(t *testing.T) {
 	sha := strings.Repeat("a", 64)
 	profile := contract.CanonicalVideoProfileV1Default
 	plan := contract.CompiledRenderPlanV2{
@@ -35,24 +35,6 @@ func TestMasterWindowPreparationRecognizesHTTPSOverlaySources(t *testing.T) {
 		"sha256": sha, "size_bytes": int64(2048),
 	}}
 	if !PlanHasDriveStock(string(planJSON), bindings) {
-		t.Fatal("Master failed to select an HTTPS overlay window for materialization")
-	}
-	bindingMap := stockRuntimeBindings(bindings)
-	assetMap := map[string]contract.AssetRefV2{"overlay-source": plan.Assets[0]}
-	requests, err := collectDriveStockSourceRequests(&plan, assetMap, bindingMap)
-	if err != nil {
-		t.Fatalf("collect overlay source: %v", err)
-	}
-	if got := requests["overlay-source"].uri; got != "https://objects.example/overlay.mp4" {
-		t.Fatalf("overlay source URI = %q", got)
-	}
-	probe := VideoProbe{DurationSeconds: 5, FPSNum: 24, FPSDen: 1, FrameCount: 120}
-	sources := map[string]*driveStockSourceState{"overlay-source": {sha: sha, size: 2048, probe: probe}}
-	jobs, placements, replaced, changed, err := collectDriveStockWindows(&plan, assetMap, bindingMap, sources, nil, NewVideoTrimmer().PreparationRevision())
-	if err != nil {
-		t.Fatalf("collect overlay window: %v", err)
-	}
-	if !changed || len(jobs) != 1 || len(placements) != 1 || len(replaced) != 1 {
-		t.Fatalf("overlay materialization work changed=%v jobs=%d placements=%d replaced=%d", changed, len(jobs), len(placements), len(replaced))
+		t.Fatal("worker preparation classifier missed an HTTPS overlay source")
 	}
 }

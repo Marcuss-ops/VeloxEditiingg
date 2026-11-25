@@ -15,8 +15,8 @@ type runtimeFinalizeTestFragmentCache struct {
 	lookups []string
 }
 
-func (c *runtimeFinalizeTestFragmentCache) PrepareDriveStockWindows(context.Context, string, []map[string]interface{}) (string, string, error) {
-	return "", "", nil
+func (c *runtimeFinalizeTestFragmentCache) PlanDriveStockWindowTasks(string, []map[string]interface{}) ([]contract.VideoPrepareWindowTaskV1, error) {
+	return nil, nil
 }
 
 func (c *runtimeFinalizeTestFragmentCache) LookupPreparedWindowAsset(_ context.Context, identity string) (*voiceoverassets.PreparedWindowAssetBinding, error) {
@@ -76,7 +76,7 @@ func TestPublishWorkerPreparationsPersistsReuseBindings(t *testing.T) {
 		SegmentIDs: []string{"segment-1"},
 	}}
 	if err := processor.publishWorkerPreparations(context.Background(),
-		taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-1", JobID: "job-1"}, nil, preparations, reuse); err != nil {
+		taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-1", JobID: "job-1"}, nil, preparations, reuse, "", "", nil); err != nil {
 		t.Fatalf("publishWorkerPreparations: %v", err)
 	}
 	if len(expander.additions) != 1 || expander.additions[0].TaskID != "assembly-1-prep-"+miss[:24] {

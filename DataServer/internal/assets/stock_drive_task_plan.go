@@ -18,6 +18,12 @@ type PreparedWindowAssetBinding struct {
 	ExtradataSHA256 string `json:"extradata_sha256"`
 }
 
+func videoSegmentAlreadyPrepared(plan contract.CompiledRenderPlanV2, segment contract.VideoSegmentV2, asset contract.AssetRefV2) bool {
+	return validStockSourceSHA256(asset.ExtradataSHA256) && asset.ProfileID == plan.Output.ProfileID && segment.SourceInUS == 0 &&
+		segment.SourceDurationUS == asset.DurationUS && asset.FrameCount == segment.FrameCount &&
+		asset.FirstFrameKeyframe && asset.ClosedGOP
+}
+
 // PlanDriveStockWindowTasks converts unresolved Drive/HTTPS stock windows
 // into worker preparation requests without materializing source bytes on the
 // Master. It requires an immutable source SHA and size; callers must reject
