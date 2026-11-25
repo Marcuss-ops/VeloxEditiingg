@@ -57,6 +57,7 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	jobs := r.Group("/api/v1/jobs")
 	jobs.Use(m2mJobsAuth)
 	jobs.GET("/types", listJobTypes)
+	jobs.GET("/capabilities", h.Capabilities())
 	jobs.POST("", h.SubmitJob())
 	jobs.POST("/pre", h.PrepareJob())
 	jobs.POST("/batch", h.SubmitJobBatch())

@@ -67,6 +67,7 @@ type PipelineRouteDeps struct {
 	// refuses to start if Resolver is nil.
 	Resolver          *creatorflow.Resolver
 	AssetService      *voiceoverassets.AssetService
+	WorkerRegistry    *workers.Registry
 	StockFolderLister pipeline.StockFolderLister
 }
 

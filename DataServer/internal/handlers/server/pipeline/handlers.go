@@ -32,6 +32,7 @@ type Handlers struct {
 	store             *store.SQLiteStore
 	intakeSink        CreatorIntakeSink
 	assetService      *voiceoverassets.AssetService
+	workerRegistry    *workers.Registry
 	stockFolderLister StockFolderLister
 	credentialVault   *credentials.Vault
 	pipelineRuns      PipelineRunService
@@ -136,6 +137,11 @@ func (h *Handlers) WithAssetService(svc *voiceoverassets.AssetService) *Handlers
 
 // WithStockFolderLister wires the Drive capability used to expand a single
 // folder-backed stock reference into its video files at creator intake.
+func (h *Handlers) WithWorkerRegistry(registry *workers.Registry) *Handlers {
+	h.workerRegistry = registry
+	return h
+}
+
 func (h *Handlers) WithStockFolderLister(lister StockFolderLister) *Handlers {
 	h.stockFolderLister = lister
 	return h

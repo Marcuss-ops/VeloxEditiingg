@@ -32,14 +32,15 @@ func (c *appComponents) routerBundle() RouterBundle {
 			Handler: c.fleet.getHandler(),
 		},
 		Pipeline: PipelineRouteDeps{
-			Cfg:          c.cfg,
-			Enqueuer:     c.modules.Enqueuer,
-			SQLiteStore:  c.persistence.SQLite,
-			JobsRepo:     c.jobs.Repository,
-			CmdMgr:       c.workers.CommandManager,
-			TaskReader:   c.tasks.TaskRepository,
-			Resolver:     c.resolver,
-			AssetService: c.modules.AssetService,
+			Cfg:            c.cfg,
+			Enqueuer:       c.modules.Enqueuer,
+			SQLiteStore:    c.persistence.SQLite,
+			JobsRepo:       c.jobs.Repository,
+			CmdMgr:         c.workers.CommandManager,
+			TaskReader:     c.tasks.TaskRepository,
+			Resolver:       c.resolver,
+			AssetService:   c.modules.AssetService,
+			WorkerRegistry: c.workers.Registry,
 			StockFolderLister: func() pipeline.StockFolderLister {
 				if c.modules.Drive != nil {
 					return c.modules.Drive.Service()
