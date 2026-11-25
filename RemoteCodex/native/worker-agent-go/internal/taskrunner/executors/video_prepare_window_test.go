@@ -171,7 +171,7 @@ func TestDiagnoseSourceWindowCopyReportsIndependentFallbackCauses(t *testing.T) 
 	if got.Eligible {
 		t.Fatal("incompatible source was eligible for packet copy")
 	}
-	want := map[string]bool{"bitrate_out_of_range": false, "extradata_mismatch": false, "window_start_not_keyframe": false}
+	want := map[string]bool{"extradata_mismatch": false, "window_start_not_keyframe": false}
 	for _, reason := range got.Reasons {
 		if _, ok := want[reason]; ok {
 			want[reason] = true
@@ -181,6 +181,27 @@ func TestDiagnoseSourceWindowCopyReportsIndependentFallbackCauses(t *testing.T) 
 		if !found {
 			t.Errorf("missing fallback reason %q in %v", reason, got.Reasons)
 		}
+	}
+}
+
+func TestDiagnoseSourceWindowCopyIgnoresAverageBitrateForCanonicalPacketCopy(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	request := contract.VideoPrepareWindowV1{
+		SourceStartFrame: 24, SourceFrameCount: 24, SourceFPSNum: profile.FPSNum,
+		SourceFPSDen: profile.FPSDen, OutputFrameCount: 24,
+	}
+	const extradata = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	source := windowSourceProbe{
+		CodecName: profile.Codec, Profile: strings.ToLower(profile.CodecProfile),
+		Level: canonicalLevelNumber(profile.CodecLevel), Width: profile.Width, Height: profile.Height,
+		PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen,
+		TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+		BFrames: 0, BitRateBPS: 10_000_000, ExtradataSHA: extradata, KeyframeTimes: []float64{1},
+	}
+	got := diagnoseSourceWindowCopy(source, request, profile, quality, extradata)
+	if !got.Eligible {
+		t.Fatalf("canonical packet-copy source rejected for its average bitrate: %v", got.Reasons)
 	}
 }
 

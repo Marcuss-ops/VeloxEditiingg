@@ -13,10 +13,14 @@
 ### Changed — fail closed instead of re-encoding existing video
 
 - `video.prepare.window.v1` now packet-copies only. Source-window, avcC,
-  profile, bitrate, frame-boundary, or output-certification failures return
+  profile, frame-boundary, or output-certification failures return
   `WINDOW_PACKET_COPY_INCOMPATIBLE`; there is no source normalization or
   encoded-window fallback. Prepared-window attestations require explicit
   `packet_copy_used` evidence, so older cache attestations are rejected.
+- Packet-copy eligibility no longer applies the encoder's VBV max-rate to
+  ffprobe's average bitrate. Short canonical clips (including single-frame
+  windows) can exceed that average without being incompatible or requiring
+  video encoding.
 - Master stock-window preparation admits only canonical sources and
   keyframe-aligned intervals. It no longer normalizes an incompatible source
   or encodes a mid-GOP cut.

@@ -205,10 +205,12 @@ func diagnoseSourceWindowCopy(source windowSourceProbe, request contract.VideoPr
 	if source.ExtradataSHA != expectedExtradata || !isLowerSHA256(source.ExtradataSHA) {
 		reasons = append(reasons, "extradata_mismatch")
 	}
-	maxRate, err := parseWindowBitRateBPS(quality.VideoMaxRate)
-	if err != nil || maxRate <= 0 || source.BitRateBPS <= 0 || source.BitRateBPS > maxRate {
-		reasons = append(reasons, "bitrate_out_of_range")
-	}
+	// VideoMaxRate is an encoder VBV constraint, not a packet-copy
+	// compatibility property. In particular, ffprobe's average stream
+	// bitrate for very short windows (including a single IDR frame) can
+	// exceed that value even though the bytes are unchanged and the stream
+	// signature is canonical. Applying the encode-time ceiling here rejects
+	// valid immutable media and cannot improve packet-copy safety.
 	startSeconds, _, ok := requestedWindowSeconds(request)
 	if !ok || absFloat(source.StartTimeSec) > 1e-6 || request.OutputFrameCount <= 0 {
 		reasons = append(reasons, "invalid_window_or_source_start_time")
