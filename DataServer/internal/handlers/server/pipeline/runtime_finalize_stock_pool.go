@@ -85,6 +85,42 @@ func snapshotRuntimeStockPool(
 	return finalBindings, snapshot, nil
 }
 
+// expandRuntimeStockPoolPlan resolves only pool metadata. It never opens or
+// downloads a Drive media object; source bytes stay with worker preparation.
+func expandRuntimeStockPoolPlan(
+	planJSON string,
+	jobID string,
+	bindings []map[string]interface{},
+) (string, []map[string]interface{}, map[string]interface{}, error) {
+	var plan contract.CompiledRenderPlanV2
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		return "", nil, nil, fmt.Errorf("decode compiled stock pool plan: %w", err)
+	}
+	if plan.StockPool == nil {
+		return planJSON, bindings, nil, nil
+	}
+	selectedBindings, snapshot, err := snapshotRuntimeStockPool(&plan, jobID, bindings)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	encodedMembers, err := json.Marshal(snapshot["members"])
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("encode selected stock pool members: %w", err)
+	}
+	var members []contract.StockPoolCandidateV2
+	if err := json.Unmarshal(encodedMembers, &members); err != nil {
+		return "", nil, nil, fmt.Errorf("decode selected stock pool members: %w", err)
+	}
+	if err := contract.ExpandCompiledStockPoolSlots(&plan, members); err != nil {
+		return "", nil, nil, fmt.Errorf("expand stock pool slots: %w", err)
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("canonicalize expanded stock pool plan: %w", err)
+	}
+	return string(canonical), selectedBindings, snapshot, nil
+}
+
 func stockPoolBindingMember(binding map[string]interface{}) bool {
 	member, _ := binding["stock_pool_member"].(bool)
 	return member

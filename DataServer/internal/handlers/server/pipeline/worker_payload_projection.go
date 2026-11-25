@@ -38,6 +38,11 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	if req.RuntimeAssetsPending {
 		raw["runtime_assets_pending"] = true
 	}
+	if req.RuntimeFinalizeRequest != nil {
+		raw[runtimeFinalizeRequestKey] = req.RuntimeFinalizeRequest
+		raw[runtimeFinalizeStatusKey] = runtimeFinalizeQueued
+		raw["runtime_finalize_idempotency_key"] = req.RuntimeFinalizeRequest.IdempotencyKey
+	}
 	if pin := req.PlacementPinWorkerID; pin != "" {
 		raw["_placement_pin_worker_id"] = pin
 	}

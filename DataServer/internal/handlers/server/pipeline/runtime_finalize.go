@@ -257,6 +257,23 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 		}
 		return p.commitFinalization(ctx, candidate, patch)
 	}
+	var stockPoolSnapshot interface{}
+	if compiledPlanHasStockPool(planJSON) {
+		expandedPlan, selectedBindings, snapshot, expandErr := expandRuntimeStockPoolPlan(planJSON, candidate.JobID, bindings)
+		if expandErr != nil {
+			return p.fail(ctx, candidate, fmt.Errorf("resolve stock pool plan: %w", expandErr))
+		}
+		planJSON, bindings = expandedPlan, selectedBindings
+		stockPoolSnapshot = snapshot
+		if req.RuntimePayload == nil {
+			req.RuntimePayload = make(map[string]interface{})
+		}
+		planHash := contract.HashCompiledPlanV2([]byte(planJSON))
+		req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+		req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+		req.RuntimePayload["runtime_assets"] = bindings
+		req.RuntimePayload["runtime_stock_pool_snapshot"] = snapshot
+	}
 	if planner, ok := p.assets.(RuntimeStockWindowTaskPlanner); ok && strings.TrimSpace(planJSON) != "" {
 		preparations, planErr := planner.PlanDriveStockWindowTasks(planJSON, bindings)
 		if planErr != nil {
@@ -274,21 +291,16 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 				}
 				return p.commitFinalization(ctx, candidate, patch)
 			}
-			if err := p.publishWorkerPreparations(ctx, candidate, bindings, misses, reuse); err != nil {
+			planHash := contract.HashCompiledPlanV2([]byte(planJSON))
+			if err := p.publishWorkerPreparations(ctx, candidate, bindings, misses, reuse, planJSON, planHash, stockPoolSnapshot); err != nil {
 				return p.fail(ctx, candidate, err)
 			}
 			return nil
 		}
 	}
-	// Once worker preparation is wired, the control plane must never
-	// materialize Drive stock bytes as a fallback: an empty preparation plan
-	// with remaining stock is a contract violation, not an invitation to
-	// download on the Master.
-	// A stock_pool must be expanded and certified on the Master before the
-	// immutable execution plan is published. This path is packet-copy-only;
-	// the worker must never reconstruct editorial slot selection.
-	allowMasterStock := compiledPlanHasStockPool(planJSON)
-	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, planJSON, req, current, p.assets, allowMasterStock)
+	// Drive source bytes are worker-owned. FINALIZE may publish only plans
+	// whose stock windows have already been certified by worker preparation.
+	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, planJSON, req, current, p.assets)
 	if err != nil {
 		return p.fail(ctx, candidate, err)
 	}
@@ -378,7 +390,7 @@ func validPreparedWindowBinding(binding voiceoverassets.PreparedWindowAssetBindi
 	return err == nil
 }
 
-func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, bindings []map[string]interface{}, preparations []contract.VideoPrepareWindowTaskV1, reuse map[string]voiceoverassets.PreparedWindowAssetBinding) error {
+func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, bindings []map[string]interface{}, preparations []contract.VideoPrepareWindowTaskV1, reuse map[string]voiceoverassets.PreparedWindowAssetBinding, planJSON, planHash string, stockPoolSnapshot interface{}) error {
 	if p.expander == nil {
 		return errors.New("runtime finalizer: atomic task graph extension is unavailable")
 	}
@@ -407,6 +419,15 @@ func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Con
 		runtimePrepareTasksKey:   identityToTask,
 		"runtime_assets":         bindings,
 		"runtime_assets_pending": true,
+	}
+	if planJSON != "" {
+		patch[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+	}
+	if planHash != "" {
+		patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+	}
+	if stockPoolSnapshot != nil {
+		patch["runtime_stock_pool_snapshot"] = stockPoolSnapshot
 	}
 	if len(reuse) > 0 {
 		patch[runtimePrepareWindowReuseKey] = reuse
@@ -550,7 +571,7 @@ func (p *RuntimeFinalizationProcessor) rewritePreparedWindowPlan(
 	}
 	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = plan
 	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
-	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, plan, req, current, p.assets, false)
+	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, plan, req, current, p.assets)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +620,6 @@ func buildRuntimeFinalizePatch(
 	req FinalizeJobRequest,
 	current map[string]interface{},
 	assets RuntimeStockWindowPreparer,
-	allowStockPreparation bool,
 ) (map[string]interface{}, error) {
 	bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 	var err error
@@ -619,58 +639,23 @@ func buildRuntimeFinalizePatch(
 			return nil, fmt.Errorf("decode compiled render plan: %w", err)
 		}
 	}
-	hadStockPool := compiledPlan.StockPool != nil
 	finalRuntimeAssets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
-	var stockPoolSnapshot map[string]interface{}
-	if hadStockPool {
-		finalRuntimeAssets, stockPoolSnapshot, err = snapshotRuntimeStockPool(&compiledPlan, jobID, bindings)
-		if err != nil {
-			return nil, fmt.Errorf("persist stock pool selection: %w", err)
-		}
-		encodedMembers, marshalErr := json.Marshal(stockPoolSnapshot["members"])
-		if marshalErr != nil {
-			return nil, fmt.Errorf("encode stock pool selection: %w", marshalErr)
-		}
-		var selectedMembers []contract.StockPoolCandidateV2
-		if unmarshalErr := json.Unmarshal(encodedMembers, &selectedMembers); unmarshalErr != nil {
-			return nil, fmt.Errorf("decode stock pool selection: %w", unmarshalErr)
-		}
-		if err := contract.ExpandCompiledStockPoolSlots(&compiledPlan, selectedMembers); err != nil {
-			return nil, fmt.Errorf("compile stock pool timeline: %w", err)
-		}
-		compiledJSON, canonicalErr := compiledPlan.CanonicalJSON()
-		if canonicalErr != nil {
-			return nil, fmt.Errorf("canonicalize stock pool plan: %w", canonicalErr)
-		}
-		planJSON = string(compiledJSON)
-		if req.RuntimePayload == nil {
-			req.RuntimePayload = make(map[string]interface{})
-		}
-		req.RuntimePayload["runtime_assets"] = finalRuntimeAssets
-		req.RuntimePayload["runtime_stock_pool_snapshot"] = stockPoolSnapshot
+	if compiledPlan.StockPool != nil {
+		return nil, errors.New("runtime finalizer: unresolved stock_pool reached dispatch; worker stock preparation was not planned")
 	}
 	preparedStockPlan := compiledPlanHasDriveStock(planJSON, finalRuntimeAssets)
 	if preparedStockPlan {
-		if !allowStockPreparation {
-			return nil, errors.New("master stock-window preparation is disabled; the worker preparation plan produced no tasks")
+		planner, ok := assets.(RuntimeStockWindowTaskPlanner)
+		if !ok || isNilInterface(planner) {
+			return nil, errors.New("runtime finalizer: worker stock-window planner is unavailable; refusing Master-side source download")
 		}
-		if isNilInterface(assets) {
-			return nil, errors.New("stock window preparation capability is unavailable")
+		pending, planErr := planner.PlanDriveStockWindowTasks(planJSON, bindings)
+		if planErr != nil {
+			return nil, fmt.Errorf("runtime finalizer: check worker stock-window plan: %w", planErr)
 		}
-		preparedPlan, preparedHash, prepareErr := assets.PrepareDriveStockWindows(ctx, planJSON, bindings)
-		if prepareErr != nil {
-			return nil, fmt.Errorf("stock window materialization: %w", prepareErr)
+		if len(pending) > 0 {
+			return nil, errors.New("runtime finalizer: unresolved stock windows reached dispatch; refusing Master-side source download")
 		}
-		finalRuntimeAssets, err = retainPlanSourceBindings(preparedPlan, bindings)
-		if err != nil {
-			return nil, fmt.Errorf("prune materialized video sources: %w", err)
-		}
-		if req.RuntimePayload == nil {
-			req.RuntimePayload = make(map[string]interface{})
-		}
-		req.RuntimePayload["runtime_assets"] = finalRuntimeAssets
-		req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = preparedPlan
-		req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = preparedHash
 	}
 	patch := make(map[string]interface{}, len(req.RuntimePayload)+8)
 	for key, value := range req.RuntimePayload {
@@ -679,17 +664,7 @@ func buildRuntimeFinalizePatch(
 		}
 		patch[key] = value
 	}
-	if preparedStockPlan {
-		patch["runtime_assets"] = finalRuntimeAssets
-		patch[contract.PayloadKeyCompiledRenderPlanJSON] = req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON]
-		patch[contract.PayloadKeyCompiledRenderPlanSHA] = req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA]
-		if hadStockPool {
-			patch["runtime_stock_pool_snapshot"] = stockPoolSnapshot
-		}
-	} else if hadStockPool {
-		patch["runtime_assets"] = finalRuntimeAssets
-		patch["runtime_stock_pool_snapshot"] = stockPoolSnapshot
-	} else if len(req.RuntimeAssets) > 0 {
+	if len(req.RuntimeAssets) > 0 {
 		patch["runtime_assets"] = req.RuntimeAssets
 	}
 	patch["runtime_assets_pending"] = false

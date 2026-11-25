@@ -107,6 +107,10 @@ type SubmitJobRequest struct {
 	// internal two-stage marker and is intentionally not accepted from the
 	// ordinary submit wire shape.
 	RuntimeAssetsPending bool `json:"-"`
+	// RuntimeFinalizeRequest is populated internally for one-stage submissions
+	// that need worker-owned stock preparation. It is persisted with the task
+	// spec and consumed by the durable FINALIZE coordinator.
+	RuntimeFinalizeRequest *FinalizeJobRequest `json:"-"`
 
 	// PlacementPinWorkerID is an optional operator/admin field that
 	// forces the job to be placed on a specific worker, skipping

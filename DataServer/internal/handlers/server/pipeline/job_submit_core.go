@@ -19,15 +19,13 @@
 // it, and POST /api/v1/jobs/batch calls it directly per item, so both surfaces
 // share ONE implementation and neither simulates the other.
 //
-// Semantics are intentionally unchanged: identical validation order, identical
-// status codes, identical error codes/messages/details (including the
-// `"details":null` keys the historical envelope emitted), identical
-// intake-source telemetry and identical accept log lines.
+// Validation and rejection semantics remain shared across single and batch
+// intake. Stock-backed single-stage submissions are accepted into the durable
+// FINALIZE queue instead of materializing media in the HTTP request.
 package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -205,30 +203,12 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 		if bindingErr != nil {
 			return reject(http.StatusUnprocessableEntity, "invalid_runtime_assets", bindingErr.Error())
 		}
-		if compiledPlanHasDriveStock(req.CompiledRenderPlanJSON, bindings) {
-			if h.assetService == nil {
-				return reject(http.StatusServiceUnavailable, "stock_preparation_unavailable", "Master stock window preparation is not configured")
-			}
-			preparedPlan, preparedHash, prepareErr := h.assetService.PrepareDriveStockWindows(ctx, req.CompiledRenderPlanJSON, bindings)
-			if prepareErr != nil {
-				return rejectWithDetails(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", prepareErr.Error(), []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_materialization_failed"}})
-			}
-			req.CompiledRenderPlanJSON, req.CompiledRenderPlanSHA256 = preparedPlan, preparedHash
-			pruned, pruneErr := retainPlanSourceBindings(preparedPlan, req.RuntimeAssets)
-			if pruneErr != nil {
-				return reject(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", pruneErr.Error())
-			}
-			req.RuntimeAssets = pruned
-			if raw, ok := req.RuntimePayload["runtime_assets"]; ok {
-				encoded, _ := json.Marshal(raw)
-				var nested []map[string]interface{}
-				if json.Unmarshal(encoded, &nested) == nil {
-					prunedNested, nestedErr := retainPlanSourceBindings(preparedPlan, nested)
-					if nestedErr != nil {
-						return reject(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", nestedErr.Error())
-					}
-					req.RuntimePayload["runtime_assets"] = prunedNested
-				}
+		if identity.Phase == "" && requiresAsyncStockPreparation(req.CompiledRenderPlanJSON, bindings) {
+			req.RuntimeAssetsPending = true
+			req.RuntimeFinalizeRequest = &FinalizeJobRequest{
+				IdempotencyKey: req.IdempotencyKey,
+				RuntimeAssets:  append([]map[string]interface{}(nil), req.RuntimeAssets...),
+				RuntimePayload: req.RuntimePayload,
 			}
 		}
 	}

@@ -64,6 +64,17 @@ func runtimeAssetsCompleteForPrepare(req SubmitJobRequest) bool {
 	// Require every plan asset and final audio binding (or at least one
 	// resolved member for a StockPool plan) before allowing single-stage PRE.
 	if strings.TrimSpace(req.CompiledRenderPlanJSON) != "" {
+		assets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
+		if req.RuntimePayload != nil {
+			var err error
+			assets, err = appendRuntimeAssetBindings(assets, req.RuntimePayload["runtime_assets"])
+			if err != nil {
+				return false
+			}
+		}
+		if requiresAsyncStockPreparation(req.CompiledRenderPlanJSON, assets) {
+			return false
+		}
 		if req.RuntimeAssetsComplete != nil && !*req.RuntimeAssetsComplete {
 			return false
 		}
@@ -272,7 +283,7 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "stock_preparation_queued", "finalization_status": runtimeFinalizeQueued, "idempotency_key": req.IdempotencyKey})
 			return
 		}
-		patch, err := buildRuntimeFinalizePatch(c.Request.Context(), jobID, planJSON, req, current, nil, true)
+		patch, err := buildRuntimeFinalizePatch(c.Request.Context(), jobID, planJSON, req, current, nil)
 		if err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_runtime_assets", "message": err.Error()})
 			return
