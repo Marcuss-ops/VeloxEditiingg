@@ -152,7 +152,7 @@ func TestGetReportMasterTimestamps(t *testing.T) {
 }
 
 func TestListSegmentTimingsRetainsPreparedWindowEvidence(t *testing.T) {
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite3", "file::memory:?_busy_timeout=5000")
 	if err != nil {
 		t.Fatal(err)
 	}
