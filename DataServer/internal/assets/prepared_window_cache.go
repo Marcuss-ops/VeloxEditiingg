@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"velox-shared/contract"
 )
 
 // LookupPreparedWindowAsset returns the certified fragment registered by any
@@ -45,7 +47,7 @@ func (s *AssetService) LookupPreparedWindowAsset(ctx context.Context, identity s
 		return nil, nil
 	}
 	extradata := strings.ToLower(strings.TrimSpace(metadata.WindowCertificate.OutputEvidence.ExtradataSHA256))
-	if !validStockSourceSHA256(extradata) {
+	if extradata != contract.CanonicalVideoExtradataSHA256 {
 		return nil, nil
 	}
 	return &PreparedWindowAssetBinding{AssetID: asset.AssetID, SHA256: asset.SHA256, SizeBytes: asset.SizeBytes, ExtradataSHA256: extradata}, nil

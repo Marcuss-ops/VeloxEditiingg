@@ -343,8 +343,11 @@ benchmark evidence and digest promotion — remain open below.
   a registered asset for each successful preparation, and rewrites the
   immutable assembly plan only after every dependency and cache binding is
   validated. A regression test covers recovery after the worker result has
-  been persisted. Remaining: collect production multi-worker measurements.
-  Do not model intermediate windows as `final_video` artifacts.
+  been persisted. Prepared-window cache lookup also treats any persisted avcC
+  other than the exact canonical hash as a miss, preventing incompatible
+  legacy evidence from reaching assembly. Remaining: collect production
+  multi-worker measurements. Do not model intermediate windows as
+  `final_video` artifacts.
 
 ## P2 — transfer and publication overlap
 
