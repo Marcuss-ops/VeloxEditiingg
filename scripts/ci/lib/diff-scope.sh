@@ -132,5 +132,26 @@ scoped_grep() {
     return 0
   fi
 
-  git grep -nE "$pattern" -- "${filtered[@]}" 2>/dev/null || true
+  # Search only added/modified lines. Scanning every line in a changed file
+  # makes a harmless edit re-trigger historical matches elsewhere in that
+  # file, contradicting the diff-scoped contract above.
+  git diff --no-ext-diff --unified=0 --no-color "${BASE_REF}...HEAD" -- "${filtered[@]}" \
+    | awk '
+      /^\+\+\+ / {
+        path = substr($0, 5)
+        sub(/^b\//, "", path)
+        next
+      }
+      /^@@ / {
+        hunk = $0
+        sub(/^.*\+/, "", hunk)
+        sub(/,.*/, "", hunk)
+        line = hunk + 0
+        next
+      }
+      /^\+/ {
+        printf "%s:%d:%s\n", path, line, substr($0, 2)
+        line++
+      }
+    ' | grep -E "$pattern" || true
 }
