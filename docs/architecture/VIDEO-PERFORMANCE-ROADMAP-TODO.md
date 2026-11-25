@@ -73,11 +73,15 @@ Incompatible sources fail before publication. The canonical encoder arguments
 now emit the pinned avcC locally; other source encoders still need the same
 immutable stream evidence before direct packet-copy assembly can accept them.
 
-Still open: certify all legacy cache evidence and migration behavior, measure
-the direct source mux path on representative production sources, and collect
-cold/warm production measurements after rollout. The local DataServer,
-worker, and C++ verification gates pass; this workspace change does not deploy
-to another computer.
+Legacy cache migration is fail-closed: current cache keys include the v2 key
+schema and preparation revision, so old entries miss rather than being treated
+as current evidence. Persisted v1 tasks remain executable for compatibility,
+but their evidence is revision-separated; a shared-contract regression pins
+that separation. Legacy blobs are retained and are not deleted by this change.
+Still open: measure the direct source mux path on representative production
+sources and collect cold/warm production measurements after rollout. The local
+DataServer, worker, and C++ verification gates pass; this workspace change does
+not deploy to another computer.
 
 This checklist tracks the P0–P3 work needed to keep video bytes off the
 control plane, reuse certified work across retries, and publish one clean

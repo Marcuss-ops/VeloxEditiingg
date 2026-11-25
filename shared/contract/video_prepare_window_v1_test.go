@@ -76,6 +76,33 @@ func TestVideoWindowPreparationRevisionUsesPacketCopyContractAndSupportsPersiste
 	}
 }
 
+func TestVideoPrepareWindowCacheIdentitySeparatesLegacyRevision(t *testing.T) {
+	profile := CanonicalVideoProfileV1Default
+	current, err := VideoWindowPreparationRevision(profile, CanonicalPreparationQualityPolicyDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := VideoPrepareWindowV1{
+		Version:          VideoPrepareWindowVersion,
+		Source:           AssetRefV2{AssetID: "source", SHA256: strings.Repeat("a", 64), SizeBytes: 1024, Kind: "video"},
+		SourceStartFrame: 0, SourceFrameCount: 48, SourceFPSNum: profile.FPSNum, SourceFPSDen: profile.FPSDen,
+		OutputFrameCount: 48, TimelineRevision: 1, TimelineSHA256: strings.Repeat("b", 64),
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: current,
+	}
+	currentIdentity, err := VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.OutputProfileRevision = "video-window-preparer.v1:" + strings.Repeat("c", 64)
+	legacyIdentity, err := VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentIdentity == legacyIdentity {
+		t.Fatal("current packet-copy evidence reused a legacy preparation revision")
+	}
+}
+
 func TestVideoPrepareWindowV1RejectsMissingIdentityAndOverflow(t *testing.T) {
 	profile := CanonicalVideoProfileV1Default
 	revision, _ := VideoWindowPreparationRevision(profile, CanonicalPreparationQualityPolicyDefault)
