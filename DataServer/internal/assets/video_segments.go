@@ -550,16 +550,17 @@ func (s *AssetService) RegisterPreparedWindow(
 	if err != nil {
 		return nil, err
 	}
-	frames, err := s.videoTrimmer.countFrames(ctx, preparedPath)
-	if err != nil {
-		return nil, err
-	}
 	evidence := certificate.OutputEvidence
+	frames := evidence.FrameCount
+	if probe.FrameCount > 0 && probe.FrameCount != frames {
+		return nil, fmt.Errorf("prepared window probe frame count %d differs from worker certificate %d", probe.FrameCount, frames)
+	}
 	level, levelErr := strconv.Atoi(strings.ReplaceAll(profile.CodecLevel, ".", ""))
 	if levelErr != nil || probe.VideoCodec != profile.Codec || probe.VideoProfile != strings.ToLower(profile.CodecProfile) ||
 		probe.VideoLevel != level || probe.Width != profile.Width || probe.Height != profile.Height ||
 		probe.PixelFormat != profile.PixelFormat || probe.FPSNum != profile.FPSNum || probe.FPSDen != profile.FPSDen ||
 		probe.TimebaseNum != profile.TimeBaseNum || probe.TimebaseDen != profile.TimeBaseDen || frames != request.OutputFrameCount ||
+		probe.ExtradataSHA256 != evidence.ExtradataSHA256 ||
 		probe.AudioCodec != "" || evidence.Codec != probe.VideoCodec || evidence.Profile != probe.VideoProfile ||
 		evidence.Level != probe.VideoLevel || evidence.Width != probe.Width || evidence.Height != probe.Height ||
 		evidence.PixelFormat != probe.PixelFormat || evidence.FPSNum != probe.FPSNum || evidence.FPSDen != probe.FPSDen ||

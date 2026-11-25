@@ -293,25 +293,6 @@ func (t *VideoTrimmer) probe(ctx context.Context, inputPath, sourceSHA256 string
 	return probe, nil
 }
 
-// countFrames asks ffprobe to decode and count every video frame. nb_frames is
-// often absent or estimated by muxers, so certified fragments use this value.
-func (t *VideoTrimmer) countFrames(ctx context.Context, inputPath string) (int64, error) {
-	if t == nil || t.runner == nil {
-		return 0, fmt.Errorf("video trimmer unavailable")
-	}
-	output, err := t.runner.Run(ctx, "ffprobe",
-		"-v", "error", "-count_frames", "-select_streams", "v:0",
-		"-show_entries", "stream=nb_read_frames", "-of", "default=nokey=1:noprint_wrappers=1", inputPath)
-	if err != nil {
-		return 0, fmt.Errorf("ffprobe frame count %s: %w: %s", inputPath, err, strings.TrimSpace(string(output)))
-	}
-	frames, err := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
-	if err != nil || frames <= 0 {
-		return 0, fmt.Errorf("ffprobe frame count %s: invalid nb_read_frames %q", inputPath, strings.TrimSpace(string(output)))
-	}
-	return frames, nil
-}
-
 // Plan admits only certified canonical sources and keyframe-aligned windows.
 // Video preparation never normalizes or re-encodes an existing source.
 func (t *VideoTrimmer) Plan(probe VideoProbe, segment VideoSegment, inputPath, outputPath string) (TrimPlan, error) {
