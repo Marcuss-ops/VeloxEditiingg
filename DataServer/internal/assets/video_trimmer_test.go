@@ -37,7 +37,7 @@ func (r *recordingVideoRunner) Run(_ context.Context, name string, args ...strin
 	return nil, nil
 }
 
-func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T) {
+func TestVideoTrimmerPlanUsesStreamCopyForCanonicalKeyframeSegment(t *testing.T) {
 	runner := &recordingVideoRunner{}
 	trimmer := newVideoTrimmerForTest(runner)
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
@@ -48,9 +48,6 @@ func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T
 	}
 	if plan.Mode != TrimModeStreamCopy {
 		t.Fatalf("mode = %q, want %q", plan.Mode, TrimModeStreamCopy)
-	}
-	if plan.RequiresNormalization {
-		t.Fatal("normalized source unexpectedly requires normalization")
 	}
 	assertContainsSequence(t, plan.TrimArgs, "-ss", "2.000000", "-i", "/source.mp4", "-t", "4.000000", "-c", "copy")
 }

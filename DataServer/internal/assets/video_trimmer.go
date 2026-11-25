@@ -51,18 +51,15 @@ type VideoProbe struct {
 type TrimMode string
 
 const (
-	TrimModeStreamCopy            TrimMode = "stream_copy"
-	TrimModeFrameAccurateReencode TrimMode = "frame_accurate_reencode"
+	TrimModeStreamCopy TrimMode = "stream_copy"
 )
 
 // TrimPlan is inspectable before execution and is also useful for telemetry.
 type TrimPlan struct {
-	Mode                  TrimMode
-	Segment               VideoSegment
-	DurationSeconds       float64
-	RequiresNormalization bool
-	NormalizationArgs     []string
-	TrimArgs              []string
+	Mode            TrimMode
+	Segment         VideoSegment
+	DurationSeconds float64
+	TrimArgs        []string
 
 	// CanonicalProfile is the encoded-stream identity the prepared segment was
 	// produced against. It is the ONLY authority for compatibility fields and
@@ -334,12 +331,11 @@ func (t *VideoTrimmer) Plan(probe VideoProbe, segment VideoSegment, inputPath, o
 	mode := TrimModeStreamCopy
 
 	plan := TrimPlan{
-		Mode:                  mode,
-		Segment:               segment,
-		DurationSeconds:       duration,
-		RequiresNormalization: false,
-		CanonicalProfile:      t.profile,
-		TrimArgs:              trimArgs(segment, duration, inputPath, outputPath),
+		Mode:             mode,
+		Segment:          segment,
+		DurationSeconds:  duration,
+		CanonicalProfile: t.profile,
+		TrimArgs:         trimArgs(segment, duration, inputPath, outputPath),
 	}
 	return plan, nil
 }

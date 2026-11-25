@@ -419,7 +419,6 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		"duration_seconds":            plan.DurationSeconds,
 		"duration_us":                 int64(plan.DurationSeconds * 1_000_000),
 		"trim_mode":                   plan.Mode,
-		"normalized":                  plan.RequiresNormalization,
 		"canonical_profile_id":        plan.CanonicalProfile.ProfileID,
 		"canonical_stream_profile_id": plan.CanonicalProfile.StreamProfile(),
 		"canonical_profile_version":   plan.CanonicalProfile.Version,
@@ -590,9 +589,9 @@ func (s *AssetService) RegisterPreparedWindow(
 		durationSeconds = float64(request.SourceFrameCount) * float64(request.SourceFPSDen) / float64(request.SourceFPSNum)
 	}
 	plan := TrimPlan{
-		Mode: TrimModeFrameAccurateReencode, Segment: VideoSegment{StartSeconds: startSeconds, EndSeconds: startSeconds + durationSeconds},
-		DurationSeconds:       float64(request.OutputFrameCount) * float64(profile.FPSDen) / float64(profile.FPSNum),
-		RequiresNormalization: true, CanonicalProfile: profile, OutputFrameCount: request.OutputFrameCount,
+		Mode: TrimModeStreamCopy, Segment: VideoSegment{StartSeconds: startSeconds, EndSeconds: startSeconds + durationSeconds},
+		DurationSeconds:  float64(request.OutputFrameCount) * float64(profile.FPSDen) / float64(profile.FPSNum),
+		CanonicalProfile: profile, OutputFrameCount: request.OutputFrameCount,
 		FirstFrameKeyframe: true, ClosedGOP: certificate.ClosedGOPAttested,
 		SourceSHA256: request.Source.SHA256, SourceSizeBytes: request.Source.SizeBytes,
 		SourceStartFrame: request.SourceStartFrame, SourceFrameCount: request.SourceFrameCount,

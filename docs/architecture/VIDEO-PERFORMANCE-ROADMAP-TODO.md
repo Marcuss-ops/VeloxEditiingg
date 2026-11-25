@@ -14,7 +14,10 @@ unresolved `stock_pool` or `stock_pool_slot` entries; assembly does not select
 stock or invoke nested preparation. The ordinary `/jobs` submit path persists
 this work as queued FINALIZE instead of materializing windows synchronously on
 the Master. The old Master download/probe/trim/cache implementation has been
-removed.
+removed. Serving a missing prepared fragment is now byte retrieval only; it no
+longer downloads the source and reconstructs a fragment inline. Registered
+worker fragments are recorded as packet-copy outputs without legacy
+re-encode/normalization metadata.
 
 Incompatible sources fail before publication. The local FFmpeg build currently
 produces avcC `667044…`, while the repository contract pins `7201ce…`; the
