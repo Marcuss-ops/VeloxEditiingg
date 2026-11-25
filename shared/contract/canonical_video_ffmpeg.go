@@ -67,7 +67,7 @@ func CanonicalVideoEncodeArgs(profile CanonicalVideoProfileV1, quality Preparati
 		"-g", strconv.Itoa(profile.GOPSize),
 		"-bf", strconv.Itoa(profile.BFrames),
 		"-sc_threshold", "0",
-		"-x264-params", fmt.Sprintf("scenecut=0:open-gop=%d:keyint=%d:min-keyint=%d", openGOP, profile.GOPSize, profile.GOPSize),
+		"-x264-params", fmt.Sprintf("scenecut=0:open-gop=%d:keyint=%d:min-keyint=%d:colorprim=bt709:transfer=bt709:colormatrix=bt709", openGOP, profile.GOPSize, profile.GOPSize),
 		"-video_track_timescale", strconv.Itoa(profile.TimeBaseDen),
 	}
 }
