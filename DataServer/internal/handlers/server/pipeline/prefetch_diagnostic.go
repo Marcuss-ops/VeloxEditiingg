@@ -393,7 +393,14 @@ func prefetchAssetStates(events []store.JobEvent) map[string]string {
 		}
 		switch event.Event {
 		case "prefetch.asset_ready":
-			out[key] = "READY"
+			// Older workers mislabeled a failed resolution as asset_ready and
+			// carried the failure only in error_reason. Keep those events
+			// truthful while workers roll forward to the asset_failed event.
+			if strings.TrimSpace(prefetchStringField(raw, "error_reason")) != "" {
+				out[key] = "FAILED"
+			} else {
+				out[key] = "READY"
+			}
 		case "prefetch.asset_failed", "prefetch.prefetch_failed", "prefetch.prefetch_error":
 			out[key] = "FAILED"
 		case "prefetch.prefetch_preparation_waiting":

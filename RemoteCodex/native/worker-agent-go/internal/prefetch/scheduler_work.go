@@ -238,7 +238,9 @@ func (s *Scheduler) runOneWorkItem(item *workItem, resolver *downloader.CacheRes
 		active, queueDepth := s.activePrefetch, s.queue.Len()
 		s.mu.Unlock()
 		eventName := "asset_ready"
-		if metadataErr != nil && err == nil {
+		if err != nil {
+			eventName = "asset_failed"
+		} else if metadataErr != nil {
 			eventName = "asset_metadata_failed"
 		} else if protectionErr != nil && err == nil {
 			eventName = "asset_ready_unprotected"

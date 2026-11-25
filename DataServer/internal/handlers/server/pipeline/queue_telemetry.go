@@ -70,8 +70,13 @@ func buildQueueTelemetry(status string, runtimeAssetsPending bool, taskPayload m
 		case "prefetch.asset_ready":
 			key := queueString(p, "asset_key")
 			if key != "" {
-				states[key] = "READY"
-				cacheHits[key] = queueBool(p, "cache_hit")
+				if reason := queueString(p, "error_reason"); reason != "" {
+					states[key] = "FAILED"
+					assetErrors[key] = gin.H{"code": "ASSET_PREPARATION_FAILED", "message": sanitizeQueueError(reason)}
+				} else {
+					states[key] = "READY"
+					cacheHits[key] = queueBool(p, "cache_hit")
+				}
 			}
 		case "prefetch.asset_failed", "prefetch.prefetch_failed", "prefetch.prefetch_error":
 			key := queueString(p, "asset_key")

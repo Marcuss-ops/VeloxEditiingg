@@ -3,6 +3,8 @@ package prefetch
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -340,6 +342,43 @@ downloaded:
 			}
 		case <-deadline:
 			t.Fatal("cancel did not report the unused prefetched asset as wasted")
+		}
+	}
+}
+
+func TestSchedulerReportsAssetResolutionFailureAsFailed(t *testing.T) {
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, _ downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissNotFound}, downloader.TransferResult{}, nil
+		}
+		return downloader.CacheCheckResult{}, downloader.TransferResult{}, fmt.Errorf("%w: asset not found", downloader.ErrPermanent)
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+	events := make(chan Event, 8)
+	s := NewScheduler(Config{
+		WorkerID:      "worker-a",
+		MaxConcurrent: 1,
+		ByteBudget:    100,
+		OnEvent:       func(event Event) { events <- event },
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	defer s.Close()
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Name == "asset_failed" {
+				if !strings.Contains(event.ErrorMessage, "asset not found") {
+					t.Fatalf("asset_failed detail = %q", event.ErrorMessage)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("failed asset resolution was not reported as asset_failed")
 		}
 	}
 }

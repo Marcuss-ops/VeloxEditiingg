@@ -193,9 +193,11 @@ func diagnoseSourceWindowCopy(source windowSourceProbe, request contract.VideoPr
 	if source.FPSNum != profile.FPSNum || source.FPSDen != profile.FPSDen {
 		reasons = append(reasons, "frame_rate_mismatch")
 	}
-	if source.TimeBaseNum != profile.TimeBaseNum || source.TimeBaseDen != profile.TimeBaseDen {
-		reasons = append(reasons, "time_base_mismatch")
-	}
+	// The source stream time base is an input packet timestamp scale, not a
+	// bitstream compatibility property. FFmpeg's MP4 muxer rescales copied
+	// packet timestamps to the canonical output track scale configured by
+	// canonicalWindowStreamCopyArgs. The output certifier still requires the
+	// canonical time base, exact frame count and canonical stream signature.
 	if profile.BFrames != 0 || source.BFrames != 0 {
 		reasons = append(reasons, "b_frames_present")
 	}

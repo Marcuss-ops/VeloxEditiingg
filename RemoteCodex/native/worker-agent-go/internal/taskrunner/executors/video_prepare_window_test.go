@@ -291,6 +291,40 @@ func TestDiagnoseSourceWindowCopyIgnoresAverageBitrateForCanonicalPacketCopy(t *
 	}
 }
 
+func TestDiagnoseSourceWindowCopyRescalesNonCanonicalInputTimeBase(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	const extradata = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	request := contract.VideoPrepareWindowV1{
+		SourceStartFrame: 24, SourceFrameCount: 24, SourceFPSNum: profile.FPSNum,
+		SourceFPSDen: profile.FPSDen, OutputFrameCount: 24,
+	}
+	source := windowSourceProbe{
+		CodecName: profile.Codec, Profile: strings.ToLower(profile.CodecProfile),
+		Level: canonicalLevelNumber(profile.CodecLevel), Width: profile.Width, Height: profile.Height,
+		PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen,
+		// A common source MP4 uses a 1/15360 track clock. Packet timestamps
+		// can be rescaled losslessly when the muxer writes the canonical 1/90000
+		// output track clock.
+		TimeBaseNum: 1, TimeBaseDen: 15_360,
+		BFrames: 0, ExtradataSHA: extradata, KeyframeTimes: []float64{1},
+	}
+	if got := diagnoseSourceWindowCopy(source, request, profile, quality, extradata); !got.Eligible {
+		t.Fatalf("canonical source with a non-canonical input time base was rejected: %v", got.Reasons)
+	}
+	args := canonicalWindowStreamCopyArgs(profile, "source.mp4", "window.mp4", request, 0)
+	foundTimescale := false
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-video_track_timescale" && args[i+1] == strconv.Itoa(profile.TimeBaseDen) {
+			foundTimescale = true
+			break
+		}
+	}
+	if !foundTimescale {
+		t.Fatal("packet-copy mux does not set the canonical output track timescale")
+	}
+}
+
 func TestDiagnoseSourceWindowCopyUsesNonZeroPresentationOrigin(t *testing.T) {
 	profile := contract.CanonicalVideoProfileV1Default
 	quality := contract.CanonicalPreparationQualityPolicyDefault
