@@ -62,7 +62,7 @@ func discoveryWindowCertificate(request VideoPrepareWindowV1, sourceSHA string) 
 		OutputProfileRevision: request.OutputProfileRevision,
 		EncoderVersion:        "ffmpeg 6.0", EncoderBuildSHA256: strings.Repeat("d", 64),
 		OutputSHA256: strings.Repeat("e", 64), OutputSizeBytes: 4096,
-		ClosedGOPAttested: true,
+		ClosedGOPAttested: true, PacketCopyUsed: true,
 		OutputEvidence: VideoWindowOutputEvidenceV1{
 			Codec: "h264", FrameCount: request.OutputFrameCount, FirstFrameKeyframe: true,
 			ExtradataSHA256: strings.Repeat("f", 64), Width: 1, Height: 1,

@@ -167,7 +167,7 @@ func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	}
 }
 
-func TestPrepareDriveStockWindowsCertifiesExact75FrameFragment(t *testing.T) {
+func TestPrepareDriveStockWindowsRejectsIncompatibleMedia(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is required for the stock-window acceptance test")
 	}
@@ -176,9 +176,9 @@ func TestPrepareDriveStockWindowsCertifiesExact75FrameFragment(t *testing.T) {
 	}
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "stock.mp4")
-	generate := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=24", "-frames:v", "120", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000", "-t", "4.973", sourcePath)
+	generate := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=24", "-frames:v", "120", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sourcePath)
 	if output, err := generate.CombinedOutput(); err != nil {
-		t.Fatalf("generate 4.973s stock fixture: %v: %s", err, output)
+		t.Fatalf("generate incompatible fixture: %v: %s", err, output)
 	}
 	sha, size, err := hashFile(sourcePath)
 	if err != nil {
@@ -186,62 +186,20 @@ func TestPrepareDriveStockWindowsCertifiesExact75FrameFragment(t *testing.T) {
 	}
 	profile := videoContract.CanonicalVideoProfileV1Default
 	plan := videoContract.CompiledRenderPlanV2{
-		PlanVersion: 2, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64), DurationUS: 4_125_000,
-		Output:      videoContract.OutputContractV2{Container: "mp4", VideoCodec: "h264", Width: 1920, Height: 1080, FPSNum: 24, FPSDen: 1, PixelFormat: "yuv420p", ProfileID: profile.ProfileID, CodecProfile: profile.CodecProfile, CodecLevel: profile.CodecLevel, GOPSize: profile.GOPSize, BFrames: 0, ClosedGOP: true, TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen},
-		FinalAudio:  videoContract.FinalAudioV2{Mode: videoContract.AudioModeFinalAudioCopyV2, AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 4_125_000, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64)},
-		VideoTracks: []videoContract.VideoTrackV2{{TrackID: "main", Segments: []videoContract.VideoSegmentV2{{SegmentID: "segment-stock-001", AssetID: sha, SHA256: sha, TimelineStartFrame: 24, FrameCount: 75, SourceInUS: 1_250_000, SourceDurationUS: 3_125_000}}}},
-		Assets:      []videoContract.AssetRefV2{{AssetID: sha, SHA256: sha, SizeBytes: size, Kind: "video", MIME: "video/mp4", DurationUS: 5_000_000, FrameCount: 120}, {AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Kind: "final_audio", MIME: "audio/mp4", DurationUS: 4_125_000}},
+		PlanVersion: 2, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64), DurationUS: 3_125_000,
+		Output:      videoContract.OutputContractV2{Container: "mp4", VideoCodec: "h264", Width: profile.Width, Height: profile.Height, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, PixelFormat: profile.PixelFormat, ProfileID: profile.ProfileID, CodecProfile: profile.CodecProfile, CodecLevel: profile.CodecLevel, GOPSize: profile.GOPSize, BFrames: profile.BFrames, ClosedGOP: true, TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen},
+		FinalAudio:  videoContract.FinalAudioV2{Mode: videoContract.AudioModeFinalAudioCopyV2, AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 3_125_000, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64)},
+		VideoTracks: []videoContract.VideoTrackV2{{TrackID: "main", Segments: []videoContract.VideoSegmentV2{{SegmentID: "segment-stock-001", AssetID: sha, SHA256: sha, TimelineStartFrame: 0, FrameCount: 75, SourceInUS: 0, SourceDurationUS: 3_125_000}}}},
+		Assets:      []videoContract.AssetRefV2{{AssetID: sha, SHA256: sha, SizeBytes: size, Kind: "video", MIME: "video/mp4", DurationUS: 5_000_000, FrameCount: 120}, {AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Kind: "final_audio", MIME: "audio/mp4", DurationUS: 3_125_000}},
 	}
 	planJSON, err := json.Marshal(plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := &segmentTestRepository{}
-	service := &AssetService{repo: repo, blobStore: &segmentTestBlobStore{root: filepath.Join(root, "assets")}, clock: clock.System{}, videoTrimmer: NewVideoTrimmer(), security: inputsecurity.NewFetcher(inputsecurity.DefaultPolicy()), mediaMetadata: NewMediaMetadataResolver()}
+	service := &AssetService{repo: &segmentTestRepository{}, blobStore: &segmentTestBlobStore{root: filepath.Join(root, "assets")}, clock: clock.System{}, videoTrimmer: NewVideoTrimmer(), security: inputsecurity.NewFetcher(inputsecurity.DefaultPolicy()), mediaMetadata: NewMediaMetadataResolver()}
 	bindings := []map[string]interface{}{{"role": "stock", "asset_id": sha, "drive_file_id": "drive-stock-001", "source_uri": sourcePath, "sha256": sha, "size_bytes": size}}
-	preparedJSON, preparedSHA, err := service.PrepareDriveStockWindows(context.Background(), string(planJSON), bindings)
-	if err != nil {
-		t.Fatalf("prepare stock window: %v", err)
-	}
-	if len(preparedSHA) != 64 {
-		t.Fatalf("prepared plan hash = %q, want SHA-256", preparedSHA)
-	}
-	var prepared videoContract.CompiledRenderPlanV2
-	if err := json.Unmarshal([]byte(preparedJSON), &prepared); err != nil {
-		t.Fatal(err)
-	}
-	segment := prepared.VideoTracks[0].Segments[0]
-	if segment.FrameCount != 75 || segment.SourceInUS != 0 || segment.SourceDurationUS != 3_125_000 {
-		t.Fatalf("segment = %+v, want certified 75-frame full fragment", segment)
-	}
-	if strings.HasPrefix(segment.AssetID, "drive:") || segment.AssetID != segment.SHA256 {
-		t.Fatalf("segment still references Drive source: %+v", segment)
-	}
-	var certified *videoContract.AssetRefV2
-	for index := range prepared.Assets {
-		if prepared.Assets[index].AssetID == segment.AssetID {
-			certified = &prepared.Assets[index]
-		}
-	}
-	if certified == nil || certified.FrameCount != 75 || !certified.FirstFrameKeyframe || !certified.ClosedGOP || certified.ProfileID != profile.ProfileID {
-		t.Fatalf("prepared asset certification = %+v", prepared.Assets)
-	}
-	if certified.TimelineRevision != plan.TimelineRevision || certified.TimelineSHA256 != plan.TimelineSHA256 || certified.TimelineStartFrame != segment.TimelineStartFrame {
-		t.Fatalf("prepared asset timeline binding revision=%d sha=%q start=%d; want revision=%d sha=%q start=%d", certified.TimelineRevision, certified.TimelineSHA256, certified.TimelineStartFrame, plan.TimelineRevision, plan.TimelineSHA256, segment.TimelineStartFrame)
-	}
-	if len(repo.inserted) != 1 {
-		t.Fatalf("registered prepared fragment count=%d, want 1", len(repo.inserted))
-	}
-	// A warm retry must hit the fragment cache before materializing the source.
-	// Removing the source makes any accidental source download/probe fail.
-	if err := os.Remove(sourcePath); err != nil {
-		t.Fatalf("remove source before warm retry: %v", err)
-	}
-	if _, _, err := service.PrepareDriveStockWindows(context.Background(), string(planJSON), bindings); err != nil {
-		t.Fatalf("cached retry: %v", err)
-	}
-	if len(repo.inserted) != 1 {
-		t.Fatalf("cache miss re-registered the same window: inserted=%d", len(repo.inserted))
+	if _, _, err := service.PrepareDriveStockWindows(context.Background(), string(planJSON), bindings); err == nil || !strings.Contains(err.Error(), "VIDEO_SOURCE_INCOMPATIBLE") {
+		t.Fatalf("incompatible source error = %v", err)
 	}
 }
 
@@ -303,7 +261,7 @@ func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
 			TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
 			BFrames: profile.BFrames, FrameCount: 48, FirstFrameKeyframe: true, ExtradataSHA256: strings.Repeat("d", 64),
 		},
-		ClosedGOPAttested: true, SourceAssetID: request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
+		ClosedGOPAttested: true, PacketCopyUsed: true, SourceAssetID: request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
 		TimelineRevision: request.TimelineRevision, TimelineSHA256: request.TimelineSHA256,
 	}
 	repo := &segmentTestRepository{}

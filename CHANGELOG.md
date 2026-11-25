@@ -1,5 +1,29 @@
 ## [Unreleased] - 2026-11-08
 
+### Changed — fail closed instead of re-encoding existing video
+
+- `video.prepare.window.v1` now packet-copies only. Source-window, avcC,
+  profile, bitrate, frame-boundary, or output-certification failures return
+  `WINDOW_PACKET_COPY_INCOMPATIBLE`; there is no source normalization or
+  encoded-window fallback. Prepared-window attestations require explicit
+  `packet_copy_used` evidence, so older cache attestations are rejected.
+- Master stock-window preparation admits only canonical sources and
+  keyframe-aligned intervals. It no longer normalizes an incompatible source
+  or encodes a mid-GOP cut.
+- Stock-pool selection is snapshotted and expanded by the Master into explicit
+  source windows before dispatch. The Master certifies each selected window
+  through packet-copy preparation; the worker rejects unresolved pool slots
+  and no longer selects, probes, or prepares stock as part of assembly.
+- The native mixed renderer, which normalized each video before packet mux,
+  has been removed. Such plans fail with `video_reencode_forbidden`;
+  copy-only assembly also refuses unsafe stock skipping.
+- Verification: the full DataServer removal gate passes (`go vet ./...`,
+  `go build ./...`, `go test -count=1 ./...`); the full worker Go suite passes;
+  the native C++ engine builds and all 23 CTest cases pass. Shared contract
+  tests have three local FFmpeg `avcC` identity failures: this machine produces
+  `667044…` instead of the pinned `7201ce…`, so incompatible output is rejected
+  as required. No remote computer or service was changed.
+
 ### Fixed — remove redundant prefetch wait from packet-copy assembly
 
 - `video.assemble.copy.v1` now relies on the worker's content-addressed

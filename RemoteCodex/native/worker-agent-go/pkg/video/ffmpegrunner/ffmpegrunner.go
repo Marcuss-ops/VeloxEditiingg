@@ -44,6 +44,9 @@ const (
 	// OperationEncode is the final mux/encode pass (MuxRecorder
 	// surface).
 	OperationEncode OperationType = "encode"
+	// OperationPacketCopy classifies FFmpeg invocations that only remux
+	// compressed video packets without decoding or encoding video frames.
+	OperationPacketCopy OperationType = "packet_copy"
 )
 
 // SanitizedParameters is the safe, comparable projection of an ffmpeg

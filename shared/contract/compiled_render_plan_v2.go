@@ -37,15 +37,16 @@ type CompiledRenderPlanV2 struct {
 	Output           OutputContractV2 `json:"output"`
 	FinalAudio       FinalAudioV2     `json:"final_audio"`
 	VideoTracks      []VideoTrackV2   `json:"video_tracks"`
-	// StockPool declares that the worker selects source videos from one Drive
-	// folder at execution time. The folder is expanded by the Master into
-	// runtime_assets; the producer never assigns individual files to scenes.
+	// StockPool declares that the Master selects source videos from one Drive
+	// folder before dispatch. Finalized plans replace it with explicit certified
+	// source windows; workers never select or reconstruct editorial sources.
 	StockPool *StockPoolV2 `json:"stock_pool,omitempty"`
 	Assets    []AssetRefV2 `json:"assets"`
 }
 
-// StockPoolV2 is the single canonical stock selection rule for a job.
-// Selection is deterministic per job so retries reproduce the same edit.
+// StockPoolV2 is the single canonical stock selection rule for FINALIZE.
+// Selection is deterministic per job and its snapshot is persisted before
+// the finalized plan is made claimable.
 type StockPoolV2 struct {
 	SourceKind    string `json:"source_kind"`
 	DriveFolderID string `json:"drive_folder_id"`
@@ -110,8 +111,8 @@ type VideoTrackV2 struct {
 // media does not need to be assumed CFR.
 type VideoSegmentV2 struct {
 	SegmentID string `json:"segment_id"`
-	// StockPoolSlot marks an output interval whose visual source is selected
-	// by the worker from CompiledRenderPlanV2.StockPool at execution time.
+	// StockPoolSlot marks an unresolved producer interval. The Master expands
+	// it from the persisted stock snapshot before the worker can claim the job.
 	StockPoolSlot bool `json:"stock_pool_slot,omitempty"`
 
 	AssetID string `json:"asset_id"`

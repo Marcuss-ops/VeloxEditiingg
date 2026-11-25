@@ -135,30 +135,6 @@ private:
         const std::function<RenderResult(const std::string&)>& failRender,
         const std::chrono::steady_clock::time_point& renderStart);
 
-    // Mixed renderer: the copy-only assembly path. Resolve each video
-    // segment independently against the canonical output profile; only
-    // PACKET_COPY segments are accepted and assembled through the single
-    // packet mux. Any Reject decision (transform, legacy feature,
-    // non-keyframe-safe trim, incompatible media signature) fails the job
-    // deterministically via failRender — the mixed path never re-encodes and
-    // never falls back to the legacy loop.
-    RenderResult renderMixed(
-        const plan::RenderPlan& plan,
-        const std::filesystem::path& workDir,
-        const std::filesystem::path& outPath,
-        RenderResult& result,
-        const std::function<RenderResult(const std::string&)>& failRender);
-
-    // Mixed renderer helper: stages the single final audio track. The
-    // FINAL_AUDIO_COPY contract is validated by the packet mux from the
-    // already-open InputSession, so the audio is not probed twice.
-    bool resolveMixedFinalAudio(
-        const plan::RenderPlan& plan,
-        const std::filesystem::path& workDir,
-        media::CopyOnlyMuxRequest& request,
-        RenderResult& result,
-        std::string& error_code);
-
     class SidecarGuard {
     public:
         SidecarGuard(const RenderEngine* engine, std::string output_path)

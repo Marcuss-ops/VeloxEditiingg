@@ -2,6 +2,28 @@
 
 Status updated: 2026-11-09
 
+## 2026-11-25 — zero-reencode assembly correction
+
+The local implementation now has one video-preparation behavior: packet-copy
+an already certified compatible window or fail. Existing video is not
+normalized or encoded during `video.prepare.window.v1`, Master stock-window
+preparation, or native mixed assembly. The Master snapshots stock selection,
+expands pool slots into explicit source windows, and certifies them before
+dispatch. The worker rejects unresolved `stock_pool` or `stock_pool_slot`
+entries; assembly does not select stock or invoke nested preparation.
+
+Incompatible sources fail before publication. The local FFmpeg build currently
+produces avcC `667044…`, while the repository contract pins `7201ce…`; the
+worker's packet-copy preflight rejects that mismatch. This is an environment
+compatibility finding, not permission to normalize the source.
+
+Still open: certify all legacy cache evidence and migration behavior, prove the
+copy-only path on a source carrying the pinned avcC (the local FFmpeg build
+produces a different avcC identity), and collect cold/warm production
+measurements after a separately authorized rollout. The local DataServer,
+worker, and C++ verification gates pass; this workspace change does not deploy
+to another computer.
+
 This checklist tracks the P0–P3 work needed to keep video bytes off the
 control plane, reuse certified work across retries, and publish one clean
 worker image after implementation and verification are complete.

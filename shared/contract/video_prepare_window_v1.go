@@ -96,6 +96,7 @@ type VideoPrepareWindowCertificateV1 struct {
 	OutputSizeBytes       int64                       `json:"output_size_bytes"`
 	OutputEvidence        VideoWindowOutputEvidenceV1 `json:"output_evidence"`
 	ClosedGOPAttested     bool                        `json:"closed_gop_attested"`
+	PacketCopyUsed        bool                        `json:"packet_copy_used"`
 	SourceAssetID         string                      `json:"source_asset_id"`
 	SourceSizeBytes       int64                       `json:"source_size_bytes"`
 	TimelineRevision      int64                       `json:"timeline_revision"`
@@ -126,8 +127,8 @@ func (c VideoPrepareWindowCertificateV1) ValidateFor(r VideoPrepareWindowV1) err
 		return fmt.Errorf("video.prepare.window.v1: certificate identity does not match request")
 	}
 	if strings.TrimSpace(c.EncoderVersion) == "" || !isLowerSHA256(c.EncoderBuildSHA256) ||
-		!isLowerSHA256(c.OutputSHA256) || c.OutputSizeBytes <= 0 || !c.ClosedGOPAttested {
-		return fmt.Errorf("video.prepare.window.v1: certificate lacks encoder, output, or closed-GOP evidence")
+		!isLowerSHA256(c.OutputSHA256) || c.OutputSizeBytes <= 0 || !c.ClosedGOPAttested || !c.PacketCopyUsed {
+		return fmt.Errorf("video.prepare.window.v1: certificate lacks toolchain, packet-copy, output, or closed-GOP evidence")
 	}
 	e := c.OutputEvidence
 	if e.Codec != "h264" || e.FrameCount != r.OutputFrameCount || !e.FirstFrameKeyframe || !isLowerSHA256(e.ExtradataSHA256) ||

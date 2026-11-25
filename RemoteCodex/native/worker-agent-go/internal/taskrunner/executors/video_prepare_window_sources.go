@@ -2,8 +2,6 @@ package executors
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,143 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	"velox-shared/assetref"
 	"velox-shared/contract"
-	"velox-worker-agent/internal/telemetry"
-	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/storage"
-	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
-
-// normalizedSourcePath returns a cached whole-source normalization for this
-// immutable source, creating it once on a miss. Normalization is an
-// optimization: any failure falls back to the original source so a transient
-// cache problem cannot fail an otherwise valid window. The output carries the
-// same canonical encoder lane as the final fragment; the per-window encode
-// still selects the exact interval because the source GOP is arbitrary.
-func (e *videoPrepareWindowExecutor) normalizedSourcePath(ctx context.Context, sourcePath, sourceSHA string) (string, bool) {
-	if e == nil || e.derivedCache == nil || !isLowerSHA256(sourceSHA) {
-		return "", false
-	}
-	profile := e.normalizationProfile()
-	if err := profile.Validate(); err != nil {
-		return "", false
-	}
-	sourceHash := assetref.ContentHash(sourceSHA)
-	if entry, found, err := e.derivedCache.FindDerived(ctx, sourceHash, profile); err == nil && found && strings.TrimSpace(entry.LocalPath) != "" {
-		if e.normalizedSourceIsValid(ctx, entry.LocalPath) {
-			recordNormalizedSourceEvent(ctx, "normalized_source_hit")
-			return entry.LocalPath, true
-		}
-	}
-	key, err := workercache.DerivedAssetKey(sourceHash, profile)
-	if err != nil {
-		return "", false
-	}
-	// Several preparation tasks can normalize windows from the same source at
-	// once. Serialize cache publication for this derived key and recheck after
-	// taking the lock; otherwise concurrent FFmpeg processes can race on one
-	// shared partial path and publish a truncated MP4.
-	unlock := e.lockWindow("normalized-source:" + string(key))
-	defer unlock()
-	sum := sha256.Sum256([]byte(key))
-	dir := filepath.Join(e.outputRoot, "derived-sources")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return "", false
-	}
-	outputPath := filepath.Join(dir, hex.EncodeToString(sum[:])+".mp4")
-	if e.normalizedSourceIsValid(ctx, outputPath) {
-		recordNormalizedSourceEvent(ctx, "normalized_source_hit")
-		return outputPath, true
-	} else {
-		// A previous interrupted/competing encoder may have left a non-empty
-		// but unusable MP4. Never treat file size alone as cache validation.
-		_ = os.Remove(outputPath)
-	}
-	recordNormalizedSourceEvent(ctx, "normalized_source_miss")
-	tmp, err := os.CreateTemp(dir, ".normalized-source-*.partial.mp4")
-	if err != nil {
-		return "", false
-	}
-	tmpPath := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", false
-	}
-	defer os.Remove(tmpPath)
-	args := contract.CanonicalVideoNormalizeSourceArgs(e.profile, e.quality, sourcePath, tmpPath)
-	if _, err := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args}); err != nil {
-		return "", false
-	}
-	recordNormalizedSourceEvent(ctx, "normalized_source_encode")
-	if !e.normalizedSourceIsValid(ctx, tmpPath) {
-		return "", false
-	}
-	if err := os.Rename(tmpPath, outputPath); err != nil {
-		return "", false
-	}
-	artifact, err := artifactFromFile("video/mp4", outputPath)
-	if err != nil {
-		_ = os.Remove(outputPath)
-		return "", false
-	}
-	_, _ = e.derivedCache.StoreDerived(ctx, sourceHash, profile, workercache.Entry{
-		ContentHash: assetref.ContentHash(artifact.Hash), LocalPath: outputPath,
-		SizeBytes: artifact.SizeBytes, DownloadComplete: true,
-	})
-	return outputPath, true
-}
-
-func recordNormalizedSourceEvent(ctx context.Context, action string) {
-	rec := telemetry.RecorderFromContext(ctx)
-	rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: action}, telemetry.StatusOK, "", "")
-}
-
-// validNormalizedSource verifies that the container can be parsed and that
-// the expected video stream is present before a derived file is reused or
-// published. Full per-window certification still runs after encoding.
-func validNormalizedSource(ctx context.Context, path string, profile contract.CanonicalVideoProfileV1) bool {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
-		return false
-	}
-	args := []string{"-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-of", "json", path}
-	data, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
-	if err != nil {
-		return false
-	}
-	var doc windowFFprobeDocument
-	if json.Unmarshal(data, &doc) != nil || len(doc.Streams) != 1 {
-		return false
-	}
-	stream := doc.Streams[0]
-	return stream.CodecName == profile.Codec && stream.Width == profile.Width && stream.Height == profile.Height
-}
-
-func (e *videoPrepareWindowExecutor) normalizedSourceIsValid(ctx context.Context, path string) bool {
-	if e != nil && e.normalizedSourceValidator != nil {
-		return e.normalizedSourceValidator(ctx, path, e.profile)
-	}
-	return validNormalizedSource(ctx, path, e.profile)
-}
-
-func (e *videoPrepareWindowExecutor) normalizationProfile() workercache.NormalizationProfile {
-	encoderSettings, _ := contract.CanonicalVideoEncoderArgsDigest(e.profile, e.quality)
-	return workercache.NormalizationProfile{
-		NormalizerVersion: 1,
-		Codec:             e.profile.Codec,
-		Width:             e.profile.Width,
-		Height:            e.profile.Height,
-		FPSNum:            e.profile.FPSNum,
-		FPSDen:            e.profile.FPSDen,
-		PixelFormat:       e.profile.PixelFormat,
-		ColorProperties:   contract.CanonicalVideoColorspace + "/" + contract.CanonicalVideoColorRange,
-		Profile:           e.profile.CodecProfile,
-		Level:             e.profile.CodecLevel,
-		GOPPolicy:         fmt.Sprintf("closed-gop:%d", e.profile.GOPSize),
-		EncoderSettings:   encoderSettings,
-	}
-}
 
 func (e *videoPrepareWindowExecutor) preparedWindowPath(identity string, request contract.VideoPrepareWindowV1, resolver *storage.Resolver) string {
 	outputName := identity + ".mp4"

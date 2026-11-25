@@ -15,11 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
-	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
@@ -28,8 +26,6 @@ const (
 	VideoPrepareWindowID      = "video.prepare.window.v1"
 	VideoPrepareWindowVersion = 1
 )
-
-var errUnsupportedCanonicalEncoder = errors.New("worker encoder does not produce the canonical stream identity")
 
 type windowFFmpegRunner interface {
 	Run(context.Context, ffmpegrunner.FFmpegRequest) (ffmpegrunner.FFmpegResult, error)
@@ -56,6 +52,7 @@ type windowArtifactAttestation struct {
 	OutputModTimeUnixNano int64                `json:"output_mtime_unix_nano"`
 	OutputEvidence        windowOutputEvidence `json:"output_evidence"`
 	ClosedGOPAttested     bool                 `json:"closed_gop_attested"`
+	PacketCopyUsed        bool                 `json:"packet_copy_used"`
 }
 
 type windowPreparationCertificate = contract.VideoPrepareWindowCertificateV1
@@ -64,66 +61,8 @@ type windowOutputCertifier interface {
 	Certify(context.Context, string, contract.CanonicalVideoProfileV1, int64) (windowOutputEvidence, error)
 }
 
-// windowExtradataReference produces the avcC (SPS/PPS) hash that the
-// canonical encoder contract must yield on this worker's encoder build. A
-// fragment whose extradata differs can pass a formal 64-hex check yet be
-// rejected later by the packet-copy muxer, so certification compares against
-// this reference instead of mere presence.
-type windowExtradataReference interface {
-	ExpectedExtradataSHA256(context.Context, contract.CanonicalVideoProfileV1, contract.PreparationQualityPolicy) (string, error)
-}
-
-// windowDerivedCache is the durable derived-asset index. A normalized source
-// is stored under (source SHA-256, normalization profile), so a second window
-// of the same immutable source reuses the normalized bytes instead of
-// repeating scale/fps conversion. The interface is deliberately small so the
-// executor can be tested without a SQLite cache.
-type windowDerivedCache interface {
-	FindDerived(context.Context, assetref.ContentHash, workercache.NormalizationProfile) (workercache.Entry, bool, error)
-	StoreDerived(context.Context, assetref.ContentHash, workercache.NormalizationProfile, workercache.Entry) (assetref.AssetKey, error)
-}
-
-type ffmpegWindowExtradataReference struct{}
-
-func (ffmpegWindowExtradataReference) ExpectedExtradataSHA256(ctx context.Context, profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy) (string, error) {
-	if err := profile.Validate(); err != nil {
-		return "", err
-	}
-	if err := quality.Validate(); err != nil {
-		return "", err
-	}
-	dir, err := os.MkdirTemp("", "velox-avcc-reference-*")
-	if err != nil {
-		return "", fmt.Errorf("canonical extradata reference: create temp dir: %w", err)
-	}
-	defer os.RemoveAll(dir)
-	outputPath := filepath.Join(dir, "reference.mp4")
-	source := fmt.Sprintf("color=c=black:s=%dx%d:r=%d/%d:d=1", profile.Width, profile.Height, profile.FPSNum, profile.FPSDen)
-	args := []string{
-		"-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", source,
-		"-frames:v", "1", "-an", "-sn", "-dn", "-vf", contract.CanonicalVideoScaleFilter(profile),
-	}
-	args = append(args, contract.CanonicalVideoEncodeArgs(profile, quality)...)
-	args = append(args, "-movflags", "+faststart", outputPath)
-	if output, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("canonical extradata reference encode: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return probeExtradataSHA256(ctx, outputPath)
-}
-
-func probeExtradataSHA256(ctx context.Context, path string) (string, error) {
-	args := []string{"-v", "error", "-select_streams", "v:0", "-show_data_hash", "sha256", "-show_entries", "stream=extradata_hash", "-of", "default=noprint_wrappers=1:nokey=1", path}
-	data, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
-	if err != nil {
-		return "", fmt.Errorf("ffprobe canonical extradata: %w", err)
-	}
-	hash := strings.TrimPrefix(strings.TrimSpace(string(data)), "SHA256:")
-	if !isLowerSHA256(hash) {
-		return "", fmt.Errorf("canonical extradata reference: ffprobe returned %q, want a lowercase SHA-256", hash)
-	}
-	return hash, nil
-}
-
+// ffprobeWindowOutputCertifier verifies packet-copy output against the
+// canonical stream contract before it can enter the prepared-fragment cache.
 type ffprobeWindowOutputCertifier struct{}
 
 type windowFFprobeDocument struct {
@@ -194,26 +133,18 @@ func (ffprobeWindowOutputCertifier) Certify(ctx context.Context, path string, pr
 }
 
 type videoPrepareWindowExecutor struct {
-	outputRoot   string
-	runner       windowFFmpegRunner
-	certifier    windowOutputCertifier
-	extradataRef windowExtradataReference
-	profile      contract.CanonicalVideoProfileV1
-	quality      contract.PreparationQualityPolicy
-	encoderMu    sync.Mutex
-	encoderVer   string
-	encoderSHA   string
-	extradataMu  sync.Mutex
-	extradataKey string
-	extradataSHA string
-	derivedCache windowDerivedCache
-	// normalizedSourceValidator is injectable for deterministic cache tests;
-	// production falls through to ffprobe validation.
-	normalizedSourceValidator func(context.Context, string, contract.CanonicalVideoProfileV1) bool
-	windowLockMu              sync.Mutex
-	windowLocks               map[string]*keyedWindowLock
-	sourceProbeMu             sync.Mutex
-	sourceProbes              map[string]windowSourceProbe
+	outputRoot    string
+	runner        windowFFmpegRunner
+	certifier     windowOutputCertifier
+	profile       contract.CanonicalVideoProfileV1
+	quality       contract.PreparationQualityPolicy
+	encoderMu     sync.Mutex
+	encoderVer    string
+	encoderSHA    string
+	windowLockMu  sync.Mutex
+	windowLocks   map[string]*keyedWindowLock
+	sourceProbeMu sync.Mutex
+	sourceProbes  map[string]windowSourceProbe
 }
 
 type windowSourceProbe struct {
@@ -251,30 +182,15 @@ type keyedWindowLock struct {
 	refs int
 }
 
-func NewVideoPrepareWindow(outputRoot string, derivedCaches ...*workercache.Cache) executor.Executor {
+func NewVideoPrepareWindow(outputRoot string) executor.Executor {
 	if strings.TrimSpace(outputRoot) == "" {
 		outputRoot = filepath.Join(os.TempDir(), "velox", "video-prepare-window")
 	}
 	exec := &videoPrepareWindowExecutor{
 		outputRoot: outputRoot, runner: ffmpegrunner.NewProcessRunner(), certifier: ffprobeWindowOutputCertifier{},
-		extradataRef: ffmpegWindowExtradataReference{},
-		profile:      contract.CanonicalVideoProfileV1Default, quality: contract.CanonicalPreparationQualityPolicyDefault,
-	}
-	if len(derivedCaches) > 0 && derivedCaches[0] != nil {
-		exec.derivedCache = derivedCaches[0]
+		profile: contract.CanonicalVideoProfileV1Default, quality: contract.CanonicalPreparationQualityPolicyDefault,
 	}
 	return exec
-}
-
-// AttachDerivedCache wires the durable source-normalization index after the
-// worker has opened its clip cache. Registration happens before the cache is
-// opened, so this attachment point is what makes FindDerived/StoreDerived
-// active in production instead of only in tests.
-func (e *videoPrepareWindowExecutor) AttachDerivedCache(c *workercache.Cache) {
-	if e == nil || c == nil {
-		return
-	}
-	e.derivedCache = c
 }
 
 func (e *videoPrepareWindowExecutor) Descriptor() executor.Descriptor {
@@ -291,7 +207,7 @@ func (e *videoPrepareWindowExecutor) request(spec executor.TaskSpec) (contract.V
 		return contract.VideoPrepareWindowV1{}, fmt.Errorf("video.prepare.window.v1: executor_id must be %q", VideoPrepareWindowID)
 	}
 	if e == nil || e.runner == nil || e.certifier == nil {
-		return contract.VideoPrepareWindowV1{}, errors.New("video.prepare.window.v1: encoder and output certifier are required")
+		return contract.VideoPrepareWindowV1{}, errors.New("video.prepare.window.v1: packet-copy runner and output certifier are required")
 	}
 	raw, ok := spec.Payload[contract.VideoPrepareWindowPayloadKey]
 	if !ok {
@@ -336,13 +252,7 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	if err != nil {
 		return fail("WINDOW_ENCODER_IDENTITY", err)
 	}
-	expectedExtradata, err := e.canonicalExtradata(ctx, encoderBuildSHA)
-	if err != nil {
-		if errors.Is(err, errUnsupportedCanonicalEncoder) {
-			return fail("WINDOW_ENCODER_UNSUPPORTED", err)
-		}
-		return fail("WINDOW_EXTRADATA_REFERENCE", err)
-	}
+	expectedExtradata := contract.CanonicalVideoExtradataSHA256
 	if strings.TrimSpace(spec.JobID) == "" {
 		return fail("WINDOW_JOB_ID_INVALID", errors.New("job_id is required"))
 	}
@@ -437,12 +347,11 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	_ = os.Remove(tmpPath)
 	defer os.Remove(tmpPath)
 	var (
-		encode          ffmpegrunner.FFmpegResult
-		evidence        windowOutputEvidence
-		packetCopied    bool
-		closedGOPProven bool
-		copyEligible    bool
-		copyFallback    []string
+		copyResult   ffmpegrunner.FFmpegResult
+		evidence     windowOutputEvidence
+		packetCopied bool
+		copyEligible bool
+		copyFallback []string
 	)
 	sourceProbe, probeErr := e.probeSource(ctx, source.Path, source.SHA256)
 	if probeErr != nil {
@@ -452,8 +361,9 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		copyEligible = eligibility.Eligible
 		copyFallback = eligibility.Reasons
 		if eligibility.Eligible {
-			copyResult, copyErr := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{
-				Operation: ffmpegrunner.OperationEncode,
+			var copyErr error
+			copyResult, copyErr = e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{
+				Operation: ffmpegrunner.OperationPacketCopy,
 				Args:      canonicalWindowStreamCopyArgs(e.profile, source.Path, tmpPath, resolvedRequest),
 			})
 			if copyErr != nil {
@@ -469,46 +379,17 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 				} else if !isFirstFrameIDR(ctx, tmpPath) {
 					copyFallback = []string{"packet_copy_first_frame_not_idr"}
 				} else {
-					encode, evidence, packetCopied, closedGOPProven = copyResult, copyEvidence, true, true
+					evidence, packetCopied = copyEvidence, true
 				}
 			}
 		}
 	}
-	// Timestamp windows can safely address the normalized source because its
-	// timeline starts at zero and its frame rate is the canonical rate. Frame
-	// windows keep the original frames: their indices are source-frame
-	// coordinates and must never be reinterpreted against a resampled file.
-	sourcePath := source.Path
-	if resolvedRequest.SourceDurationUS > 0 {
-		if normalized, ok := e.normalizedSourcePath(ctx, source.Path, source.SHA256); ok {
-			sourcePath = normalized
-		}
-	}
 	if !packetCopied {
-		var args []string
-		if resolvedRequest.SourceDurationUS > 0 {
-			args = contract.CanonicalVideoWindowTimestampArgs(e.profile, e.quality, sourcePath, tmpPath,
-				resolvedRequest.SourceStartUS, resolvedRequest.SourceDurationUS, resolvedRequest.OutputFrameCount)
-		} else {
-			args = contract.CanonicalVideoWindowArgs(e.profile, e.quality, sourcePath, tmpPath,
-				resolvedRequest.SourceStartFrame, resolvedRequest.SourceFrameCount, resolvedRequest.SourceFPSNum, resolvedRequest.SourceFPSDen, resolvedRequest.OutputFrameCount)
+		reason := strings.Join(copyFallback, ",")
+		if reason == "" {
+			reason = "packet_copy_not_certified"
 		}
-		encode, err = e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args})
-		if err != nil {
-			return fail("WINDOW_ENCODE_FAILED", err)
-		}
-		evidence, err = e.certifier.Certify(ctx, tmpPath, e.profile, request.OutputFrameCount)
-		if err != nil {
-			return fail("WINDOW_CERTIFICATION_FAILED", err)
-		}
-		if evidence.ExtradataSHA256 != expectedExtradata {
-			argsDigest, digestErr := contract.CanonicalVideoEncoderArgsDigest(e.profile, e.quality)
-			if digestErr != nil {
-				return fail("WINDOW_EXTRADATA_IDENTITY_MISMATCH", fmt.Errorf("prepared fragment avcC %s does not match canonical reference %s; encoder=%q build=%s args=<digest unavailable: %v>", evidence.ExtradataSHA256, expectedExtradata, encoderVersion, encoderBuildSHA, digestErr))
-			}
-			return fail("WINDOW_EXTRADATA_IDENTITY_MISMATCH", fmt.Errorf("prepared fragment avcC %s does not match canonical reference %s; encoder=%q build=%s args=%s", evidence.ExtradataSHA256, expectedExtradata, encoderVersion, encoderBuildSHA, argsDigest))
-		}
-		closedGOPProven = e.profile.ClosedGOP
+		return fail("WINDOW_PACKET_COPY_INCOMPATIBLE", fmt.Errorf("source window cannot be assembled without video re-encoding: %s", reason))
 	}
 	if err := os.Rename(tmpPath, outputPath); err != nil {
 		return fail("WINDOW_OUTPUT_COMMIT_FAILED", err)
@@ -533,7 +414,7 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		OutputProfileRevision: request.OutputProfileRevision, EncoderVersion: encoderVersion,
 		EncoderBuildSHA256: encoderBuildSHA, OutputSHA256: artifact.Hash,
 		OutputSizeBytes: artifact.SizeBytes, OutputModTimeUnixNano: outputInfo.ModTime().UnixNano(),
-		OutputEvidence: evidence, ClosedGOPAttested: closedGOPProven,
+		OutputEvidence: evidence, ClosedGOPAttested: true, PacketCopyUsed: true,
 	}
 	attestationJSON, err := json.Marshal(attestation)
 	if err != nil {
@@ -574,29 +455,15 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	completed := time.Now().UTC()
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		RawMetrics: rawMetricsFromFFmpegResult(encode),
+		RawMetrics: rawMetricsFromFFmpegResult(copyResult),
 		Segments: []executor.SegmentTiming{{
 			SceneID: request.Source.AssetID, SourceType: "video.prepare.window.v1",
-			DurationMS: float64(completed.Sub(started).Milliseconds()), FfmpegEncodeMS: ffmpegEncodeMS(encode.ProcessWallMS, packetCopied),
-			SourceBytes: request.Source.SizeBytes, OutputBytes: artifact.SizeBytes, FramesEncoded: encodedFrames(request.OutputFrameCount, packetCopied),
+			DurationMS: float64(completed.Sub(started).Milliseconds()), FfmpegEncodeMS: 0,
+			SourceBytes: request.Source.SizeBytes, OutputBytes: artifact.SizeBytes, FramesEncoded: 0,
 			Codec: evidence.Codec, Status: "succeeded", CacheKey: "video-window:" + identity,
 			MetadataJSON: string(certificateJSON),
 		}}, StartedAt: started, CompletedAt: completed,
 	}, nil
-}
-
-func encodedFrames(frameCount int64, packetCopied bool) int64 {
-	if packetCopied {
-		return 0
-	}
-	return frameCount
-}
-
-func ffmpegEncodeMS(processWallMS int64, packetCopied bool) float64 {
-	if packetCopied {
-		return 0
-	}
-	return float64(processWallMS)
 }
 
 // ProbeLocalPreparation reports whether this task can be served entirely from
@@ -615,10 +482,7 @@ func (e *videoPrepareWindowExecutor) ProbeLocalPreparation(ctx context.Context, 
 	if err != nil {
 		return false, err
 	}
-	expectedExtradata, err := e.canonicalExtradata(ctx, encoderBuildSHA)
-	if err != nil {
-		return false, err
-	}
+	expectedExtradata := contract.CanonicalVideoExtradataSHA256
 	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
 	if err != nil {
 		return false, err
@@ -626,27 +490,6 @@ func (e *videoPrepareWindowExecutor) ProbeLocalPreparation(ctx context.Context, 
 	outputPath := e.preparedWindowPath(identity, request, resolver)
 	_, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, encoderVersion, encoderBuildSHA, expectedExtradata)
 	return cacheHit, nil
-}
-
-func (e *videoPrepareWindowExecutor) canonicalExtradata(ctx context.Context, encoderBuildSHA string) (string, error) {
-	e.extradataMu.Lock()
-	defer e.extradataMu.Unlock()
-	if e.extradataKey == encoderBuildSHA && e.extradataSHA != "" {
-		return e.extradataSHA, nil
-	}
-	ref := e.extradataRef
-	if ref == nil {
-		ref = ffmpegWindowExtradataReference{}
-	}
-	hash, err := ref.ExpectedExtradataSHA256(ctx, e.profile, e.quality)
-	if err != nil {
-		return "", err
-	}
-	if hash != contract.CanonicalVideoExtradataSHA256 {
-		return "", fmt.Errorf("%w: encoder avcC=%s, required=%s", errUnsupportedCanonicalEncoder, hash, contract.CanonicalVideoExtradataSHA256)
-	}
-	e.extradataKey, e.extradataSHA = encoderBuildSHA, hash
-	return hash, nil
 }
 
 func (e *videoPrepareWindowExecutor) lockWindow(key string) func() {
@@ -681,11 +524,11 @@ func (e *videoPrepareWindowExecutor) encoderIdentity(ctx context.Context) (strin
 	}
 	data, err := exec.CommandContext(ctx, "ffmpeg", "-version").Output()
 	if err != nil {
-		return "", "", fmt.Errorf("identify FFmpeg encoder build: %w", err)
+		return "", "", fmt.Errorf("identify FFmpeg packet-copy toolchain: %w", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) == "" {
-		return "", "", errors.New("FFmpeg returned an empty build identity")
+		return "", "", errors.New("FFmpeg returned an empty toolchain identity")
 	}
 	sum := sha256.Sum256(data)
 	version, build := strings.TrimSpace(lines[0]), hex.EncodeToString(sum[:])
@@ -715,7 +558,7 @@ func readWindowArtifactAttestation(
 		attestation.SourceStartUS != request.SourceStartUS || attestation.SourceDurationUS != request.SourceDurationUS ||
 		attestation.OutputFrameCount != request.OutputFrameCount || attestation.OutputProfileID != request.OutputProfileID ||
 		attestation.OutputProfileRevision != request.OutputProfileRevision || attestation.EncoderVersion != encoderVersion ||
-		attestation.EncoderBuildSHA256 != encoderBuildSHA || !attestation.ClosedGOPAttested ||
+		attestation.EncoderBuildSHA256 != encoderBuildSHA || !attestation.ClosedGOPAttested || !attestation.PacketCopyUsed ||
 		!isLowerSHA256(attestation.OutputSHA256) || attestation.OutputEvidence.ExtradataSHA256 != expectedExtradata ||
 		!windowEvidenceMatchesProfile(attestation.OutputEvidence, profile, request.OutputFrameCount) {
 		return windowArtifactAttestation{}, false
@@ -742,8 +585,8 @@ func bindWindowCertificate(attestation windowArtifactAttestation, request contra
 		OutputProfileRevision: attestation.OutputProfileRevision, EncoderVersion: attestation.EncoderVersion,
 		EncoderBuildSHA256: attestation.EncoderBuildSHA256, OutputSHA256: attestation.OutputSHA256,
 		OutputSizeBytes: attestation.OutputSizeBytes, OutputEvidence: attestation.OutputEvidence,
-		ClosedGOPAttested: attestation.ClosedGOPAttested,
-		SourceAssetID:     request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
+		ClosedGOPAttested: attestation.ClosedGOPAttested, PacketCopyUsed: attestation.PacketCopyUsed,
+		SourceAssetID: request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
 		TimelineRevision: request.TimelineRevision, TimelineSHA256: request.TimelineSHA256,
 		TimelineStartFrame: request.TimelineStartFrame,
 	}

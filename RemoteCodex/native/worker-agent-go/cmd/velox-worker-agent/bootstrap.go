@@ -111,7 +111,7 @@ func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string,
 	if len(runners) > 0 {
 		renderRunner = runners[0]
 	}
-	if err := reg.Register(executors.NewVideoAssembleSlice(outputRoot, renderRunner, preparer)); err != nil {
+	if err := reg.Register(executors.NewVideoAssembleSlice(outputRoot, renderRunner)); err != nil {
 		return err
 	}
 	return nil

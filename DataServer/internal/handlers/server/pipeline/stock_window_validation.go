@@ -15,6 +15,13 @@ func compiledPlanHasDriveStock(planJSON string, runtimeAssets ...[]map[string]in
 	return voiceoverassets.PlanHasDriveStock(planJSON, bindings)
 }
 
+func compiledPlanHasStockPool(planJSON string) bool {
+	var plan struct {
+		StockPool *struct{} `json:"stock_pool"`
+	}
+	return json.Unmarshal([]byte(planJSON), &plan) == nil && plan.StockPool != nil
+}
+
 func appendRuntimeAssetBindings(assets []map[string]interface{}, raw interface{}) ([]map[string]interface{}, error) {
 	if raw == nil {
 		return assets, nil

@@ -47,7 +47,7 @@ func preparedWindowFixture(t *testing.T) (contract.VideoPrepareWindowV1, contrac
 			TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
 			FrameCount: request.OutputFrameCount, FirstFrameKeyframe: true, ExtradataSHA256: strings.Repeat("e", 64),
 		},
-		ClosedGOPAttested: true, SourceAssetID: request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
+		ClosedGOPAttested: true, PacketCopyUsed: true, SourceAssetID: request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
 		TimelineRevision: request.TimelineRevision, TimelineSHA256: request.TimelineSHA256,
 	}
 	return request, certificate, path

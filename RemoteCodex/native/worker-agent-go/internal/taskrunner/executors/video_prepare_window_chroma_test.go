@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -99,19 +98,7 @@ func TestVideoPrepareWindow_CenterChromaStockWindowMatchesCanonicalAVCC(t *testi
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Status != "succeeded" {
-		t.Fatalf("center-chroma stock window did not certify: %+v", result)
-	}
-	var certificate windowPreparationCertificate
-	if err := json.Unmarshal([]byte(result.Segments[0].MetadataJSON), &certificate); err != nil {
-		t.Fatal(err)
-	}
-	if certificate.OutputEvidence.ExtradataSHA256 != contract.CanonicalVideoExtradataSHA256 {
-		t.Fatalf("center-chroma window avcC = %s, want canonical %s",
-			certificate.OutputEvidence.ExtradataSHA256, contract.CanonicalVideoExtradataSHA256)
-	}
-	if certificate.OutputEvidence.Width != profile.Width || certificate.OutputEvidence.Height != profile.Height {
-		t.Fatalf("center-chroma window geometry = %dx%d, want %dx%d",
-			certificate.OutputEvidence.Width, certificate.OutputEvidence.Height, profile.Width, profile.Height)
+	if result.Status != "failed" || result.ErrorCode != "WINDOW_PACKET_COPY_INCOMPATIBLE" {
+		t.Fatalf("incompatible center-chroma source was not rejected: %+v", result)
 	}
 }

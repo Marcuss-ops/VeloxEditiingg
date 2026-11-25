@@ -2,7 +2,6 @@ package executors
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/runtimeassets"
-	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/pipeline"
 )
@@ -29,7 +27,6 @@ const (
 type videoAssembleSliceExecutor struct {
 	runner     *pipeline.Runner
 	prober     sliceMediaProber
-	preparer   executor.Executor
 	outputRoot string
 }
 
@@ -43,24 +40,11 @@ func (ffprobeSliceMediaProber) ProbeMediaDetails(ctx context.Context, path strin
 	return publisher.ProbeMediaDetails(ctx, path)
 }
 
-func NewVideoAssembleSlice(outputRoot string, runner *pipeline.Runner, preparers ...executor.Executor) executor.Executor {
+func NewVideoAssembleSlice(outputRoot string, runner *pipeline.Runner) executor.Executor {
 	if strings.TrimSpace(outputRoot) == "" {
 		outputRoot = filepath.Join(os.TempDir(), "velox", "video-assemble-slice")
 	}
-	var preparer executor.Executor
-	if len(preparers) > 0 {
-		preparer = preparers[0]
-	}
-	return &videoAssembleSliceExecutor{runner: runner, prober: ffprobeSliceMediaProber{}, preparer: preparer, outputRoot: outputRoot}
-}
-
-// AttachDerivedCache shares the durable worker cache with the canonical
-// preparer used by stock-pool preflight. This keeps a source/profile result
-// reusable across assembly retries and jobs.
-func (e *videoAssembleSliceExecutor) AttachDerivedCache(cache *workercache.Cache) {
-	if attacher, ok := e.preparer.(interface{ AttachDerivedCache(*workercache.Cache) }); ok {
-		attacher.AttachDerivedCache(cache)
-	}
+	return &videoAssembleSliceExecutor{runner: runner, prober: ffprobeSliceMediaProber{}, outputRoot: outputRoot}
 }
 
 func (e *videoAssembleSliceExecutor) Descriptor() executor.Descriptor {
@@ -89,43 +73,28 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 	if _, err := contract.KnownCanonicalVideoProfileV1(plan.Output.ProfileID); err != nil {
 		return fmt.Errorf("video.assemble.slice.v1: canonical output profile required: %w", err)
 	}
+	if plan.StockPool != nil {
+		return errors.New("video.assemble.slice.v1: Master must expand and certify stock_pool before dispatch")
+	}
 	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
 	runtimeDriveIDs := sliceRuntimeDriveFileIDs(spec.Payload["runtime_assets"])
-	runtimeStockIDs := sliceRuntimeStockAssetIDs(spec.Payload["runtime_assets"])
-	hasDrive := plan.StockPool != nil
+	hasDrive := false
 	for _, asset := range plan.Assets {
 		assets[asset.AssetID] = asset
 		driveSource := asset.Kind == "video" && isSliceDriveSource(asset, runtimeDriveIDs)
 		hasDrive = hasDrive || driveSource
+		hasDrive = hasDrive || asset.Kind == "prepared_video_fragment"
 	}
 	if !hasDrive {
 		return errors.New("video.assemble.slice.v1: plan must contain at least one Drive video source")
 	}
-	if len(plan.VideoTracks) != 1 || (len(plan.VideoTracks[0].Segments) == 0 && plan.StockPool == nil) {
-		return errors.New("video.assemble.slice.v1: exactly one video track is required; segments or stock_pool must be supplied")
-	}
-	if plan.StockPool != nil {
-		members := 0
-		for _, item := range sliceRuntimePoolMembers(spec.Payload["runtime_assets"]) {
-			if item.StockPoolMember && strings.TrimSpace(item.DriveFileID) != "" {
-				members++
-			}
-		}
-		if members == 0 {
-			return errors.New("video.assemble.slice.v1: Master did not resolve any stock_pool files")
-		}
+	if len(plan.VideoTracks) != 1 || len(plan.VideoTracks[0].Segments) == 0 {
+		return errors.New("video.assemble.slice.v1: exactly one non-empty, Master-compiled video track is required")
 	}
 	var nextFrame int64
-	stockPoolSlots := 0
 	for _, segment := range plan.VideoTracks[0].Segments {
 		if segment.StockPoolSlot {
-			if plan.StockPool == nil {
-				return fmt.Errorf("video.assemble.slice.v1: segment %q has stock_pool_slot without stock_pool", segment.SegmentID)
-			}
-			stockPoolSlots++
-			if segment.FrameCount <= 0 {
-				return fmt.Errorf("video.assemble.slice.v1: stock pool slot %q has invalid frame count", segment.SegmentID)
-			}
+			return fmt.Errorf("video.assemble.slice.v1: Master left unresolved stock_pool_slot %q in the execution plan", segment.SegmentID)
 		} else {
 			asset, ok := assets[segment.AssetID]
 			if !ok || (asset.Kind != "video" && asset.Kind != "prepared_video_fragment") {
@@ -135,9 +104,6 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 				return fmt.Errorf("video.assemble.slice.v1: asset %q is not certified for packet-copy assembly", segment.AssetID)
 			}
 			if segment.SourceInUS != 0 {
-				if _, isStock := runtimeStockIDs[segment.AssetID]; isStock {
-					return fmt.Errorf("video.assemble.slice.v1: stock segment %q starts at %d us inside its Drive clip; worker accepts whole-clip stock_pool slots only and will not probe, cut, or re-encode stock", segment.SegmentID, segment.SourceInUS)
-				}
 				return fmt.Errorf("video.assemble.slice.v1: segment %q starts at a non-keyframe offset (%d us); packet-copy is unsafe", segment.SegmentID, segment.SourceInUS)
 			}
 			if segment.FrameCount <= 0 || segment.FrameCount > asset.FrameCount {
@@ -149,9 +115,6 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 		}
 		nextFrame += segment.FrameCount
 	}
-	if plan.StockPool != nil && stockPoolSlots == 0 {
-		return errors.New("video.assemble.slice.v1: stock_pool requires at least one stock slot")
-	}
 	framesNum := int64(plan.DurationUS) * int64(plan.Output.FPSNum)
 	framesDen := int64(plan.Output.FPSDen) * 1_000_000
 	wantFrames := (framesNum + framesDen - 1) / framesDen
@@ -159,34 +122,6 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 		return fmt.Errorf("video.assemble.slice.v1: timeline has %d frames, plan duration requires %d", nextFrame, wantFrames)
 	}
 	return nil
-}
-
-func sliceRuntimeStockAssetIDs(raw interface{}) map[string]struct{} {
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil
-	}
-	var assets []struct {
-		AssetID  string `json:"asset_id"`
-		AssetKey string `json:"asset_key"`
-		Role     string `json:"role"`
-	}
-	if json.Unmarshal(data, &assets) != nil {
-		return nil
-	}
-	ids := make(map[string]struct{})
-	for _, asset := range assets {
-		if !strings.EqualFold(strings.TrimSpace(asset.Role), "stock") {
-			continue
-		}
-		if id := strings.TrimSpace(asset.AssetID); id != "" {
-			ids[id] = struct{}{}
-		}
-		if id := strings.TrimSpace(asset.AssetKey); id != "" {
-			ids[id] = struct{}{}
-		}
-	}
-	return ids
 }
 
 func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
@@ -201,13 +136,6 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 	bindings, ok := runtimeassets.FromContext(ctx)
 	if !ok {
 		return fail("DRIVE_SLICE_ASSETS_MISSING", errors.New("verified runtime asset bindings are required"))
-	}
-	if plan.StockPool != nil {
-		compiled, err := e.compileStockPoolPlan(ctx, execCtx, spec, plan, bindings)
-		if err != nil {
-			return fail("DRIVE_STOCK_POOL_INCOMPATIBLE", err)
-		}
-		plan = compiled
 	}
 	if err := validateCopyOnlyPlan(plan); err != nil {
 		return fail("DRIVE_SLICE_PLAN_INVALID", err)
@@ -253,177 +181,6 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 		Segments: projectSegments(metrics), DetailedPhases: projectDetailedPhases(metrics),
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
-}
-
-type slicePoolMember struct {
-	AssetID         string `json:"asset_id"`
-	DriveFileID     string `json:"drive_file_id"`
-	SizeBytes       int64  `json:"size_bytes"`
-	DurationMS      int64  `json:"duration_ms"`
-	StockPoolMember bool   `json:"stock_pool_member"`
-	SourceSHA256    string `json:"source_sha256,omitempty"`
-	SHA256          string `json:"sha256,omitempty"`
-	AssetSHA256     string `json:"asset_sha256,omitempty"`
-}
-
-func sliceRuntimePoolMembers(raw interface{}) []slicePoolMember {
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil
-	}
-	var members []slicePoolMember
-	_ = json.Unmarshal(data, &members)
-	return members
-}
-
-func (e *videoAssembleSliceExecutor) compileStockPoolPlan(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) (*contract.CompiledRenderPlanV2, error) {
-	if plan.StockPool == nil || plan.StockPool.Selection != "shuffle" {
-		return nil, errors.New("unsupported stock_pool selection")
-	}
-	members := sliceRuntimePoolMembers(spec.Payload["runtime_assets"])
-	eligible := make([]contract.StockPoolCandidateV2, 0, len(members))
-	byDriveID := make(map[string]slicePoolMember, len(members))
-	for _, member := range members {
-		binding, selected := bindings["stockpool:"+member.DriveFileID]
-		if member.StockPoolMember && selected && binding.Verified && binding.Size > 0 && member.DurationMS > 0 {
-			eligible = append(eligible, contract.StockPoolCandidateV2{
-				AssetID: member.AssetID, DriveFileID: member.DriveFileID, SizeBytes: member.SizeBytes,
-				DurationMS: member.DurationMS, StockPoolMember: true, SourceSHA256: member.SourceSHA256,
-				SHA256: member.SHA256, AssetSHA256: member.AssetSHA256,
-			})
-			byDriveID[member.DriveFileID] = member
-		}
-	}
-	selected, err := contract.ResolveCompiledStockPoolMembers(plan, spec.JobID, spec.Payload["runtime_stock_pool_snapshot"], eligible)
-	if err != nil {
-		return nil, fmt.Errorf("stock_pool selection: %w", err)
-	}
-	if e.preparer == nil {
-		return nil, errors.New("stock_pool video preflight: canonical video.prepare.window.v1 executor is not configured")
-	}
-	profile, err := contract.KnownCanonicalVideoProfileV1(plan.Output.ProfileID)
-	if err != nil {
-		return nil, fmt.Errorf("stock_pool video preflight: resolve canonical profile: %w", err)
-	}
-	profileRevision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
-	if err != nil {
-		return nil, fmt.Errorf("stock_pool video preflight: resolve canonical profile revision: %w", err)
-	}
-	for _, candidate := range selected {
-		assetID := "stockpool:" + candidate.DriveFileID
-		binding, ok := bindings[assetID]
-		if !ok || !binding.Verified || binding.Size <= 0 || !isLowerSHA256(binding.SHA256) {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q: verified source binding is missing or invalid", candidate.DriveFileID)
-		}
-		maxInt64 := int64(^uint64(0) >> 1)
-		if candidate.DurationMS <= 0 || candidate.DurationMS > maxInt64/1000 || candidate.DurationMS > maxInt64/int64(plan.Output.FPSNum) {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q: invalid duration metadata %d ms", candidate.DriveFileID, candidate.DurationMS)
-		}
-		frames := candidate.DurationMS * int64(plan.Output.FPSNum) / (1000 * int64(plan.Output.FPSDen))
-		if frames <= 0 {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q: duration metadata covers no output frames", candidate.DriveFileID)
-		}
-		source := contract.AssetRefV2{
-			AssetID: assetID, AssetKey: candidate.DriveFileID, SourceKind: "drive",
-			DriveFileID: candidate.DriveFileID, SHA256: binding.SHA256, SizeBytes: binding.Size,
-			Kind: "video", MIME: "video/mp4", DurationUS: candidate.DurationMS * 1000,
-		}
-		request := contract.VideoPrepareWindowV1{
-			Version: contract.VideoPrepareWindowVersion, Source: source,
-			SourceDurationUS: candidate.DurationMS * 1000, OutputFrameCount: frames,
-			TimelineRevision: plan.TimelineRevision, TimelineSHA256: plan.TimelineSHA256,
-			TimelineStartFrame: 0, OutputProfileID: profile.ProfileID,
-			OutputProfileRevision: profileRevision,
-		}
-		if _, err := request.CanonicalJSON(); err != nil {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q: invalid preparation request: %w", candidate.DriveFileID, err)
-		}
-		prepareSpec := executor.TaskSpec{
-			Version: 1, JobID: spec.JobID, ExecutorID: VideoPrepareWindowID,
-			Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request},
-		}
-		prepareCtx := runtimeassets.WithBindings(ctx, runtimeassets.Bindings{assetID: binding})
-		result, err := e.preparer.Execute(prepareCtx, execCtx, prepareSpec)
-		if err != nil {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q: %w", candidate.DriveFileID, err)
-		}
-		if result.Status != "succeeded" || len(result.Outputs) != 1 {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q failed before packet mux: %s: %s", candidate.DriveFileID, result.ErrorCode, result.ErrorDetail)
-		}
-		prepared := result.Outputs[0]
-		if strings.TrimSpace(prepared.URI) == "" || !isLowerSHA256(prepared.Hash) || prepared.SizeBytes <= 0 {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q returned an invalid canonical video artifact", candidate.DriveFileID)
-		}
-		if _, err := os.Stat(prepared.URI); err != nil {
-			return nil, fmt.Errorf("stock_pool video preflight for Drive file %q artifact is unavailable: %w", candidate.DriveFileID, err)
-		}
-		binding.Path, binding.SHA256, binding.Size, binding.Verified = prepared.URI, prepared.Hash, prepared.SizeBytes, true
-		bindings[assetID] = binding
-	}
-	ordered := make([]slicePoolMember, 0, len(selected))
-	for _, candidate := range selected {
-		ordered = append(ordered, byDriveID[candidate.DriveFileID])
-	}
-	compiled := *plan
-	compiled.StockPool = nil
-	compiled.Assets = append([]contract.AssetRefV2(nil), plan.Assets...)
-	compiled.VideoTracks = append([]contract.VideoTrackV2(nil), plan.VideoTracks...)
-	for i := range compiled.VideoTracks {
-		compiled.VideoTracks[i].Segments = append([]contract.VideoSegmentV2(nil), plan.VideoTracks[i].Segments...)
-	}
-	poolCursor := 0
-	framesLeft := make(map[string]int64, len(ordered))
-	for _, member := range ordered {
-		assetID := "stockpool:" + member.DriveFileID
-		framesLeft[assetID] = member.DurationMS * int64(plan.Output.FPSNum) / (1000 * int64(plan.Output.FPSDen))
-	}
-	for trackIndex := range compiled.VideoTracks {
-		segments := make([]contract.VideoSegmentV2, 0, len(compiled.VideoTracks[trackIndex].Segments))
-		for _, segment := range compiled.VideoTracks[trackIndex].Segments {
-			if !segment.StockPoolSlot {
-				segments = append(segments, segment)
-				continue
-			}
-			remaining, timelineFrame := segment.FrameCount, segment.TimelineStartFrame
-			part := 0
-			for remaining > 0 {
-				for poolCursor < len(ordered) && framesLeft["stockpool:"+ordered[poolCursor].DriveFileID] <= 0 {
-					poolCursor++
-				}
-				if poolCursor >= len(ordered) {
-					// The selected pool is intentionally reusable. Start a fresh
-					// deterministic cycle, resetting each clip's source duration.
-					poolCursor = 0
-					for _, member := range ordered {
-						assetID := "stockpool:" + member.DriveFileID
-						framesLeft[assetID] = member.DurationMS * int64(plan.Output.FPSNum) / (1000 * int64(plan.Output.FPSDen))
-					}
-				}
-				member := ordered[poolCursor]
-				part++
-				baseAssetID := "stockpool:" + member.DriveFileID
-				binding := bindings[baseAssetID]
-				count := framesLeft[baseAssetID]
-				if count > remaining {
-					count = remaining
-				}
-				assetID := fmt.Sprintf("%s:timeline:%d", baseAssetID, timelineFrame)
-				durationUS := count * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
-				asset := contract.AssetRefV2{AssetID: assetID, AssetKey: member.DriveFileID, SourceKind: "drive", DriveFileID: member.DriveFileID, SHA256: binding.SHA256, SizeBytes: binding.Size, Kind: "video", MIME: "video/mp4", ProfileID: plan.Output.ProfileID, FrameCount: count, TimelineRevision: plan.TimelineRevision, TimelineSHA256: plan.TimelineSHA256, TimelineStartFrame: timelineFrame, FirstFrameKeyframe: true, ClosedGOP: true, DurationUS: durationUS, Width: plan.Output.Width, Height: plan.Output.Height}
-				compiled.Assets = append(compiled.Assets, asset)
-				bindings[assetID] = binding
-				segments = append(segments, contract.VideoSegmentV2{SegmentID: fmt.Sprintf("%s-source-%03d", segment.SegmentID, part), AssetID: assetID, SHA256: asset.SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceDurationUS: durationUS})
-				framesLeft[baseAssetID] -= count
-				remaining -= count
-				timelineFrame += count
-				if framesLeft[baseAssetID] == 0 {
-					poolCursor++
-				}
-			}
-		}
-		compiled.VideoTracks[trackIndex].Segments = segments
-	}
-	return &compiled, nil
 }
 
 func (e *videoAssembleSliceExecutor) verifyFinalMedia(ctx context.Context, outputPath string, plan *contract.CompiledRenderPlanV2) error {

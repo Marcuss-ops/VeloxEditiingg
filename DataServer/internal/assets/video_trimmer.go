@@ -40,6 +40,8 @@ type VideoProbe struct {
 	AudioSampleRate  int
 	AudioChannels    int
 	PixelFormat      string
+	BFrames          int
+	ExtradataSHA256  string
 	Keyframes        []float64
 	StartTimeSeconds float64
 	StartTimeKnown   bool
@@ -218,9 +220,9 @@ func (t *VideoTrimmer) probe(ctx context.Context, inputPath, sourceSHA256 string
 		}
 	}
 	args := []string{
-		"-v", "error",
+		"-v", "error", "-show_data_hash", "sha256",
 		"-skip_frame", "nokey", "-show_frames",
-		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,r_frame_rate,time_base,pix_fmt,duration,nb_frames,start_time,sample_rate,channels:format=duration:frame=media_type,key_frame,best_effort_timestamp_time",
+		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,r_frame_rate,time_base,pix_fmt,duration,nb_frames,start_time,sample_rate,channels,has_b_frames,extradata_hash:format=duration:frame=media_type,key_frame,best_effort_timestamp_time",
 		"-of", "json",
 		inputPath,
 	}
@@ -270,6 +272,8 @@ func (t *VideoTrimmer) probe(ctx context.Context, inputPath, sourceSHA256 string
 	probe.VideoLevel = videoStream.Level
 	probe.VideoBitrateBPS = jsonInt64(videoStream.BitRate)
 	probe.PixelFormat = strings.ToLower(strings.TrimSpace(videoStream.PixelFormat))
+	probe.BFrames = videoStream.BFrames
+	probe.ExtradataSHA256 = strings.TrimPrefix(strings.TrimSpace(videoStream.ExtradataHash), "SHA256:")
 	probe.FrameCount = jsonInt64(videoStream.FramesCount)
 	probe.FPSNum, probe.FPSDen = parseRatio(videoStream.FrameRate)
 	probe.TimebaseNum, probe.TimebaseDen = parseRatio(videoStream.TimeBase)
@@ -311,9 +315,8 @@ func (t *VideoTrimmer) countFrames(ctx context.Context, inputPath string) (int64
 	return frames, nil
 }
 
-// Plan selects stream copy only when both boundaries are keyframe-aligned and
-// the source already carries the canonical stream identity. Every other case
-// uses a frame-accurate re-encode; non-canonical sources are prepared first.
+// Plan admits only certified canonical sources and keyframe-aligned windows.
+// Video preparation never normalizes or re-encodes an existing source.
 func (t *VideoTrimmer) Plan(probe VideoProbe, segment VideoSegment, inputPath, outputPath string) (TrimPlan, error) {
 	if t == nil {
 		return TrimPlan{}, fmt.Errorf("video trimmer unavailable")
@@ -322,29 +325,27 @@ func (t *VideoTrimmer) Plan(probe VideoProbe, segment VideoSegment, inputPath, o
 		return TrimPlan{}, err
 	}
 	duration := segment.EndSeconds - segment.StartSeconds
-	normalizationRequired := !matchesCanonicalProfile(probe, t.profile, t.quality)
-	keyframeAligned := isKeyframeBoundary(segment.StartSeconds, probe.Keyframes) &&
-		isKeyframeBoundary(segment.EndSeconds, probe.Keyframes)
-	mode := TrimModeFrameAccurateReencode
-	if !normalizationRequired && keyframeAligned {
-		mode = TrimModeStreamCopy
+	if !matchesCanonicalProfile(probe, t.profile, t.quality) {
+		return TrimPlan{}, fmt.Errorf("VIDEO_SOURCE_INCOMPATIBLE: source does not match canonical video profile or avcC")
 	}
+	if !isKeyframeBoundary(segment.StartSeconds, probe.Keyframes) {
+		return TrimPlan{}, fmt.Errorf("VIDEO_WINDOW_NOT_PACKET_COPY_SAFE: window start must be a certified keyframe")
+	}
+	mode := TrimModeStreamCopy
 
 	plan := TrimPlan{
 		Mode:                  mode,
 		Segment:               segment,
 		DurationSeconds:       duration,
-		RequiresNormalization: normalizationRequired,
+		RequiresNormalization: false,
 		CanonicalProfile:      t.profile,
-		NormalizationArgs:     normalizationArgs(t.profile, t.quality, inputPath, ""),
-		TrimArgs:              trimArgs(mode, segment, duration, inputPath, outputPath, t.profile, t.quality),
+		TrimArgs:              trimArgs(segment, duration, inputPath, outputPath),
 	}
 	return plan, nil
 }
 
-// Trim probes, plans, executes, and atomically promotes one segment. A
-// non-normalized source is normalized into a sibling temporary file before the
-// requested interval is cut, ensuring the worker receives only the segment.
+// Trim probes, plans, packet-copies, and atomically promotes one segment.
+// Incompatible sources and unsafe cuts return an error without invoking FFmpeg.
 func (t *VideoTrimmer) Trim(ctx context.Context, inputPath, outputPath string, segment VideoSegment) (TrimResult, error) {
 	if t == nil || t.runner == nil {
 		return TrimResult{}, fmt.Errorf("video trimmer unavailable")
@@ -386,6 +387,10 @@ func (t *VideoTrimmer) TrimFramesWithProbe(ctx context.Context, probe VideoProbe
 	if err := validateSegmentWithinFrame(probe, segment); err != nil {
 		return TrimResult{}, err
 	}
+	plan, err := t.Plan(probe, segment, inputPath, outputPath)
+	if err != nil {
+		return TrimResult{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return TrimResult{}, fmt.Errorf("create segment output directory: %w", err)
 	}
@@ -399,23 +404,11 @@ func (t *VideoTrimmer) TrimFramesWithProbe(ctx context.Context, probe VideoProbe
 		return TrimResult{}, err
 	}
 	defer os.Remove(tmpPath)
-	mode := TrimModeFrameAccurateReencode
-	if matchesCanonicalStockVideo(probe, t.profile) && isKeyframeBoundary(segment.StartSeconds, probe.Keyframes) {
-		mode = TrimModeStreamCopy
-	}
-	plan := TrimPlan{
-		Mode: mode, Segment: segment,
-		DurationSeconds:  float64(frameCount) * float64(t.profile.FPSDen) / float64(t.profile.FPSNum),
-		CanonicalProfile: t.profile,
-	}
-	if mode == TrimModeStreamCopy {
-		plan.TrimArgs = exactWindowCopyArgs(inputPath, tmpPath, segment, frameCount, t.profile)
-	} else {
-		plan.TrimArgs = exactWindowArgs(t.profile, t.quality, inputPath, tmpPath, segment, frameCount)
-	}
+	plan.OutputFrameCount = frameCount
+	plan.TrimArgs = exactWindowCopyArgs(inputPath, tmpPath, segment, frameCount, t.profile)
 	output, err := t.runner.Run(ctx, "ffmpeg", plan.TrimArgs...)
 	if err != nil {
-		return TrimResult{}, fmt.Errorf("materialize exact video window: %w: %s", err, strings.TrimSpace(string(output)))
+		return TrimResult{}, fmt.Errorf("packet-copy exact video window: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	if err := os.Rename(tmpPath, outputPath); err != nil {
 		return TrimResult{}, fmt.Errorf("promote exact video window: %w", err)
@@ -423,9 +416,8 @@ func (t *VideoTrimmer) TrimFramesWithProbe(ctx context.Context, probe VideoProbe
 	return TrimResult{Plan: plan, OutputPath: outputPath}, nil
 }
 
-// trimWithProbe is the shared execution body: plan, normalize if needed,
-// execute ffmpeg, atomically promote. The probe is already validated by the
-// caller (Plan fails on an invalid probe via validateSegment).
+// trimWithProbe is the shared packet-copy execution body. The probe is already
+// validated by the caller; Plan rejects unsupported sources before FFmpeg.
 func (t *VideoTrimmer) trimWithProbe(ctx context.Context, probe VideoProbe, inputPath, outputPath string, segment VideoSegment, exactFrameCount int64) (TrimResult, error) {
 	plan, err := t.Plan(probe, segment, inputPath, outputPath)
 	if err != nil {
@@ -436,31 +428,6 @@ func (t *VideoTrimmer) trimWithProbe(ctx context.Context, probe VideoProbe, inpu
 	}
 
 	workingInput := inputPath
-	normalizedPath := ""
-	if plan.RequiresNormalization {
-		tmp, err := os.CreateTemp(filepath.Dir(outputPath), ".velox-normalized-*.mp4")
-		if err != nil {
-			return TrimResult{}, fmt.Errorf("create normalization temp file: %w", err)
-		}
-		normalizedPath = tmp.Name()
-		if err := tmp.Close(); err != nil {
-			_ = os.Remove(normalizedPath)
-			return TrimResult{}, fmt.Errorf("close normalization temp file: %w", err)
-		}
-		normalizeArgs := normalizationArgs(t.profile, t.quality, inputPath, normalizedPath)
-		if output, err := t.runner.Run(ctx, "ffmpeg", normalizeArgs...); err != nil {
-			_ = os.Remove(normalizedPath)
-			return TrimResult{}, fmt.Errorf("normalize video: %w: %s", err, strings.TrimSpace(string(output)))
-		}
-		workingInput = normalizedPath
-		plan.TrimArgs = trimArgs(TrimModeFrameAccurateReencode, segment, plan.DurationSeconds, workingInput, outputPath, t.profile, t.quality)
-		plan.Mode = TrimModeFrameAccurateReencode
-	}
-	defer func() {
-		if normalizedPath != "" {
-			_ = os.Remove(normalizedPath)
-		}
-	}()
 
 	tmpOutput, err := os.CreateTemp(filepath.Dir(outputPath), ".velox-segment-*.mp4")
 	if err != nil {
@@ -473,7 +440,7 @@ func (t *VideoTrimmer) trimWithProbe(ctx context.Context, probe VideoProbe, inpu
 	}
 	defer os.Remove(tmpOutputPath)
 
-	plan.TrimArgs = trimArgs(plan.Mode, segment, plan.DurationSeconds, workingInput, tmpOutputPath, t.profile, t.quality)
+	plan.TrimArgs = trimArgs(segment, plan.DurationSeconds, workingInput, tmpOutputPath)
 	if exactFrameCount > 0 {
 		last := len(plan.TrimArgs) - 1
 		plan.TrimArgs = append(plan.TrimArgs[:last], append([]string{"-frames:v", strconv.FormatInt(exactFrameCount, 10)}, plan.TrimArgs[last:]...)...)
@@ -495,21 +462,23 @@ type ffprobeDocument struct {
 }
 
 type ffprobeStream struct {
-	CodecType   string          `json:"codec_type"`
-	CodecName   string          `json:"codec_name"`
-	Profile     string          `json:"profile"`
-	Level       int             `json:"level"`
-	Width       int             `json:"width"`
-	Height      int             `json:"height"`
-	FrameRate   string          `json:"r_frame_rate"`
-	TimeBase    string          `json:"time_base"`
-	PixelFormat string          `json:"pix_fmt"`
-	BitRate     json.RawMessage `json:"bit_rate"`
-	Duration    json.RawMessage `json:"duration"`
-	StartTime   json.RawMessage `json:"start_time"`
-	SampleRate  json.RawMessage `json:"sample_rate"`
-	Channels    json.RawMessage `json:"channels"`
-	FramesCount json.RawMessage `json:"nb_frames"`
+	CodecType     string          `json:"codec_type"`
+	CodecName     string          `json:"codec_name"`
+	Profile       string          `json:"profile"`
+	Level         int             `json:"level"`
+	Width         int             `json:"width"`
+	Height        int             `json:"height"`
+	FrameRate     string          `json:"r_frame_rate"`
+	TimeBase      string          `json:"time_base"`
+	PixelFormat   string          `json:"pix_fmt"`
+	BitRate       json.RawMessage `json:"bit_rate"`
+	Duration      json.RawMessage `json:"duration"`
+	StartTime     json.RawMessage `json:"start_time"`
+	SampleRate    json.RawMessage `json:"sample_rate"`
+	Channels      json.RawMessage `json:"channels"`
+	FramesCount   json.RawMessage `json:"nb_frames"`
+	BFrames       int             `json:"has_b_frames"`
+	ExtradataHash string          `json:"extradata_hash"`
 }
 
 type ffprobeFrame struct {
@@ -550,84 +519,9 @@ func jsonInt64(raw json.RawMessage) int64 {
 	return parsed
 }
 
-// canonicalVideoEncodeArgs pins the encoder arguments that define the
-// canonical stream identity. Every compatibility field is READ from the
-// profile — never re-declared here. Quality/bitrate knobs come from the
-// quality policy and are allowed to move without changing the identity.
-//
-// The GOP is pinned twice on purpose: the generic `-g`/`-bf`/`-sc_threshold`
-// flags express the contract, and the libx264 `keyint=min-keyint=GOPSize` with
-// `scenecut=0` removes the adaptive-keyframe behaviour that would otherwise
-// silently shift chunk boundaries under W5 reuse. `open-gop` follows the
-// profile's ClosedGOP so a closed-GOP profile can never be produced with open
-// GOPs.
-func canonicalVideoEncodeArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy) []string {
-	return contract.CanonicalVideoEncodeArgs(profile, quality)
-}
-
-// canonicalAudioEncodeArgs derives the audio encoder arguments from the
-// quality policy (audio quality is not part of the video stream identity).
-func canonicalAudioEncodeArgs(quality contract.PreparationQualityPolicy) []string {
-	return []string{
-		"-c:a", quality.AudioCodec,
-		"-b:a", quality.AudioBitrate,
-		"-ar", strconv.Itoa(quality.AudioSampleRate),
-		"-ac", strconv.Itoa(quality.AudioChannels),
-	}
-}
-
-// canonicalScaleFilter builds the letterbox/pad + frame-rate filter from the
-// profile. The frame rate is interpolated, so a literal `fps=NN` can never
-// reappear here (enforced by scripts/ci/check-architecture.sh rule 14).
-func canonicalScaleFilter(profile contract.CanonicalVideoProfileV1) string {
-	return fmt.Sprintf("%s,fps=%d/%d", canonicalScaleGeometryFilter(profile), profile.FPSNum, profile.FPSDen)
-}
-
-func canonicalScaleGeometryFilter(profile contract.CanonicalVideoProfileV1) string {
-	return contract.CanonicalVideoScaleGeometryFilter(profile)
-}
-
-func normalizationArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string) []string {
-	args := []string{
-		"-hide_banner", "-loglevel", "error", "-y",
-		"-i", inputPath,
-		"-map", "0:v:0", "-map", "0:a?",
-		"-vf", canonicalScaleFilter(profile),
-	}
-	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
-	args = append(args, canonicalAudioEncodeArgs(quality)...)
-	return append(args, "-movflags", "+faststart", outputPath)
-}
-
-func trimArgs(mode TrimMode, segment VideoSegment, duration float64, inputPath, outputPath string, profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy) []string {
+func trimArgs(segment VideoSegment, duration float64, inputPath, outputPath string) []string {
 	common := []string{"-hide_banner", "-loglevel", "error", "-y"}
-	if mode == TrimModeStreamCopy {
-		return append(common, "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath, "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
-	}
-	args := append(common, "-i", inputPath, "-ss", formatSeconds(segment.StartSeconds), "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?")
-	args = append(args, "-vf", fmt.Sprintf("fps=%d/%d", profile.FPSNum, profile.FPSDen))
-	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
-	args = append(args, canonicalAudioEncodeArgs(quality)...)
-	return append(args, "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
-}
-
-func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string, segment VideoSegment, frameCount int64) []string {
-	// The explicit fps filter is not cosmetic: without it the MP4 muxer
-	// derives the stream duration from the last PTS and reports one frame less
-	// than the exact window (75 frames -> 3.083333 s instead of 3.125 s).
-	// setpts already spaced the frames on the canonical clock, so fps only
-	// stamps their durations and cannot add or drop a frame here.
-	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath,
-		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", fmt.Sprintf("setpts=N*%d/(%d*TB),fps=%d/%d,%s", profile.FPSDen, profile.FPSNum, profile.FPSNum, profile.FPSDen, canonicalScaleGeometryFilter(profile))}
-	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
-	args = append(args, "-fps_mode", "passthrough")
-	// The first output frame is a fragment boundary. Force it to an IDR even
-	// when input seeking and timestamp normalization leave a non-zero PTS; the
-	// downstream packet-copy assembler must be able to start decoding here.
-	args = append(args, "-force_key_frames", "expr:eq(n,0)")
-	args = append(args, canonicalAudioEncodeArgs(quality)...)
-	args = append(args, "-frames:v", strconv.FormatInt(frameCount, 10), "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", "-movflags", "+faststart", outputPath)
-	return args
+	return append(common, "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath, "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
 }
 
 func exactWindowCopyArgs(inputPath, outputPath string, segment VideoSegment, frameCount int64, profile contract.CanonicalVideoProfileV1) []string {
@@ -675,6 +569,13 @@ func validateSegmentWithinFrame(probe VideoProbe, segment VideoSegment) error {
 // not match the profile cannot be assumed chunk-aligned for content-addressed
 // reuse (W5), so it is prepared once into the canonical identity instead.
 func matchesCanonicalProfile(probe VideoProbe, profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy) bool {
+	levelMatches := true
+	if profile.CodecLevel != "" {
+		var level float64
+		if _, err := fmt.Sscanf(profile.CodecLevel, "%f", &level); err == nil {
+			levelMatches = probe.VideoLevel == int(math.Round(level*10))
+		}
+	}
 	bitrateMatches := true
 	if probe.VideoBitrateBPS > 0 {
 		targetBPS := parseBitrateBPS(quality.VideoMaxRate)
@@ -683,7 +584,10 @@ func matchesCanonicalProfile(probe VideoProbe, profile contract.CanonicalVideoPr
 	return probe.Width == profile.Width && probe.Height == profile.Height &&
 		probe.FPSNum == profile.FPSNum && probe.FPSDen == profile.FPSDen &&
 		probe.VideoCodec == strings.ToLower(profile.Codec) &&
+		levelMatches &&
 		probe.PixelFormat == strings.ToLower(profile.PixelFormat) &&
+		probe.VideoProfile == strings.ToLower(profile.CodecProfile) && probe.BFrames == profile.BFrames &&
+		probe.ExtradataSHA256 == contract.CanonicalVideoExtradataSHA256 &&
 		probe.TimebaseNum == profile.TimeBaseNum && probe.TimebaseDen == profile.TimeBaseDen &&
 		probe.AudioCodec == strings.ToLower(quality.AudioCodec) &&
 		probe.AudioSampleRate == quality.AudioSampleRate &&

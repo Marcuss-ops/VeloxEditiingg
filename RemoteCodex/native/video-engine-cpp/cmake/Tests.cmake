@@ -321,7 +321,8 @@ if(VELOX_ENABLE_LIBAV)
         src/services/segment_execution.cpp
         src/services/media_probe.cpp
         src/services/file_utils.cpp
-        src/services/io_counters.cpp)
+        src/services/io_counters.cpp
+        src/services/media_utils_audio.cpp)
     velox_configure_test(velox_frame_pipeline_tests)
     velox_link_ffmpeg(velox_frame_pipeline_tests)
     add_test(NAME frame_pipeline_tests COMMAND velox_frame_pipeline_tests)

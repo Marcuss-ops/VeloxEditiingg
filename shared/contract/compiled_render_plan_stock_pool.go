@@ -36,9 +36,8 @@ type StockPoolSnapshotV1 struct {
 
 // SelectCompiledStockPoolMembers deterministically selects Drive stock
 // members for all stock-pool slots. If the pool is shorter than the timeline,
-// the worker cycles through these members until every slot is covered. The
-// seed and ordering match the worker assembly contract so the Master can
-// persist the exact selection before dispatch and retries can reuse it.
+// the finalized timeline cycles through these members until every slot is
+// covered. The Master persists the exact selection before dispatch.
 func SelectCompiledStockPoolMembers(
 	plan *CompiledRenderPlanV2,
 	jobID string,
@@ -228,6 +227,95 @@ func ResolveCompiledStockPoolMembers(
 		return nil, fmt.Errorf("compiled render plan v2: invalid stock_pool snapshot: %w", err)
 	}
 	return snapshot.Members, nil
+}
+
+// ExpandCompiledStockPoolSlots resolves editorial stock slots into explicit
+// source windows using the already persisted member ordering. The selected
+// pool is cycled when its total duration is shorter than the requested slots.
+// It deliberately does not assert media certification; ingest/preparation
+// must attach those facts before the plan becomes executable.
+func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoolCandidateV2) error {
+	if plan == nil || plan.StockPool == nil {
+		return fmt.Errorf("compiled render plan v2: stock_pool is required")
+	}
+	if err := ValidateCompiledStockPoolMembers(plan, members); err != nil {
+		return err
+	}
+	ordered := append([]StockPoolCandidateV2(nil), members...)
+	framesLeft := make([]int64, len(ordered))
+	assetByID := make(map[string]AssetRefV2, len(plan.Assets)+len(ordered))
+	for _, asset := range plan.Assets {
+		assetByID[asset.AssetID] = asset
+	}
+	for i, member := range ordered {
+		if member.DurationMS > math.MaxInt64/1000 {
+			return fmt.Errorf("compiled render plan v2: stock_pool member %q duration overflows microseconds", member.DriveFileID)
+		}
+		frames, overflow := checkedStockPoolFrames(member.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen)
+		if overflow || frames <= 0 {
+			return fmt.Errorf("compiled render plan v2: stock_pool member %q has invalid frame duration", member.DriveFileID)
+		}
+		framesLeft[i] = frames
+		assetID := "stockpool:" + member.DriveFileID
+		if existing, ok := assetByID[assetID]; ok && (existing.SHA256 != stockPoolCandidateSHA(member) || existing.SizeBytes != member.SizeBytes) {
+			return fmt.Errorf("compiled render plan v2: stock_pool asset %q conflicts with its immutable identity", member.DriveFileID)
+		}
+		if _, ok := assetByID[assetID]; !ok {
+			sha := stockPoolCandidateSHA(member)
+			assetByID[assetID] = AssetRefV2{AssetID: assetID, AssetKey: member.DriveFileID, SourceKind: "drive", DriveFileID: member.DriveFileID, SHA256: sha, SizeBytes: member.SizeBytes, Kind: "video", MIME: "video/mp4", DurationUS: member.DurationMS * 1000, FrameCount: frames}
+		}
+	}
+	assets := make([]AssetRefV2, 0, len(assetByID))
+	for _, asset := range assetByID {
+		assets = append(assets, asset)
+	}
+	plan.Assets = assets
+	cursor := 0
+	for trackIndex := range plan.VideoTracks {
+		segments := make([]VideoSegmentV2, 0, len(plan.VideoTracks[trackIndex].Segments))
+		for _, slot := range plan.VideoTracks[trackIndex].Segments {
+			if !slot.StockPoolSlot {
+				segments = append(segments, slot)
+				continue
+			}
+			remaining, timelineFrame, part := slot.FrameCount, slot.TimelineStartFrame, 0
+			for remaining > 0 {
+				for cursor < len(ordered) && framesLeft[cursor] <= 0 {
+					cursor++
+				}
+				if cursor == len(ordered) {
+					cursor = 0
+					for i, member := range ordered {
+						framesLeft[i], _ = checkedStockPoolFrames(member.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen)
+					}
+				}
+				member := ordered[cursor]
+				count := framesLeft[cursor]
+				if count > remaining {
+					count = remaining
+				}
+				if count <= 0 {
+					return fmt.Errorf("compiled render plan v2: stock_pool member cycle made no progress")
+				}
+				if count > math.MaxInt64/int64(plan.Output.FPSDen)/1_000_000 {
+					return fmt.Errorf("compiled render plan v2: stock_pool segment duration overflows microseconds")
+				}
+				part++
+				durationUS := count * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
+				assetID := "stockpool:" + member.DriveFileID
+				segments = append(segments, VideoSegmentV2{SegmentID: fmt.Sprintf("%s-pool-%03d", slot.SegmentID, part), AssetID: assetID, SHA256: assetByID[assetID].SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceInUS: 0, SourceDurationUS: durationUS})
+				framesLeft[cursor] -= count
+				remaining -= count
+				timelineFrame += count
+				if framesLeft[cursor] == 0 {
+					cursor++
+				}
+			}
+		}
+		plan.VideoTracks[trackIndex].Segments = segments
+	}
+	plan.StockPool = nil
+	return nil
 }
 
 func stockPoolCandidateSHA(candidate StockPoolCandidateV2) string {

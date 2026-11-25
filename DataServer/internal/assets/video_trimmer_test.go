@@ -101,59 +101,43 @@ func TestTrimFramesWithProbeUsesFrameCountInsteadOfRoundedDuration(t *testing.T)
 	runner := &recordingVideoRunner{}
 	trimmer := newVideoTrimmerForTest(runner)
 	output := filepath.Join(t.TempDir(), "window.mp4")
-	probe := normalizedVideoProbe(5.022, []float64{0})
-	segment := VideoSegment{StartSeconds: 1.0 / 24.0, EndSeconds: 5.0 + 1.0/24.0}
-	result, err := trimmer.TrimFramesWithProbe(context.Background(), probe, "/source.mp4", output, segment, 120)
+	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
+	segment := VideoSegment{StartSeconds: 2, EndSeconds: 6}
+	result, err := trimmer.TrimFramesWithProbe(context.Background(), probe, "/source.mp4", output, segment, 96)
 	if err != nil {
 		t.Fatalf("TrimFramesWithProbe() error: %v", err)
 	}
-	if result.Plan.Mode != TrimModeFrameAccurateReencode {
-		t.Fatalf("mode = %q, want frame-accurate re-encode", result.Plan.Mode)
+	if result.Plan.Mode != TrimModeStreamCopy {
+		t.Fatalf("mode = %q, want stream copy", result.Plan.Mode)
 	}
 	args := strings.Join(result.Plan.TrimArgs, " ")
-	if !strings.Contains(args, "-frames:v 120") {
-		t.Fatalf("exact trim args do not cap at 120 frames: %q", args)
-	}
-	if !strings.Contains(args, "-fps_mode passthrough") || !strings.Contains(args, "setpts=N*1/(24*TB)") {
-		t.Fatalf("exact trim args do not preserve source frame count on a canonical output clock: %q", args)
-	}
-	if strings.Contains(args, "-t ") {
-		t.Fatalf("frame-count-authoritative trim args include a duration cutoff: %q", args)
+	if !strings.Contains(args, "-frames:v 96") || strings.Contains(args, "libx264") {
+		t.Fatalf("unexpected packet-copy args: %q", args)
 	}
 }
 
-func TestVideoTrimmerPlanUsesFrameAccurateReencodeForMidGOPSegment(t *testing.T) {
+func TestVideoTrimmerRejectsMidGOPSegmentWithoutEncoding(t *testing.T) {
 	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{})
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
 
 	plan, err := trimmer.Plan(probe, VideoSegment{StartSeconds: 2.25, EndSeconds: 5.75}, "/source.mp4", "/segment.mp4")
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
-	if plan.Mode != TrimModeFrameAccurateReencode {
-		t.Fatalf("mode = %q, want %q", plan.Mode, TrimModeFrameAccurateReencode)
-	}
-	assertContainsSequence(t, plan.TrimArgs, "-i", "/source.mp4", "-ss", "2.250000", "-t", "3.500000", "-c:v", "libx264")
-	if strings.Contains(strings.Join(plan.TrimArgs, " "), "-c copy") {
-		t.Fatal("frame-accurate plan must not use stream copy")
+	if err == nil {
+		t.Fatalf("unsafe plan unexpectedly accepted: %+v", plan)
 	}
 }
 
-func TestVideoTrimmerReencodesCanonicalSourceAboveBitrateCap(t *testing.T) {
+func TestVideoTrimmerRejectsNonCanonicalSourceWithoutEncoding(t *testing.T) {
 	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{})
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
 	probe.VideoBitrateBPS = 4_000_000
 
 	plan, err := trimmer.Plan(probe, VideoSegment{StartSeconds: 2, EndSeconds: 6}, "/source.mp4", "/segment.mp4")
-	if err != nil {
-		t.Fatalf("Plan() error: %v", err)
-	}
-	if plan.Mode != TrimModeFrameAccurateReencode || !plan.RequiresNormalization {
-		t.Fatalf("plan = %+v, want bitrate-cap normalization", plan)
+	if err == nil {
+		t.Fatalf("non-canonical source unexpectedly accepted: %+v", plan)
 	}
 }
 
-func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
+func TestVideoTrimmerRejectsIncompatibleSourceWithoutEncoding(t *testing.T) {
 	runner := &recordingVideoRunner{probeOutput: probeJSON(t, VideoProbe{
 		DurationSeconds: 12,
 		Width:           1280,
@@ -173,32 +157,15 @@ func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := trimmer.Trim(context.Background(), inputPath, outputPath, VideoSegment{StartSeconds: 1.25, EndSeconds: 4.75})
-	if err != nil {
-		t.Fatalf("Trim() error: %v", err)
+	_, err := trimmer.Trim(context.Background(), inputPath, outputPath, VideoSegment{StartSeconds: 1.25, EndSeconds: 4.75})
+	if err == nil {
+		t.Fatal("incompatible source was silently normalized")
 	}
-	if result.Plan.Mode != TrimModeFrameAccurateReencode {
-		t.Fatalf("mode = %q, want frame-accurate re-encode", result.Plan.Mode)
+	for _, command := range runner.commands {
+		if command.name == "ffmpeg" {
+			t.Fatalf("incompatible source invoked ffmpeg: %+v", command)
+		}
 	}
-	if !result.Plan.RequiresNormalization {
-		t.Fatal("non-normalized source did not require normalization")
-	}
-	if _, err := os.Stat(outputPath); err != nil {
-		t.Fatalf("trimmed output missing: %v", err)
-	}
-	if len(runner.commands) != 3 {
-		t.Fatalf("commands = %d, want ffprobe + normalization ffmpeg + trim ffmpeg", len(runner.commands))
-	}
-	if runner.commands[0].name != "ffprobe" || runner.commands[1].name != "ffmpeg" || runner.commands[2].name != "ffmpeg" {
-		t.Fatalf("command sequence = %#v", runner.commands)
-	}
-	canonicalVideoBlock := []string{"-c:v", "libx264", "-preset", "veryfast", "-refs", "1", "-crf", "23", "-maxrate", "2.75M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000"}
-	normalizationExpected := append([]string{"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24/1"}, canonicalVideoBlock...)
-	normalizationExpected = append(normalizationExpected, "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
-	assertContainsSequence(t, runner.commands[1].args, normalizationExpected...)
-	trimExpected := append([]string{"-ss", "1.250000", "-t", "3.500000", "-vf", "fps=24/1"}, canonicalVideoBlock...)
-	trimExpected = append(trimExpected, "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
-	assertContainsSequence(t, runner.commands[2].args, trimExpected...)
 }
 
 func TestVideoTrimmerRejectsInvalidOrOutOfBoundsSegments(t *testing.T) {
@@ -235,6 +202,8 @@ func normalizedVideoProbe(duration float64, keyframes []float64) VideoProbe {
 		AudioSampleRate: quality.AudioSampleRate,
 		AudioChannels:   quality.AudioChannels,
 		PixelFormat:     profile.PixelFormat,
+		BFrames:         profile.BFrames,
+		ExtradataSHA256: videoContract.CanonicalVideoExtradataSHA256,
 		Keyframes:       keyframes,
 	}
 }
@@ -277,31 +246,9 @@ func TestVideoPreparationUsesCanonicalStreamProfile(t *testing.T) {
 			trimmer.profile.CodecProfile, trimmer.profile.CodecLevel, profile.CodecProfile, profile.CodecLevel)
 	}
 
-	// The produced ffmpeg command must carry the pinning arguments, so the
-	// encoder cannot drift away from the identity the manifest advertises.
-	args := strings.Join(normalizationArgs(trimmer.profile, trimmer.quality, "in.mp4", "out.mp4"), " ")
-	for _, want := range []string{
-		"fps=24/1",
-		"-preset veryfast",
-		"-refs 1",
-		"-profile:v high",
-		"-level:v 4.0",
-		"-colorspace bt709",
-		"-color_primaries bt709",
-		"-color_trc bt709",
-		"-color_range tv",
-		"-g 48",
-		"-bf 0",
-		"-x264-params scenecut=0:open-gop=0:keyint=48:min-keyint=48",
-		"-video_track_timescale 90000",
-	} {
-		if !strings.Contains(args, want) {
-			t.Errorf("normalization args %q do not pin %q", args, want)
-		}
-	}
-	// A literal 30 fps (the removed authority) must never come back.
-	if strings.Contains(args, "fps=30") {
-		t.Fatalf("normalization args still carry the removed 30 fps authority: %s", args)
+	args := strings.Join(trimArgs(VideoSegment{StartSeconds: 2, EndSeconds: 4}, 2, "in.mp4", "out.mp4"), " ")
+	if strings.Contains(args, "libx264") || !strings.Contains(args, "-c copy") {
+		t.Fatalf("Master stock preparation must packet-copy only: %s", args)
 	}
 }
 
@@ -332,18 +279,20 @@ func probeJSON(t *testing.T, probe VideoProbe) []byte {
 	payload := map[string]interface{}{
 		"streams": []interface{}{
 			map[string]interface{}{
-				"codec_type":   "video",
-				"codec_name":   probe.VideoCodec,
-				"profile":      probe.VideoProfile,
-				"level":        probe.VideoLevel,
-				"width":        probe.Width,
-				"height":       probe.Height,
-				"r_frame_rate": ratioString(probe.FPSNum, probe.FPSDen),
-				"time_base":    ratioString(probe.TimebaseNum, probe.TimebaseDen),
-				"pix_fmt":      probe.PixelFormat,
-				"duration":     probe.DurationSeconds,
-				"nb_frames":    probe.FrameCount,
-				"start_time":   probe.StartTimeSeconds,
+				"codec_type":     "video",
+				"codec_name":     probe.VideoCodec,
+				"profile":        probe.VideoProfile,
+				"level":          probe.VideoLevel,
+				"width":          probe.Width,
+				"height":         probe.Height,
+				"r_frame_rate":   ratioString(probe.FPSNum, probe.FPSDen),
+				"time_base":      ratioString(probe.TimebaseNum, probe.TimebaseDen),
+				"pix_fmt":        probe.PixelFormat,
+				"duration":       probe.DurationSeconds,
+				"nb_frames":      probe.FrameCount,
+				"start_time":     probe.StartTimeSeconds,
+				"has_b_frames":   probe.BFrames,
+				"extradata_hash": "SHA256:" + probe.ExtradataSHA256,
 			},
 			map[string]interface{}{"codec_type": "audio", "codec_name": probe.AudioCodec, "sample_rate": probe.AudioSampleRate, "channels": probe.AudioChannels},
 		},
@@ -352,6 +301,8 @@ func probeJSON(t *testing.T, probe VideoProbe) []byte {
 			map[string]interface{}{"media_type": "video", "key_frame": 1, "best_effort_timestamp_time": "2"},
 			map[string]interface{}{"media_type": "video", "key_frame": 1, "best_effort_timestamp_time": "4"},
 			map[string]interface{}{"media_type": "video", "key_frame": 1, "best_effort_timestamp_time": "6"},
+			map[string]interface{}{"media_type": "video", "key_frame": 1, "best_effort_timestamp_time": "8"},
+			map[string]interface{}{"media_type": "video", "key_frame": 1, "best_effort_timestamp_time": "10"},
 		},
 		"format": map[string]interface{}{"duration": probe.DurationSeconds},
 	}

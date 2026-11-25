@@ -66,7 +66,7 @@ func TestCommitPreparedWindowClosesFencedInternalTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert := contract.VideoPrepareWindowCertificateV1{SourceSHA256: sourceSHA, OutputSHA256: outputSHA, OutputSizeBytes: 10, OutputEvidence: contract.VideoWindowOutputEvidenceV1{Codec: "h264", ExtradataSHA256: extraSHA}}
+	cert := contract.VideoPrepareWindowCertificateV1{SourceSHA256: sourceSHA, OutputSHA256: outputSHA, OutputSizeBytes: 10, ClosedGOPAttested: true, PacketCopyUsed: true, OutputEvidence: contract.VideoWindowOutputEvidenceV1{Codec: "h264", ExtradataSHA256: extraSHA}}
 	certJSON, _ := json.Marshal(cert)
 	if _, err := db.Exec(`INSERT INTO task_specs(task_id,executor_id,payload_json,created_at) VALUES(?,?,?,?)`, taskID, contract.VideoPrepareWindowExecutorID, mustJSON(t, map[string]any{contract.VideoPrepareWindowPayloadKey: req}), now); err != nil {
 		t.Fatal(err)

@@ -107,17 +107,11 @@ struct RenderPlan {
     bool copy_only{false};
     bool watermark_already_applied{false};
     bool watermark_requested{false};
-    // Mixed renderer: the copy-only assembly path. Each video segment is
-    // resolved independently against the canonical output profile and either
-    // stream-copied (PACKET_COPY) or rejected (REJECT — the job fails
-    // deterministically with the exact reason). Nothing is ever re-encoded.
-    // Distinct from copy_only, which requires every segment to be
-    // packet-copy compatible up front; mixed resolves per-segment against
-    // the canonical profile at render time.
+    // Legacy mixed-render request. It is retained for wire compatibility and
+    // rejected because its former implementation re-encoded existing video.
     bool mixed{false};
-    // Explicit editorial path for replace overlays whose source media is not
-    // packet-compatible with the base timeline. This is intentionally
-    // separate from mixed so the renderer never silently falls back.
+    // Editorial rendering may produce a new asset from non-video sources.
+    // Existing video sources remain forbidden outside copy_only assembly.
     bool requires_editorial_render{false};
     // Output profile identity. The final mux derives its container layout
     // from this ID; source assets keep their stream profile identity.

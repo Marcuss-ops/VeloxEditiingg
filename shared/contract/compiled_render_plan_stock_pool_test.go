@@ -76,3 +76,30 @@ func TestResolveCompiledStockPoolRejectsChangedSnapshotIdentity(t *testing.T) {
 		t.Fatal("changed stock-pool source identity accepted")
 	}
 }
+
+func TestExpandCompiledStockPoolSlotsCyclesAndDoesNotFabricateCertification(t *testing.T) {
+	plan := &CompiledRenderPlanV2{
+		TimelineSHA256: strings.Repeat("a", 64), StockPool: &StockPoolV2{DriveFolderID: "folder-1", Selection: "shuffle"},
+		Output:      OutputContractV2{FPSNum: 24, FPSDen: 1},
+		VideoTracks: []VideoTrackV2{{TrackID: "main", Segments: []VideoSegmentV2{{SegmentID: "slot", StockPoolSlot: true, TimelineStartFrame: 0, FrameCount: 50}}}},
+	}
+	members := []StockPoolCandidateV2{{AssetID: "drive-a", DriveFileID: "drive-a", SizeBytes: 100, DurationMS: 1_000, StockPoolMember: true, SourceSHA256: strings.Repeat("b", 64)}}
+	if err := ExpandCompiledStockPoolSlots(plan, members); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	if plan.StockPool != nil {
+		t.Fatal("expanded plan still has an unresolved stock pool")
+	}
+	segments := plan.VideoTracks[0].Segments
+	if len(segments) != 3 || segments[0].FrameCount != 24 || segments[1].FrameCount != 24 || segments[2].FrameCount != 2 {
+		t.Fatalf("cyclic segments = %+v", segments)
+	}
+	for i, segment := range segments {
+		if segment.StockPoolSlot || segment.SourceInUS != 0 || segment.TimelineStartFrame != int64(i*24) {
+			t.Fatalf("segment %d has invalid expanded placement: %+v", i, segment)
+		}
+	}
+	if len(plan.Assets) != 1 || plan.Assets[0].FirstFrameKeyframe || plan.Assets[0].ClosedGOP {
+		t.Fatalf("expansion fabricated source certification: %+v", plan.Assets)
+	}
+}

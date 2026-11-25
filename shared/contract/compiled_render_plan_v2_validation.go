@@ -411,7 +411,7 @@ func validateStockPoolSlot(violations *CompiledRenderPlanV2ValidationErrors, pat
 		violations.add(path, "stock_pool_slot_has_source", "no producer-selected asset or hash", segment.AssetID)
 	}
 	if segment.SourceInUS != 0 || segment.SourceDurationUS != 0 {
-		violations.add(path, "stock_pool_slot_has_source_range", "zero source range; worker chooses source", fmt.Sprintf("%d + %d", segment.SourceInUS, segment.SourceDurationUS))
+		violations.add(path, "stock_pool_slot_has_source_range", "zero source range; Master chooses source", fmt.Sprintf("%d + %d", segment.SourceInUS, segment.SourceDurationUS))
 	}
 	if segment.TimelineStartFrame < 0 {
 		violations.add(path+".timeline_start_frame", "out_of_range", "non-negative frame", fmt.Sprint(segment.TimelineStartFrame))

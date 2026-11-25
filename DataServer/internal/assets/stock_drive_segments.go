@@ -214,7 +214,8 @@ func cachedDriveStockWindowEvidence(
 func matchesCanonicalStockVideo(probe VideoProbe, profile contract.CanonicalVideoProfileV1) bool {
 	if probe.Width != profile.Width || probe.Height != profile.Height || probe.FPSNum != profile.FPSNum || probe.FPSDen != profile.FPSDen ||
 		probe.VideoCodec != strings.ToLower(profile.Codec) || probe.PixelFormat != strings.ToLower(profile.PixelFormat) ||
-		probe.VideoProfile != strings.ToLower(profile.CodecProfile) || probe.TimebaseNum != profile.TimeBaseNum || probe.TimebaseDen != profile.TimeBaseDen {
+		probe.VideoProfile != strings.ToLower(profile.CodecProfile) || probe.BFrames != profile.BFrames ||
+		probe.ExtradataSHA256 != contract.CanonicalVideoExtradataSHA256 || probe.TimebaseNum != profile.TimeBaseNum || probe.TimebaseDen != profile.TimeBaseDen {
 		return false
 	}
 	if profile.CodecLevel != "" {

@@ -284,10 +284,10 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 	// materialize Drive stock bytes as a fallback: an empty preparation plan
 	// with remaining stock is a contract violation, not an invitation to
 	// download on the Master.
-	allowMasterStock := true
-	if _, ok := p.assets.(RuntimeStockWindowTaskPlanner); ok {
-		allowMasterStock = false
-	}
+	// A stock_pool must be expanded and certified on the Master before the
+	// immutable execution plan is published. This path is packet-copy-only;
+	// the worker must never reconstruct editorial slot selection.
+	allowMasterStock := compiledPlanHasStockPool(planJSON)
 	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, planJSON, req, current, p.assets, allowMasterStock)
 	if err != nil {
 		return p.fail(ctx, candidate, err)
@@ -619,20 +619,37 @@ func buildRuntimeFinalizePatch(
 			return nil, fmt.Errorf("decode compiled render plan: %w", err)
 		}
 	}
-	preparedStockPlan := compiledPlanHasDriveStock(planJSON, bindings)
+	hadStockPool := compiledPlan.StockPool != nil
 	finalRuntimeAssets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 	var stockPoolSnapshot map[string]interface{}
-	if compiledPlan.StockPool != nil {
+	if hadStockPool {
 		finalRuntimeAssets, stockPoolSnapshot, err = snapshotRuntimeStockPool(&compiledPlan, jobID, bindings)
 		if err != nil {
 			return nil, fmt.Errorf("persist stock pool selection: %w", err)
 		}
+		encodedMembers, marshalErr := json.Marshal(stockPoolSnapshot["members"])
+		if marshalErr != nil {
+			return nil, fmt.Errorf("encode stock pool selection: %w", marshalErr)
+		}
+		var selectedMembers []contract.StockPoolCandidateV2
+		if unmarshalErr := json.Unmarshal(encodedMembers, &selectedMembers); unmarshalErr != nil {
+			return nil, fmt.Errorf("decode stock pool selection: %w", unmarshalErr)
+		}
+		if err := contract.ExpandCompiledStockPoolSlots(&compiledPlan, selectedMembers); err != nil {
+			return nil, fmt.Errorf("compile stock pool timeline: %w", err)
+		}
+		compiledJSON, canonicalErr := compiledPlan.CanonicalJSON()
+		if canonicalErr != nil {
+			return nil, fmt.Errorf("canonicalize stock pool plan: %w", canonicalErr)
+		}
+		planJSON = string(compiledJSON)
 		if req.RuntimePayload == nil {
 			req.RuntimePayload = make(map[string]interface{})
 		}
 		req.RuntimePayload["runtime_assets"] = finalRuntimeAssets
 		req.RuntimePayload["runtime_stock_pool_snapshot"] = stockPoolSnapshot
 	}
+	preparedStockPlan := compiledPlanHasDriveStock(planJSON, finalRuntimeAssets)
 	if preparedStockPlan {
 		if !allowStockPreparation {
 			return nil, errors.New("master stock-window preparation is disabled; the worker preparation plan produced no tasks")
@@ -666,7 +683,10 @@ func buildRuntimeFinalizePatch(
 		patch["runtime_assets"] = finalRuntimeAssets
 		patch[contract.PayloadKeyCompiledRenderPlanJSON] = req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON]
 		patch[contract.PayloadKeyCompiledRenderPlanSHA] = req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA]
-	} else if compiledPlan.StockPool != nil {
+		if hadStockPool {
+			patch["runtime_stock_pool_snapshot"] = stockPoolSnapshot
+		}
+	} else if hadStockPool {
 		patch["runtime_assets"] = finalRuntimeAssets
 		patch["runtime_stock_pool_snapshot"] = stockPoolSnapshot
 	} else if len(req.RuntimeAssets) > 0 {

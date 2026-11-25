@@ -140,7 +140,29 @@ func TestVideoAssembleSlice_RejectsLegacyStockWindowWithoutProbingOrCutting(t *t
 	if err != nil || result.Status != "failed" {
 		t.Fatalf("legacy stock window result=%+v err=%v, want immediate failure", result, err)
 	}
-	if !strings.Contains(result.ErrorDetail, "whole-clip stock_pool slots only") || renderer.calls != 0 {
+	if !strings.Contains(result.ErrorDetail, "non-keyframe offset") || renderer.calls != 0 {
 		t.Fatalf("unsafe stock window was not rejected before render: result=%+v native_calls=%d", result, renderer.calls)
+	}
+}
+
+func TestVideoAssembleSliceRejectsUnresolvedStockPoolPlan(t *testing.T) {
+	plan := driveSlicePlan()
+	plan.StockPool = &contract.StockPoolV2{SourceKind: "drive", DriveFolderID: "folder-1", Selection: "shuffle"}
+	plan.VideoTracks[0].Segments[0].StockPoolSlot = true
+	plan.VideoTracks[0].Segments[0].AssetID = ""
+	plan.VideoTracks[0].Segments[0].SHA256 = ""
+	plan.VideoTracks[0].Segments[0].SourceInUS = 0
+	plan.VideoTracks[0].Segments[0].SourceDurationUS = 0
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := &sliceNativeRenderer{}
+	runner := pipeline.NewRunner(nil, renderer, nil)
+	exec := &videoAssembleSliceExecutor{runner: runner, prober: sliceMediaProbeStub{}, outputRoot: t.TempDir()}
+	spec := executorTaskSpec(VideoAssembleSliceID, "job-unresolved-stock-pool", canonical, plan)
+	result, err := exec.Execute(context.Background(), nil, spec)
+	if err != nil || result.Status != "failed" || renderer.calls != 0 {
+		t.Fatalf("unresolved stock pool result=%+v err=%v native_calls=%d", result, err, renderer.calls)
 	}
 }
