@@ -112,10 +112,11 @@ benchmark evidence and digest promotion — remain open below.
   identity discovery. The control plane no longer materializes Drive stock
   bytes when worker preparation is wired.
 - Complete: canonical H.264 encoder identity. Master and worker share the
-  pinned `libx264` preset, reference count and BT.709 VUI metadata; the
-  encoder-argument digest is part of the preparation revision, and worker
-  certification compares the actual `avcC` hash with a per-encoder-build
-  canonical reference instead of accepting any 64-hex value.
+  pinned `libx264` preset, reference count and BT.709 SPS VUI metadata. Worker
+  certification compares actual `avcC` bytes with the canonical identity and
+  a per-build reference. Packet-copy preparation revision v2 binds the
+  canonical profile, `avcC`, and source acceptance rules; encoder quality
+  arguments do not invalidate packet-copy evidence.
 - Complete: worker dispatch probes the worker-local prepared-fragment cache
   before resolving or downloading the source. A warm fragment executes
   without source bindings and reports `frames_encoded = 0`; the certified
@@ -287,15 +288,16 @@ benchmark evidence and digest promotion — remain open below.
   `runtime_prepare_window_reuse` until the assembly plan is rewritten.
 - [x] **Close the H.264 encoder-identity gap.** `CanonicalVideoEncodeArgs` now
   pins `-preset veryfast`, `-refs 1` and BT.709 `colorspace/color_primaries/`
-  `color_trc/color_range` in addition to profile, level, GOP and B-frames. The
-  argument projection is hashed by `CanonicalVideoEncoderArgsDigest` and folded
-  into `VideoWindowPreparationRevision`, so changing any identity-bearing
-  encoder flag invalidates cached fragments. Worker certification builds a
-  one-frame reference with the same canonical contract, probes its `avcC`
-  SHA-256 and rejects a fragment whose extradata differs (`WINDOW_EXTRADATA_`
-  `IDENTITY_MISMATCH`); warm attestations apply the same check. A real-FFmpeg
-  contract test encodes one source through the Master normalization projection
-  and through `CanonicalVideoWindowArgs` and requires byte-identical `avcC`.
+  `color_trc/color_range` and the corresponding x264 SPS VUI values in addition
+  to profile, level, GOP and B-frames. `CanonicalVideoEncoderArgsDigest`
+  identifies producer settings, while `VideoWindowPreparationRevision` v2
+  intentionally binds packet-copy evidence to the profile, canonical `avcC`,
+  and source acceptance rules rather than encoder or quality arguments. Worker
+  certification builds a one-frame reference with the same canonical
+  contract, probes its `avcC` SHA-256 and rejects a fragment whose extradata
+  differs (`WINDOW_EXTRADATA_IDENTITY_MISMATCH`); warm attestations apply the
+  same check. Real-FFmpeg tests require Master, worker and whole-source
+  normalization to produce byte-identical `avcC`.
 - [x] **Make the worker cache-first before source resolution.**
   `TaskRunner.ProbeLocalPreparation` asks the registered executor whether the
   fragment identity, encoder build and canonical `avcC` already match a local

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -108,7 +109,7 @@ func TestTimestampMatchesFramesUsesRationalFrameRateAndMicrosecondQuantization(t
 	}
 }
 
-func TestVideoPrepareWindow_UsesCertifiedPacketCopyForCanonicalKeyframeWindow(t *testing.T) {
+func TestVideoPrepareWindow_ProducesCertifiedPacketCopyForCanonicalKeyframeWindow(t *testing.T) {
 	if _, err := osexec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
@@ -156,8 +157,16 @@ func TestVideoPrepareWindow_UsesCertifiedPacketCopyForCanonicalKeyframeWindow(t 
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Status != "failed" || result.ErrorCode != "WINDOW_PACKET_COPY_INCOMPATIBLE" {
-		t.Fatalf("local non-canonical source was not rejected before assembly: %+v", result)
+	if result.Status != "succeeded" || len(result.Outputs) != 1 || len(result.Segments) != 1 {
+		t.Fatalf("canonical source window was not packet-copied successfully: %+v", result)
+	}
+	var certificate contract.VideoPrepareWindowCertificateV1
+	if err := json.Unmarshal([]byte(result.Segments[0].MetadataJSON), &certificate); err != nil {
+		t.Fatalf("decode output certificate: %v", err)
+	}
+	if !certificate.PacketCopyUsed || certificate.OutputEvidence.FrameCount != request.OutputFrameCount ||
+		certificate.OutputEvidence.ExtradataSHA256 != contract.CanonicalVideoExtradataSHA256 {
+		t.Fatalf("output lacks canonical packet-copy evidence: %+v", certificate)
 	}
 }
 

@@ -145,10 +145,10 @@
   `color_range` in addition to profile, level, GOP, B-frames and time base.
   These settings change the SPS/PPS a packet-copy muxer must share, so they
   are part of the stream identity rather than quality knobs.
-- `CanonicalVideoEncoderArgsDigest` hashes the exact argument projection and
-  is folded into `VideoWindowPreparationRevision`. Any identity-bearing
-  encoder change now invalidates cached prepared fragments instead of
-  silently reusing an incompatible `avcC`.
+- `CanonicalVideoEncoderArgsDigest` hashes the exact producer argument
+  projection. Packet-copy preparation revision v2 instead binds the canonical
+  profile, pinned `avcC`, and source acceptance rules; encoder quality changes
+  no longer invalidate compatible packet-copy evidence.
 - Worker `video.prepare.window.v1` certification builds a one-frame reference
   with the same canonical contract for its FFmpeg build, probes the reference
   `avcC` SHA-256 and rejects a fragment whose extradata differs
