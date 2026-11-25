@@ -32,26 +32,6 @@ import (
 
 const mediaDefaultLimit = 50
 
-type mediaAsset struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Filename     string   `json:"filename"`
-	Source       string   `json:"source"`
-	Provider     string   `json:"provider"`
-	MediaType    string   `json:"media_type"`
-	DurationMS   int64    `json:"duration_ms"`
-	SizeBytes    int64    `json:"size_bytes"`
-	Lifecycle    string   `json:"lifecycle_state"`
-	AssetState   string   `json:"asset_state"`
-	IndexState   string   `json:"index_state"`
-	HasDriveFile bool     `json:"has_drive_file"`
-	HasLocalFile bool     `json:"has_local_file"`
-	HasEmbedding bool     `json:"has_embedding"`
-	ContentHash  string   `json:"content_hash"`
-	CreatedAt    string   `json:"created_at"`
-	Locations    []string `json:"locations"`
-}
-
 func (h *Handlers) mediaDB() (*sql.DB, bool) {
 	if h == nil || h.store == nil || h.store.DB() == nil {
 		return nil, false

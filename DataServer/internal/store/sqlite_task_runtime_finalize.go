@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -153,7 +154,7 @@ func (r *SQLiteTaskRepository) transitionRuntimeFinalizationStatus(ctx context.C
 		WHERE t.task_id=? AND (t.worker_id='' OR t.worker_id IS NULL)`, taskID).
 		Scan(&jobID, &taskStatus, &specVersion, &payloadJSON)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
 		return false, wrapDBInfrastructure("runtime finalization transition read", err)

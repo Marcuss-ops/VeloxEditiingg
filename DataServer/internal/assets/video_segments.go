@@ -379,34 +379,3 @@ func syncPreparedSegment(path string) error {
 	defer file.Close()
 	return file.Sync()
 }
-
-func segmentNumber(fields map[string]interface{}, key string) (float64, bool) {
-	value, ok := fields[key]
-	if !ok {
-		return 0, false
-	}
-	switch number := value.(type) {
-	case float64:
-		return number, number >= 0
-	case float32:
-		return float64(number), number >= 0
-	case int:
-		return float64(number), number >= 0
-	case int64:
-		return float64(number), number >= 0
-	case json.Number:
-		parsed, err := number.Float64()
-		return parsed, err == nil && parsed >= 0
-	default:
-		return 0, false
-	}
-}
-
-func firstString(fields map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := fields[key].(string); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}

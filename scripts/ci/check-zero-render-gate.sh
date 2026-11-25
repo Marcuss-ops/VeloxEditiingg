@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 # scripts/ci/check-zero-render-gate.sh
 #
-# Zero-render release gate (plan §16) for the visual_replacement copy-only
-# path. It builds and runs the golden end-to-end test, then re-reads the
-# engine sidecar and fails the job if ANY transcode happened — even when the
-# final video looks correct.
+# Zero-render release gate for the currently supported visual-replacement
+# contract. Existing-video replacement is deliberately refused before any
+# output is created; this gate pins that fail-closed behavior.
 #
 # The gate asserts, simultaneously:
-#   frames_encoded      == 0
-#   frames_decoded      == 0
-#   frames_composited   == 0
-#   encode_passes       == 0
-#   transcode_segments  == 0
-#   copy_segments       >= 3   (BASE/PREPARED/BASE for the golden job)
-#   concat_mode         == "packet_copy"
+#   video_reencode_forbidden error
+#   frames_encoded       == 0
+#   encode_passes        == 0
+#   output file          absent
 #
 # This is the durable enforcement: six months from now, if a worker change
 # accidentally turns a prepared segment into decode → encode, this gate turns
@@ -92,56 +88,9 @@ VELOX_GOLDEN_EVIDENCE_DIR="${GOLDEN_EVIDENCE}" \
     exit 1
   }
 
-SIDECAR="${GOLDEN_EVIDENCE}/golden-output.mp4.progress.json"
-[[ -f "${SIDECAR}" ]] || {
-  echo "[zero-render-gate][FAIL] sidecar missing: ${SIDECAR}" >&2
+OUTPUT="${TMPDIR:-/tmp}/velox-overlay-zero-reencode-golden.mp4"
+[[ ! -e "${OUTPUT}" ]] || {
+  echo "[zero-render-gate][FAIL] refused replacement produced output: ${OUTPUT}" >&2
   exit 1
 }
-
-echo "[zero-render-gate] asserting zero-render invariants from sidecar"
-python3 - "${SIDECAR}" <<'PY'
-import json
-import sys
-
-sidecar_path = sys.argv[1]
-with open(sidecar_path, encoding="utf-8") as stream:
-    sidecar = json.load(stream)
-
-# The gate fails on ANY transcode, even if the final video looks correct.
-violations = []
-
-def assert_eq(field, value, want):
-    if value != want:
-        violations.append(f"{field}={value}, want {want}")
-
-def assert_ge(field, value, want):
-    if value < want:
-        violations.append(f"{field}={value}, want >= {want}")
-
-assert_eq("frames_encoded", int(sidecar.get("frames", -1)), 0)
-assert_eq("frames_decoded", int(sidecar.get("frames_decoded", -1)), 0)
-assert_eq("frames_composited", int(sidecar.get("frames_composited", -1)), 0)
-assert_eq("encode_passes", int(sidecar.get("encode_passes", -1)), 0)
-assert_eq("transcode_segments", int(sidecar.get("transcode_segments", -1)), 0)
-assert_ge("copy_segments", int(sidecar.get("copy_segments", -1)), 3)
-
-mode = sidecar.get("concat_mode", "")
-if mode != "packet_copy":
-    violations.append(f"concat_mode={mode!r}, want 'packet_copy'")
-
-if violations:
-    print("[zero-render-gate][FAIL] zero-render invariants violated:", file=sys.stderr)
-    for violation in violations:
-        print(f"  - {violation}", file=sys.stderr)
-    sys.exit(2)
-
-print(
-    f"[zero-render-gate][OK] copy_segments={sidecar.get('copy_segments')} "
-    f"transcode_segments={sidecar.get('transcode_segments')} "
-    f"frames_encoded={sidecar.get('frames')} "
-    f"frames_decoded={sidecar.get('frames_decoded')} "
-    f"concat_mode={mode!r}"
-)
-PY
-
 echo "[zero-render-gate][PASS] evidence=${EVIDENCE_DIR}"

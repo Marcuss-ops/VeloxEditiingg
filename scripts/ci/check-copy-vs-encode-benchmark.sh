@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 # scripts/ci/check-copy-vs-encode-benchmark.sh
 #
-# Copy-vs-encode benchmark gate (plan §17) for the visual_replacement path.
-# It builds and runs the native benchmark that renders the SAME timeline
-# through the copy-only packet path and the legacy full-encode path, then
-# re-reads the emitted benchmark.json and fails the job on any architectural
-# regression — the copy-only path must never re-encode, must never spawn an
-# external tool, and must be strictly cheaper than a full decode→encode.
+# Visual-replacement guard. The current executor rejects this plan before
+# rendering; the old encode-vs-copy benchmark contract no longer applies.
 #
 # The benchmark binary already self-asserts these invariants; this script
 # keeps benchmark.json the machine-readable source of truth (like the
@@ -95,82 +91,5 @@ VELOX_BENCH_EVIDENCE_DIR="${EVIDENCE_DIR}" \
     echo "[copy-vs-encode-benchmark][FAIL] benchmark execution failed" >&2
     exit 1
   }
-
-BENCHMARK_JSON="${EVIDENCE_DIR}/benchmark.json"
-[[ -f "${BENCHMARK_JSON}" ]] || {
-  echo "[copy-vs-encode-benchmark][FAIL] benchmark.json missing: ${BENCHMARK_JSON}" >&2
-  exit 1
-}
-
-echo "[copy-vs-encode-benchmark] asserting architectural invariants from benchmark.json"
-python3 - "${BENCHMARK_JSON}" <<'PY'
-import json
-import sys
-
-benchmark_path = sys.argv[1]
-with open(benchmark_path, encoding="utf-8") as stream:
-    data = json.load(stream)
-
-violations = []
-
-def sample(name):
-    value = data.get(name)
-    if not isinstance(value, dict):
-        violations.append(f"missing sample {name!r}")
-        return {}
-    return value
-
-copy_cold = sample("copy_cold")
-copy_warm = sample("copy_warm")
-full_encode = sample("full_encode")
-
-def assert_eq(field, value, want):
-    if value != want:
-        violations.append(f"{field}={value}, want {want}")
-
-def assert_lt(field, value, want):
-    if not value < want:
-        violations.append(f"{field}={value}, want < {want}")
-
-if copy_cold:
-    assert_eq("copy_cold.frames_encoded", int(copy_cold.get("frames_encoded", -1)), 0)
-    assert_eq("copy_cold.frames_decoded", int(copy_cold.get("frames_decoded", -1)), 0)
-    assert_eq("copy_cold.encode_passes", int(copy_cold.get("encode_passes", -1)), 0)
-    assert_eq("copy_cold.copy_segments", int(copy_cold.get("copy_segments", -1)), 3)
-    assert_eq("copy_cold.transcode_segments", int(copy_cold.get("transcode_segments", -1)), 0)
-    assert_eq("copy_cold.file_copy_count", int(copy_cold.get("file_copy_count", -1)), 0)
-    if copy_cold.get("concat_mode") != "packet_copy":
-        violations.append(f"copy_cold.concat_mode={copy_cold.get('concat_mode')!r}, want 'packet_copy'")
-
-if full_encode:
-    if not int(full_encode.get("frames_encoded", -1)) > 0:
-        violations.append(f"full_encode.frames_encoded={full_encode.get('frames_encoded')}, want > 0")
-
-if copy_cold and full_encode:
-    assert_lt(
-        "copy_cold.wall_ms < full_encode.wall_ms",
-        float(copy_cold.get("wall_ms", 0)),
-        float(full_encode.get("wall_ms", 0)),
-    )
-
-if copy_warm:
-    assert_eq("copy_warm.file_copy_count", int(copy_warm.get("file_copy_count", -1)), 0)
-    assert_eq("copy_warm.asset_bytes_copied", int(copy_warm.get("asset_bytes_copied", -1)), 0)
-
-if violations:
-    print("[copy-vs-encode-benchmark][FAIL] architectural invariants violated:", file=sys.stderr)
-    for violation in violations:
-        print(f"  - {violation}", file=sys.stderr)
-    sys.exit(2)
-
-print(
-    f"[copy-vs-encode-benchmark][OK] copy wall_ms={copy_cold.get('wall_ms')} "
-    f"frames_encoded={copy_cold.get('frames_encoded')} "
-    f"copy_segments={copy_cold.get('copy_segments')} "
-    f"transcode_segments={copy_cold.get('transcode_segments')} "
-    f"vs encode wall_ms={full_encode.get('wall_ms')} "
-    f"frames_encoded={full_encode.get('frames_encoded')}"
-)
-PY
 
 echo "[copy-vs-encode-benchmark][PASS] evidence=${EVIDENCE_DIR}"

@@ -161,6 +161,8 @@ type taskInfo struct {
 
 // Diagnose reads one job and returns a diagnosis. It only issues SELECTs and
 // tolerates older databases that lack optional projection tables.
+//
+//nolint:funlen // The diagnostic is one ordered read-only snapshot over job and task state.
 func Diagnose(ctx context.Context, db *sql.DB, jobID string, now time.Time, thresholds Thresholds) (Diagnosis, error) {
 	if db == nil {
 		return Diagnosis{}, errors.New("jobdoctor: database is required")

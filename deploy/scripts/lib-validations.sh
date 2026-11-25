@@ -52,6 +52,14 @@ is_https_url() {
     return 2       # malformed
 }
 
+# is_loopback_http_url returns 0 only for a syntactically valid HTTP URL whose
+# host is an explicit local loopback address. Such traffic never leaves the
+# Master; remote HTTP endpoints remain warning eligible.
+is_loopback_http_url() {
+    local url="${1:-}"
+    [[ "$url" =~ ^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$ ]]
+}
+
 # ─── Port ───────────────────────────────────────────────────────────────────
 is_port() {
     local port="${1:-}"

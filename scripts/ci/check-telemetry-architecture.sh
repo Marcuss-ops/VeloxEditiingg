@@ -306,9 +306,15 @@ spine_pins = [
     ("RemoteCodex/native/worker-agent-go/pkg/performance/snapshot_assembler.go",
      r"AssembleFromSnapshot",
      "receipt projection"),
-    ("RemoteCodex/native/worker-agent-go/internal/taskrunner/executors",
-     r"rec\.Emit\s*\(\s*telemetry\.EventSpec",
-     "producer to recorder edge (executors emit canonical events)"),
+    ("RemoteCodex/native/worker-agent-go/internal/taskrunner/runner.go",
+     r"importExecutorDetailedPhases\s*\(rec,\s*result\.DetailedPhases\)",
+     "executor facts imported into recorder"),
+    ("RemoteCodex/native/worker-agent-go/internal/taskrunner/runner_report.go",
+     r"return\s+rec\.ImportCXX\(imported\)",
+     "validated executor facts reach canonical recorder"),
+    ("RemoteCodex/native/worker-agent-go/internal/taskrunner/executors/video_assemble_copy.go",
+     r"DetailedPhases:\s*detailedPhases",
+     "executor publishes detailed phase facts"),
 ]
 for spine_rel, spine_pattern, label in spine_pins:
     target = root / spine_rel

@@ -46,6 +46,8 @@ import (
 // as a misconfiguration and surfaces as a structured error log rather
 // than a silent no-op — better to fail loud than to leak TaskResults
 // without ever closing the Attempt.
+//
+//nolint:funlen // Identity validation, durable ingest, and ACK form one protocol lifecycle.
 func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *workerSession, envelopeSentAt time.Time) {
 	protocolStartedAt := time.Now()
 	taskID := tr.GetTaskId()

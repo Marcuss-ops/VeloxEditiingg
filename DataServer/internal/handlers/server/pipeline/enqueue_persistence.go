@@ -35,6 +35,8 @@ import (
 //   - Unknown :id → 404 job_not_found.
 //   - Pre-FORWARDED target_job_id not populated → primary lookup
 //     misses → 404 (callers should retry with exponential backoff).
+//
+//nolint:funlen // This ownership-scoped read model composes the complete public job receipt.
 func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		jobID := strings.TrimSpace(c.Param("id"))

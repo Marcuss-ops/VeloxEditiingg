@@ -71,14 +71,6 @@ func runtimeAssetsCompleteForPrepare(req SubmitJobRequest) bool {
 	// Require every plan asset and final audio binding (or at least one
 	// resolved member for a StockPool plan) before allowing single-stage PRE.
 	if strings.TrimSpace(req.CompiledRenderPlanJSON) != "" {
-		assets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
-		if req.RuntimePayload != nil {
-			var err error
-			assets, err = appendRuntimeAssetBindings(assets, req.RuntimePayload["runtime_assets"])
-			if err != nil {
-				return false
-			}
-		}
 		if req.RuntimeAssetsComplete != nil && !*req.RuntimeAssetsComplete {
 			return false
 		}
@@ -200,14 +192,9 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "task_store_unavailable", "message": "task spec runtime updates are not wired"})
 			return
 		}
-		current, err := specStore.GetTaskSpecPayload(c.Request.Context(), task.ID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure", "message": err.Error()})
-			return
-		}
 		h.finalizeMu.Lock()
 		defer h.finalizeMu.Unlock()
-		current, err = specStore.GetTaskSpecPayload(c.Request.Context(), task.ID)
+		current, err := specStore.GetTaskSpecPayload(c.Request.Context(), task.ID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure", "message": err.Error()})
 			return

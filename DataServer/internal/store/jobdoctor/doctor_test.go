@@ -3,6 +3,7 @@ package jobdoctor
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -89,7 +90,7 @@ func TestDiagnoseMissingJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := Diagnose(context.Background(), db, "missing", time.Now().UTC(), DefaultThresholds())
-	if err != ErrJobNotFound {
+	if !errors.Is(err, ErrJobNotFound) {
 		t.Fatalf("err=%v, want ErrJobNotFound", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -108,7 +109,7 @@ func TestRetryFailedAssemblyRejectsPendingPreparation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.RetryFailedAssembly(ctx, "run-pending", ""); err != ErrAssemblyRetryNotEligible {
+	if _, err := db.RetryFailedAssembly(ctx, "run-pending", ""); !errors.Is(err, ErrAssemblyRetryNotEligible) {
 		t.Fatalf("expected ineligible retry, got %v", err)
 	}
 	var taskStatus, jobStatus string

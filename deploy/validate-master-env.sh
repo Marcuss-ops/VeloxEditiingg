@@ -285,8 +285,13 @@ elif [[ "$SOCIAL_API_URL" =~ CHANGE_ME_ ]]; then
 else
     case "$(is_https_url "$SOCIAL_API_URL"; echo $?)" in
         0) : ;;
-        1) warn "SOCIAL_API_URL uses http:// — only valid behind VPN/front-door TLS. Production must be https://."
-            WARN_COUNT=$((WARN_COUNT + 1)) ;;
+        1)
+            if is_loopback_http_url "$SOCIAL_API_URL"; then
+                : # Explicit loopback service on this Master; no network hop.
+            else
+                warn "SOCIAL_API_URL uses remote http:// — production endpoints must be https://."
+                WARN_COUNT=$((WARN_COUNT + 1))
+            fi ;;
         *) err "SOCIAL_API_URL malformed: '$SOCIAL_API_URL' (expected https://host[:port][/path])"
             ERR_COUNT=$((ERR_COUNT + 1)) ;;
     esac

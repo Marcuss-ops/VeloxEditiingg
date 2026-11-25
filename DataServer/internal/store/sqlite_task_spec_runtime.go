@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,7 +21,7 @@ func (r *SQLiteTaskRepository) GetTaskSpecPayload(ctx context.Context, taskID st
 	}
 	var encoded string
 	if err := r.store.db.QueryRowContext(ctx, `SELECT COALESCE(payload_json, '{}') FROM task_specs WHERE task_id = ?`, taskID).Scan(&encoded); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("task spec store: task %q not found", taskID)
 		}
 		return nil, wrapDBInfrastructure("task spec read", err)
@@ -95,7 +96,7 @@ func (r *SQLiteTaskRepository) mergeTaskSpecPayload(ctx context.Context, taskID,
 		FROM tasks t JOIN task_specs s ON s.task_id = t.task_id
 		WHERE t.task_id = ?`, taskID).Scan(&jobID, &currentExecutorID, &status, &specVersion, &payloadJSON)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("task spec store: task %q not found", taskID)
 		}
 		return nil, wrapDBInfrastructure("task spec merge read", err)

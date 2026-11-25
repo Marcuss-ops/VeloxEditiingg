@@ -3,8 +3,9 @@ package grpcserver
 import (
 	"testing"
 
-	"google.golang.org/protobuf/types/known/structpb"
 	pb "velox-shared/controltransport/pb"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestHandleHeartbeatKeepsCommitSeparateFromSoftwareVersion(t *testing.T) {

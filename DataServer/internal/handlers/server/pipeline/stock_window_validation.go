@@ -40,7 +40,3 @@ func appendRuntimeAssetBindings(assets []map[string]interface{}, raw interface{}
 	}
 	return append(assets, nested...), nil
 }
-
-func retainPlanSourceBindings(planJSON string, assets []map[string]interface{}) ([]map[string]interface{}, error) {
-	return voiceoverassets.RetainPlanSourceBindings(planJSON, assets)
-}

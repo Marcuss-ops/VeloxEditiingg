@@ -600,7 +600,7 @@ func (p *RuntimeFinalizationProcessor) fail(ctx context.Context, candidate taskg
 		}
 	}
 	if failErr := p.failures.FailRuntimeFinalization(ctx, candidate.TaskID, "RUNTIME_FINALIZE_FAILED", message); failErr != nil {
-		return fmt.Errorf("runtime finalizer: persist failure for task %s (%v): %w", candidate.TaskID, err, failErr)
+		return fmt.Errorf("runtime finalizer: persist failure for task %s: %w", candidate.TaskID, errors.Join(err, failErr))
 	}
 	log.Printf("[PIPELINE] runtime FINALIZE failed job_id=%s task_id=%s error=%q", candidate.JobID, candidate.TaskID, message)
 	return nil
