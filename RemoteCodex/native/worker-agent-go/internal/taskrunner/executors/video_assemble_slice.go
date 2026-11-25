@@ -103,7 +103,7 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 			if asset.ProfileID != plan.Output.ProfileID || asset.FrameCount <= 0 || !asset.FirstFrameKeyframe || !asset.ClosedGOP {
 				return fmt.Errorf("video.assemble.slice.v1: asset %q is not certified for packet-copy assembly", segment.AssetID)
 			}
-			if segment.SourceInUS != 0 {
+			if segment.SourceInUS != 0 && !contract.PacketCopySourceWindowCertified(plan, segment, asset) {
 				return fmt.Errorf("video.assemble.slice.v1: segment %q starts at a non-keyframe offset (%d us); packet-copy is unsafe", segment.SegmentID, segment.SourceInUS)
 			}
 			if segment.FrameCount <= 0 || segment.FrameCount > asset.FrameCount {

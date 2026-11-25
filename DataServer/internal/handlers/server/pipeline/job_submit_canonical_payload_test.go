@@ -114,7 +114,7 @@ func TestNormalizeExternalJobSubmissionRoutesProducerOwnedCompiledPlan(t *testin
 	}
 }
 
-func TestNormalizeExternalJobSubmissionRoutesDriveStockPoolToSliceExecutor(t *testing.T) {
+func TestNormalizeExternalJobSubmissionRoutesDriveStockPoolToCopyExecutor(t *testing.T) {
 	req := SubmitJobRequest{
 		IdempotencyKey:           "compiled-stock-pool-job-1",
 		VideoName:                "Drive stock pool",
@@ -127,8 +127,8 @@ func TestNormalizeExternalJobSubmissionRoutesDriveStockPoolToSliceExecutor(t *te
 	if canonical == nil {
 		t.Fatal("NormalizeExternalJobSubmission returned nil canonical")
 	}
-	if canonical.TargetExecutorID != contract.VideoAssemblySliceExecutorID {
-		t.Fatalf("target executor = %q, want %q", canonical.TargetExecutorID, contract.VideoAssemblySliceExecutorID)
+	if canonical.TargetExecutorID != contract.VideoAssemblyCopyExecutorID {
+		t.Fatalf("target executor = %q, want %q", canonical.TargetExecutorID, contract.VideoAssemblyCopyExecutorID)
 	}
 }
 

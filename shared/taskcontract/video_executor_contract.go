@@ -83,7 +83,12 @@ func (c videoAssemblyContract) Validate(spec TaskInput) error {
 	if _, err := contract.DecodeCompiledRenderPlanV2([]byte(planJSON)); err != nil {
 		return fmt.Errorf("%s: invalid compiled render plan: %w", c.executorID, err)
 	}
-	if got := contract.RequiredVideoAssemblyExecutor(spec.Payload); got != c.executorID {
+	got := contract.RequiredVideoAssemblyExecutor(spec.Payload)
+	// Keep persisted slice tasks executable during the migration. The router
+	// itself emits copy for every new plan, so this exception cannot create new
+	// slice work.
+	legacySlice := c.executorID == VideoAssemblySliceExecutorID && got == VideoAssemblyCopyExecutorID
+	if got != c.executorID && !legacySlice {
 		return fmt.Errorf("%s: payload routes to %q", c.executorID, got)
 	}
 	return nil

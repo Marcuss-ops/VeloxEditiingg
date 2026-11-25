@@ -2,6 +2,24 @@
 
 Status updated: 2026-11-09
 
+## 2026-11-25 — direct certified source windows and single new-job route
+
+In the current working tree, the stock-window planner now skips
+`video.prepare.window.v1` when the source already carries canonical immutable
+evidence. The copy assembler accepts such source windows with non-zero offsets;
+the native mux remains responsible for checking that the requested offset is
+an exact keyframe. New compiled video plans now route to
+`video.assemble.copy.v1`; the slice contract and executor remain registered to
+serve tasks already persisted with the legacy executor ID. This removes the
+slice executor from new-job scheduling without invalidating queued work.
+
+Targeted planner, contract, DataServer pipeline, task-contract and worker
+executor tests pass. Broader package runs still expose the documented local
+avcC mismatch (`667044…` vs pinned `7201ce…`) and a prepared-window
+registration fixture that rejects the local FFprobe profile. These failures
+must be resolved or classified before the full verification gate can be
+reported green. This working-tree change has not been deployed.
+
 ## 2026-11-25 — zero-reencode assembly correction
 
 The local implementation now has one video-preparation behavior: packet-copy

@@ -134,6 +134,13 @@ func TestAssemblyDeclaresPlanAndRuntimeInputs(t *testing.T) {
 	if !Default().RequiresPrefetch(sliceSpec) {
 		t.Fatal("slice assembly must keep the strict prefetch gate")
 	}
+	sliceContract, ok := Default().Lookup(sliceSpec.ExecutorID, sliceSpec.ExecutorVersion)
+	if !ok {
+		t.Fatal("legacy slice assembly contract is not registered")
+	}
+	if err := sliceContract.Validate(sliceSpec); err != nil {
+		t.Fatalf("persisted slice task was not kept executable during routing migration: %v", err)
+	}
 }
 
 func TestUnregisteredExecutorIsConservative(t *testing.T) {

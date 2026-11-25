@@ -370,6 +370,9 @@ func validateCopyOnlyPlan(plan *contract.CompiledRenderPlanV2) error {
 	// references this asset, while allowing the other uses to share it.
 	for _, segment := range plan.VideoTracks[0].Segments {
 		asset := assets[segment.AssetID]
+		if asset.Kind != "prepared_video_fragment" {
+			continue
+		}
 		if asset.TimelineStartFrame == segment.TimelineStartFrame {
 			continue
 		}
@@ -407,13 +410,16 @@ func validateCopyOnlyProfile(plan *contract.CompiledRenderPlanV2) (contract.Cano
 	return profile, nil
 }
 
-// validateCopyOnlySegment certifies one prepared video fragment against its
-// declared asset manifest: the reference must exist, be a prepared-video kind,
-// and match the plan's timeline identity and frame bounds exactly.
+// validateCopyOnlySegment accepts either an exact prepared fragment or a
+// canonical source window. The native mux rechecks stream compatibility and
+// the actual keyframe boundary before producing output.
 func validateCopyOnlySegment(plan *contract.CompiledRenderPlanV2, profile contract.CanonicalVideoProfileV1, assets map[string]contract.AssetRefV2, segment contract.VideoSegmentV2) error {
 	asset, ok := assets[segment.AssetID]
 	if !ok || (asset.Kind != "video" && asset.Kind != "prepared_video_fragment") {
-		return fmt.Errorf("%w: segment %q does not reference a prepared video asset", ErrCopyOnlyCertification, segment.SegmentID)
+		return fmt.Errorf("%w: segment %q does not reference a video asset", ErrCopyOnlyCertification, segment.SegmentID)
+	}
+	if asset.Kind == "video" && contract.PacketCopySourceWindowCertified(plan, segment, asset) {
+		return nil
 	}
 	if asset.SHA256 != segment.SHA256 || asset.ProfileID != profile.StreamProfile() || asset.FrameCount != segment.FrameCount || asset.TimelineRevision != plan.TimelineRevision || asset.TimelineSHA256 != plan.TimelineSHA256 || asset.DurationUS != segment.SourceDurationUS || !asset.FirstFrameKeyframe || !asset.ClosedGOP || segment.SourceInUS != 0 {
 		return fmt.Errorf("%w: segment %q manifest binding is not exact", ErrCopyOnlyCertification, segment.SegmentID)

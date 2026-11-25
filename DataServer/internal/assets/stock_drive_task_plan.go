@@ -24,6 +24,11 @@ func videoSegmentAlreadyPrepared(plan contract.CompiledRenderPlanV2, segment con
 		asset.FirstFrameKeyframe && asset.ClosedGOP
 }
 
+func sourceWindowReadyForPacketCopy(plan *contract.CompiledRenderPlanV2, segment contract.VideoSegmentV2, asset contract.AssetRefV2) bool {
+	return contract.PacketCopySourceWindowCertified(plan, segment, asset) ||
+		videoSegmentAlreadyPrepared(*plan, segment, asset)
+}
+
 // PlanDriveStockWindowTasks converts unresolved Drive/HTTPS stock windows
 // into worker preparation requests without materializing source bytes on the
 // Master. It requires an immutable source SHA and size; callers must reject
@@ -53,7 +58,7 @@ func (s *AssetService) PlanDriveStockWindowTasks(planJSON string, runtimeAssets 
 				continue
 			}
 			asset, exists := assetsByID[segment.AssetID]
-			if !exists || videoSegmentAlreadyPrepared(plan, segment, asset) {
+			if !exists || sourceWindowReadyForPacketCopy(&plan, segment, asset) {
 				continue
 			}
 			binding := stockRuntimeBindingForAsset(asset, bindings)

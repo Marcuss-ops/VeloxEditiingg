@@ -45,4 +45,29 @@ func TestPlanDriveStockWindowTasksDeduplicatesImmutableWindowsWithoutDownloading
 		got.SourceStartUS != 1_250_000 || got.SourceDurationUS != 3_125_000 || got.OutputFrameCount != 75 || got.TimelineStartFrame != 0 {
 		t.Fatalf("preparation request = %+v; source identity/window or stable placement is wrong", got)
 	}
+
+	plan.Assets[0].DurationUS = 10_000_000
+	plan.Assets[0].Width, plan.Assets[0].Height = profile.Width, profile.Height
+	plan.Assets[0].ProfileID = profile.StreamProfile()
+	plan.Assets[0].FrameCount = 240
+	plan.Assets[0].FirstFrameKeyframe = true
+	plan.Assets[0].ClosedGOP = true
+	plan.Assets[0].ExtradataSHA256 = contract.CanonicalVideoExtradataSHA256
+	for i := range plan.VideoTracks[0].Segments {
+		plan.VideoTracks[0].Segments[i].SHA256 = sha
+	}
+	planJSON, err = json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err = service.PlanDriveStockWindowTasks(string(planJSON), []map[string]interface{}{{
+		"asset_id": "drive-source", "drive_file_id": "drive-file-1", "source_uri": "https://objects.example/drive-file-1.mp4",
+		"sha256": sha, "size_bytes": int64(1_000_000),
+	}})
+	if err != nil {
+		t.Fatalf("PlanDriveStockWindowTasks for certified source: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("certified source still scheduled %d intermediate preparation tasks", len(tasks))
+	}
 }

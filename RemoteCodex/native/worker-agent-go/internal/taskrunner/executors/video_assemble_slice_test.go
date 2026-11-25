@@ -118,6 +118,24 @@ func TestVideoAssembleSlice_RejectsNonKeyframeOffsetBeforeFFmpeg(t *testing.T) {
 	}
 }
 
+func TestVideoAssembleSlice_AllowsCertifiedDirectSourceWindow(t *testing.T) {
+	plan := driveSlicePlan()
+	asset := &plan.Assets[0]
+	asset.DurationUS = 2_000_000
+	asset.FrameCount = 48
+	asset.ExtradataSHA256 = contract.CanonicalVideoExtradataSHA256
+	plan.VideoTracks[0].Segments[0].SourceInUS = 1_000_000
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := executorTaskSpec(VideoAssembleSliceID, "job-drive-direct-window", canonical, plan)
+	exec := &videoAssembleSliceExecutor{runner: pipeline.NewRunner(nil, &sliceNativeRenderer{}, nil), prober: sliceMediaProbeStub{}, outputRoot: t.TempDir()}
+	if err := exec.Validate(spec); err != nil {
+		t.Fatalf("certified direct source window was rejected before the native keyframe check: %v", err)
+	}
+}
+
 func TestVideoAssembleSlice_RejectsLegacyStockWindowWithoutProbingOrCutting(t *testing.T) {
 	plan := driveSlicePlan()
 	plan.VideoTracks[0].Segments[0].FrameCount = 13

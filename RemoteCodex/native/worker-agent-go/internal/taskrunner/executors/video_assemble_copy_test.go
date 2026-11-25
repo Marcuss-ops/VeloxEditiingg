@@ -144,6 +144,23 @@ func TestValidateCopyOnlyPlan_AllowsSamePreparedAssetAtMultiplePlacements(t *tes
 	}
 }
 
+func TestValidateCopyOnlyPlan_AllowsCertifiedSourceWindow(t *testing.T) {
+	videoSHA, audioSHA := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	plan := copyOnlyPlan(videoSHA, audioSHA, 100, 100)
+	asset := &plan.Assets[0]
+	asset.Kind = "video"
+	asset.DurationUS = 2_000_000
+	asset.FrameCount = 48
+	asset.TimelineRevision = 0
+	asset.TimelineSHA256 = ""
+	asset.TimelineStartFrame = 0
+	asset.ExtradataSHA256 = contract.CanonicalVideoExtradataSHA256
+	plan.VideoTracks[0].Segments[0].SourceInUS = 1_000_000
+	if err := validateCopyOnlyPlan(plan); err != nil {
+		t.Fatalf("validateCopyOnlyPlan rejected a fully certified direct source window: %v", err)
+	}
+}
+
 func TestVideoAssembleCopy_EmitsReusableChunkManifestWhenEnabled(t *testing.T) {
 	video := []byte("prepared-video")
 	audio := []byte("final-audio")
