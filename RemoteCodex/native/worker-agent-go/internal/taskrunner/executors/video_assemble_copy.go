@@ -71,26 +71,28 @@ func (e *videoAssembleCopyExecutor) Descriptor() executor.Descriptor {
 }
 
 func (e *videoAssembleCopyExecutor) Validate(spec executor.TaskSpec) error {
+	_, err := e.validatedPlan(spec)
+	return err
+}
+
+func (e *videoAssembleCopyExecutor) validatedPlan(spec executor.TaskSpec) (*contract.CompiledRenderPlanV2, error) {
 	if spec.ExecutorID != VideoAssembleCopyID {
-		return fmt.Errorf("video.assemble.copy.v1: executor_id must be %q, got %q", VideoAssembleCopyID, spec.ExecutorID)
+		return nil, fmt.Errorf("video.assemble.copy.v1: executor_id must be %q, got %q", VideoAssembleCopyID, spec.ExecutorID)
 	}
 	if e == nil || e.runner == nil {
-		return fmt.Errorf("video.assemble.copy.v1: native V2 renderer is not configured")
+		return nil, fmt.Errorf("video.assemble.copy.v1: native V2 renderer is not configured")
 	}
 	if spec.Payload == nil {
-		return errors.New("video.assemble.copy.v1: payload is required")
-	}
-	if _, err := contract.DecodeCompiledRenderPlanV2Payload(spec.Payload); err != nil {
-		return fmt.Errorf("video.assemble.copy.v1: invalid CompiledRenderPlanV2: %w", err)
+		return nil, errors.New("video.assemble.copy.v1: payload is required")
 	}
 	plan, err := decodeCompiledPlanV2(spec)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateCopyOnlyPlan(plan); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return plan, nil
 }
 
 func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
@@ -98,10 +100,7 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	fail := func(code string, err error) (executor.ExecutionResult, error) {
 		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: err.Error(), StartedAt: started, CompletedAt: time.Now().UTC()}, nil
 	}
-	if err := e.Validate(spec); err != nil {
-		return fail("COPY_ONLY_PLAN_INVALID", err)
-	}
-	plan, err := decodeCompiledPlanV2(spec)
+	plan, err := e.validatedPlan(spec)
 	if err != nil {
 		return fail("COPY_ONLY_PLAN_INVALID", err)
 	}
@@ -112,7 +111,7 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	if err := validateBindings(plan, bindings); err != nil {
 		return fail("PREPARED_ASSET_INTEGRITY_FAILED", err)
 	}
-	if err := validatePreparedAssetBindings(plan, bindings); err != nil {
+	if err := validateBoundAssetPaths(plan, bindings); err != nil {
 		return fail("PREPARED_ASSET_CERTIFICATION_FAILED", err)
 	}
 
@@ -427,10 +426,7 @@ func validateCopyOnlySegment(plan *contract.CompiledRenderPlanV2, profile contra
 	return nil
 }
 
-func validatePreparedAssetBindings(plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) error {
-	if err := validateCopyOnlyPlan(plan); err != nil {
-		return err
-	}
+func validateBoundAssetPaths(plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) error {
 	for _, segment := range plan.VideoTracks[0].Segments {
 		binding := bindings[segment.AssetID]
 		if strings.TrimSpace(binding.Path) == "" {
