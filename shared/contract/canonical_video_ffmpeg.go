@@ -73,9 +73,8 @@ func CanonicalVideoEncodeArgs(profile CanonicalVideoProfileV1, quality Preparati
 }
 
 // CanonicalVideoEncoderArgsDigest is the stable identity of the exact encoder
-// argument projection. It is folded into VideoWindowPreparationRevision so a
-// preset/refs/colour change invalidates every cached prepared fragment even
-// when the profile struct itself is unchanged.
+// argument projection for encode producers. Current packet-copy cache
+// revisions do not depend on encoder arguments.
 func CanonicalVideoEncoderArgsDigest(profile CanonicalVideoProfileV1, quality PreparationQualityPolicy) (string, error) {
 	if err := profile.Validate(); err != nil {
 		return "", err

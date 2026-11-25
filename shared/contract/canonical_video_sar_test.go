@@ -14,8 +14,8 @@ func TestCanonicalVideoGeometrySetsSquarePixelAspectRatio(t *testing.T) {
 		t.Fatalf("canonical geometry filter must set square pixels, got %q", filter)
 	}
 
-	// SAR is a container/display geometry correction, not an encoder argument
-	// or cache identity change. Keep the established bitstream identity intact.
+	// SAR is a container/display geometry correction. Keep the established
+	// canonical bitstream identity intact.
 	if CanonicalVideoExtradataSHA256 != "7201ce80a2b2b32a0c1a89501851099f267c1767d59ff799db744f72032aae5a" {
 		t.Fatalf("canonical avcC identity changed unexpectedly: %s", CanonicalVideoExtradataSHA256)
 	}
@@ -23,14 +23,11 @@ func TestCanonicalVideoGeometrySetsSquarePixelAspectRatio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Chroma-location pinning intentionally changed the encoder args digest,
-	// so the prepared-window revision moved with it. Keep this golden in sync
-	// whenever the canonical bitstream identity changes on purpose: a stale
-	// value would let previously cached fragments survive a stream-identity
-	// change.
-	const wantRevision = "video-window-preparer.v1:de7a067602786d3733b7241465c095a0cc14d6066c743dd9b7d0643b76be0bd7"
+	// The packet-copy contract revision binds the profile, canonical avcC
+	// identity and source acceptance rules, without encoder arguments.
+	const wantRevision = "video-window-preparer.v2:a5c2dc0848738afbe39d982d785e1f3172a1a393f322dc083ee3fe707c3916a0"
 	if revision != wantRevision {
-		t.Fatalf("prepared-window revision does not match the canonical encoder identity: got %q want %q", revision, wantRevision)
+		t.Fatalf("prepared-window revision does not match the packet-copy contract: got %q want prefix %q", revision, wantRevision)
 	}
 	if !strings.Contains(strings.Join(CanonicalVideoEncodeArgs(profile, CanonicalPreparationQualityPolicyDefault), " "), "-c:v libx264") {
 		t.Fatal("canonical encoder argument projection unexpectedly changed")

@@ -56,13 +56,18 @@ func TestVideoTrimmerPreparationRevisionTracksProfileAndQuality(t *testing.T) {
 	profile := videoContract.CanonicalVideoProfileV1Default
 	quality := videoContract.CanonicalPreparationQualityPolicyDefault
 	base := newVideoTrimmerForTest(&recordingVideoRunner{})
-	if got := base.PreparationRevision(); !strings.HasPrefix(got, "video-window-preparer.v1:") {
+	if got := base.PreparationRevision(); !strings.HasPrefix(got, "video-window-preparer.v2:") {
 		t.Fatalf("preparation revision = %q", got)
 	}
 	quality.VideoCRF = 24
 	changedQuality := newVideoTrimmer(&recordingVideoRunner{}, profile, quality)
-	if changedQuality.PreparationRevision() == base.PreparationRevision() {
-		t.Fatal("quality policy change did not invalidate preparation revision")
+	if changedQuality.PreparationRevision() != base.PreparationRevision() {
+		t.Fatal("encoder-only CRF change must not invalidate packet-copy preparation evidence")
+	}
+	quality.VideoMaxRate = "3M"
+	changedAcceptance := newVideoTrimmer(&recordingVideoRunner{}, profile, quality)
+	if changedAcceptance.PreparationRevision() == base.PreparationRevision() {
+		t.Fatal("source acceptance bitrate change did not invalidate preparation revision")
 	}
 	profile.GOPSize++
 	changedProfile := newVideoTrimmer(&recordingVideoRunner{}, profile, videoContract.CanonicalPreparationQualityPolicyDefault)

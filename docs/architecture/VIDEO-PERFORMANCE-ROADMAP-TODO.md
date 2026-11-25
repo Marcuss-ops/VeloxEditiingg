@@ -22,6 +22,13 @@ exact microsecond coordinates to avoid unsafe cache collisions. This makes old
 key-format entries miss and be rebuilt on demand; their stored blobs are not
 deleted by this change.
 
+New preparation requests now carry `video-window-preparer.v2`, whose revision
+binds the canonical profile, avcC identity and source-acceptance constraints,
+not encoder arguments. Workers accept syntactically valid v1 revisions only
+for persisted tasks; the v2 cache key and the revision value keep those results
+separate from new evidence. CRF-only changes no longer invalidate packet-copy
+preparation evidence.
+
 Targeted planner, contract, DataServer pipeline, task-contract and worker
 executor tests pass. Broader package runs still expose the documented local
 avcC mismatch (`667044…` vs pinned `7201ce…`) and a prepared-window

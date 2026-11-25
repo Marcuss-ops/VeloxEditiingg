@@ -60,19 +60,24 @@ func (c fixedWindowCertifier) Certify(_ context.Context, _ string, profile contr
 	}, nil
 }
 
-func TestVideoPrepareWindow_RejectsStaleProfileRevision(t *testing.T) {
+func TestVideoPrepareWindow_AcceptsPersistedV1AndRejectsInvalidRevision(t *testing.T) {
 	profile := contract.CanonicalVideoProfileV1Default
 	request := contract.VideoPrepareWindowV1{
 		Version:          contract.VideoPrepareWindowVersion,
 		Source:           contract.AssetRefV2{AssetID: "source", SHA256: strings.Repeat("a", 64), SizeBytes: 20, Kind: "video"},
 		SourceStartFrame: 0, SourceFrameCount: 24, SourceFPSNum: 24, SourceFPSDen: 1,
 		OutputFrameCount: 24, TimelineRevision: 1, TimelineSHA256: strings.Repeat("b", 64),
-		OutputProfileID: profile.ProfileID, OutputProfileRevision: "old-encoder-revision",
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: "video-window-preparer.v1:" + strings.Repeat("a", 64),
 	}
 	exec := &videoPrepareWindowExecutor{runner: &recordingWindowRunner{}, certifier: fixedWindowCertifier{frames: 24}, profile: profile, quality: contract.CanonicalPreparationQualityPolicyDefault}
 	spec := executor.TaskSpec{ExecutorID: VideoPrepareWindowID, Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
+	if err := exec.Validate(spec); err != nil {
+		t.Fatalf("persisted v1 task was rejected during the revision migration: %v", err)
+	}
+	request.OutputProfileRevision = "old-encoder-revision"
+	spec.Payload[contract.VideoPrepareWindowPayloadKey] = request
 	if err := exec.Validate(spec); err == nil {
-		t.Fatal("stale encoder/profile revision accepted")
+		t.Fatal("malformed legacy revision accepted")
 	}
 }
 

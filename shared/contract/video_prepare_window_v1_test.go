@@ -26,11 +26,53 @@ func TestVideoPrepareWindowV1ValidatesCanonicalSourceAndWindow(t *testing.T) {
 	if err := request.Validate(); err != nil {
 		t.Fatalf("revision is an opaque identity at the wire-contract layer: %v", err)
 	}
+	request.OutputProfileRevision = "video-window-preparer.v2:" + strings.Repeat("f", 64)
+	if err := request.Validate(); err != nil {
+		t.Fatalf("v2 revision is invalid at the wire-contract layer: %v", err)
+	}
 	request.SourceStartFrame, request.SourceFrameCount = 0, 0
 	request.SourceFPSNum, request.SourceFPSDen = 0, 0
 	request.SourceStartUS, request.SourceDurationUS = 1_250_000, 2_500_000
 	if err := request.Validate(); err != nil {
 		t.Fatalf("valid source timestamp interval rejected: %v", err)
+	}
+}
+
+func TestVideoWindowPreparationRevisionUsesPacketCopyContractAndSupportsPersistedV1(t *testing.T) {
+	profile := CanonicalVideoProfileV1Default
+	quality := CanonicalPreparationQualityPolicyDefault
+	current, err := VideoWindowPreparationRevision(profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "video-window-preparer.v1:" + strings.Repeat("a", 64)
+	if !strings.HasPrefix(current, "video-window-preparer.v2:") || current == legacy {
+		t.Fatalf("current revision = %q, legacy revision = %q", current, legacy)
+	}
+	if !SupportsVideoWindowPreparationRevision(profile, quality, current) || !SupportsVideoWindowPreparationRevision(profile, quality, legacy) {
+		t.Fatal("current or syntactically valid persisted v1 revision was rejected")
+	}
+	if SupportsVideoWindowPreparationRevision(profile, quality, "video-window-preparer.v1:not-a-sha") ||
+		SupportsVideoWindowPreparationRevision(profile, quality, "video-window-preparer.v3:"+strings.Repeat("f", 64)) {
+		t.Fatal("malformed or unsupported preparation revision was accepted")
+	}
+	encoderOnly := quality
+	encoderOnly.VideoCRF++
+	changedEncoder, err := VideoWindowPreparationRevision(profile, encoderOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedEncoder != current {
+		t.Fatal("encoder-only quality setting changed packet-copy preparation revision")
+	}
+	changedAcceptance := quality
+	changedAcceptance.VideoMaxRate = "3M"
+	changedRevision, err := VideoWindowPreparationRevision(profile, changedAcceptance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedRevision == current {
+		t.Fatal("source-acceptance policy change did not change preparation revision")
 	}
 }
 

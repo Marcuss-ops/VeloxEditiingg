@@ -227,8 +227,7 @@ func (e *videoPrepareWindowExecutor) request(spec executor.TaskSpec) (contract.V
 	if request.OutputProfileID != e.profile.ProfileID {
 		return contract.VideoPrepareWindowV1{}, fmt.Errorf("video.prepare.window.v1: profile %q is not enabled on this worker", request.OutputProfileID)
 	}
-	wantRevision, err := contract.VideoWindowPreparationRevision(e.profile, e.quality)
-	if err != nil || request.OutputProfileRevision != wantRevision {
+	if !contract.SupportsVideoWindowPreparationRevision(e.profile, e.quality, request.OutputProfileRevision) {
 		return contract.VideoPrepareWindowV1{}, fmt.Errorf("video.prepare.window.v1: preparation revision mismatch")
 	}
 	return request, nil

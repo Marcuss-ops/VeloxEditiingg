@@ -19,6 +19,11 @@ const (
 	VideoPrepareWindowRetryableErrorCode = "WINDOW_TRANSIENT_FAILURE"
 )
 
+const (
+	videoWindowPreparerRevisionV1 = "video-window-preparer.v1:"
+	videoWindowPreparerRevisionV2 = "video-window-preparer.v2:"
+)
+
 // VideoPrepareWindowV1 is the immutable input contract for worker-side
 // canonical window preparation. Source remains a path-free asset reference;
 // frame coordinates are source-frame indices, while OutputFrameCount is the
@@ -164,10 +169,11 @@ func (r VideoPrepareWindowV1) Validate() error {
 	if r.TimelineRevision <= 0 || r.TimelineStartFrame < 0 || !isLowerSHA256(r.TimelineSHA256) {
 		return fmt.Errorf("video.prepare.window.v1: valid timeline identity and frame placement are required")
 	}
-	if strings.TrimSpace(r.OutputProfileID) == "" || !strings.HasPrefix(r.OutputProfileRevision, "video-window-preparer.v1:") {
+	if strings.TrimSpace(r.OutputProfileID) == "" ||
+		(!strings.HasPrefix(r.OutputProfileRevision, videoWindowPreparerRevisionV1) && !strings.HasPrefix(r.OutputProfileRevision, videoWindowPreparerRevisionV2)) {
 		return fmt.Errorf("video.prepare.window.v1: output profile identity and revision are required")
 	}
-	revisionSHA := strings.TrimPrefix(r.OutputProfileRevision, "video-window-preparer.v1:")
+	revisionSHA := strings.TrimPrefix(strings.TrimPrefix(r.OutputProfileRevision, videoWindowPreparerRevisionV1), videoWindowPreparerRevisionV2)
 	if !isLowerSHA256(revisionSHA) {
 		return fmt.Errorf("video.prepare.window.v1: output profile revision must include a lowercase SHA-256")
 	}
@@ -333,8 +339,9 @@ func roundPositiveRatio(numerator, denominator *big.Int) (int64, error) {
 	return rounded.Int64(), nil
 }
 
-// VideoWindowPreparationRevision binds cached fragments to the algorithm,
-// canonical bitstream identity and quality settings used to create them.
+// VideoWindowPreparationRevision binds new cache evidence to packet-copy
+// preparation and only to settings that affect source acceptance. Encoder
+// arguments no longer participate because this path never encodes.
 func VideoWindowPreparationRevision(profile CanonicalVideoProfileV1, quality PreparationQualityPolicy) (string, error) {
 	if err := profile.Validate(); err != nil {
 		return "", err
@@ -342,20 +349,49 @@ func VideoWindowPreparationRevision(profile CanonicalVideoProfileV1, quality Pre
 	if err := quality.Validate(); err != nil {
 		return "", err
 	}
-	encoderArgsDigest, err := CanonicalVideoEncoderArgsDigest(profile, quality)
-	if err != nil {
-		return "", err
-	}
 	identity := struct {
-		Algorithm         string                   `json:"algorithm"`
-		Profile           CanonicalVideoProfileV1  `json:"profile"`
-		Quality           PreparationQualityPolicy `json:"quality"`
-		EncoderArgsSHA256 string                   `json:"encoder_args_sha256"`
-	}{Algorithm: "video-window-preparer.v1", Profile: profile, Quality: quality, EncoderArgsSHA256: encoderArgsDigest}
+		Algorithm       string                  `json:"algorithm"`
+		Profile         CanonicalVideoProfileV1 `json:"profile"`
+		ExtradataSHA256 string                  `json:"canonical_extradata_sha256"`
+		Acceptance      struct {
+			VideoMaxRate    string `json:"video_max_rate"`
+			AudioCodec      string `json:"audio_codec"`
+			AudioSampleRate int    `json:"audio_sample_rate"`
+			AudioChannels   int    `json:"audio_channels"`
+		} `json:"source_acceptance"`
+	}{
+		Algorithm: "video-window-preparer.v2.packet-copy", Profile: profile,
+		ExtradataSHA256: CanonicalVideoExtradataSHA256,
+		Acceptance: struct {
+			VideoMaxRate    string `json:"video_max_rate"`
+			AudioCodec      string `json:"audio_codec"`
+			AudioSampleRate int    `json:"audio_sample_rate"`
+			AudioChannels   int    `json:"audio_channels"`
+		}{quality.VideoMaxRate, quality.AudioCodec, quality.AudioSampleRate, quality.AudioChannels},
+	}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(data)
-	return "video-window-preparer.v1:" + hex.EncodeToString(sum[:]), nil
+	return videoWindowPreparerRevisionV2 + hex.EncodeToString(sum[:]), nil
+}
+
+// SupportsVideoWindowPreparationRevision accepts the exact current revision
+// and syntactically valid v1 revisions for already-persisted tasks. Legacy v1
+// results remain isolated from v2 cache evidence by the revision and cache-key
+// version, while newly planned tasks always carry v2.
+func SupportsVideoWindowPreparationRevision(profile CanonicalVideoProfileV1, quality PreparationQualityPolicy, revision string) bool {
+	current, err := VideoWindowPreparationRevision(profile, quality)
+	if err != nil {
+		return false
+	}
+	if revision == current {
+		return true
+	}
+	if !strings.HasPrefix(revision, videoWindowPreparerRevisionV1) {
+		return false
+	}
+	legacySHA := strings.TrimPrefix(revision, videoWindowPreparerRevisionV1)
+	return len(legacySHA) == sha256.Size*2 && isLowerSHA256(legacySHA)
 }
