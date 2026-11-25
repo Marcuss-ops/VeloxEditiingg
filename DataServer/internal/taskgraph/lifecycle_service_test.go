@@ -626,14 +626,14 @@ func (s *stalePrepareRepo) FailStaleRuntimePrepare(_ context.Context, taskID, re
 	return true, nil
 }
 
-func TestFailStaleRuntimeAssetPrepareUsesFifteenMinuteBound(t *testing.T) {
+func TestFailStaleRuntimeAssetPrepareUsesFortyFiveMinuteBound(t *testing.T) {
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
-	if DefaultRuntimeAssetsPrepareTTL != 15*time.Minute {
-		t.Fatalf("prepare TTL=%s, want 15m", DefaultRuntimeAssetsPrepareTTL)
+	if DefaultRuntimeAssetsPrepareTTL != 45*time.Minute {
+		t.Fatalf("prepare TTL=%s, want 45m", DefaultRuntimeAssetsPrepareTTL)
 	}
 	repo := &stalePrepareRepo{stubRepo: &stubRepo{}, tasks: []Task{
-		{ID: "task-expired", JobID: "job-expired", Status: StatusReady, CreatedAt: now.Add(-16 * time.Minute)},
-		{ID: "task-fresh", JobID: "job-fresh", Status: StatusPending, CreatedAt: now.Add(-14 * time.Minute)},
+		{ID: "task-expired", JobID: "job-expired", Status: StatusReady, CreatedAt: now.Add(-46 * time.Minute)},
+		{ID: "task-fresh", JobID: "job-fresh", Status: StatusPending, CreatedAt: now.Add(-44 * time.Minute)},
 	}, payloads: map[string]map[string]interface{}{
 		"task-expired": {"runtime_assets_pending": true},
 		"task-fresh":   {"runtime_assets_pending": true},

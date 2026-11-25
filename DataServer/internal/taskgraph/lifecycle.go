@@ -57,10 +57,10 @@ type staleRuntimePrepareFailer interface {
 }
 
 // DefaultRuntimeAssetsPrepareTTL bounds a Master PREPARE that never receives
-// FINALIZE. PREPARE is sent only after the producer has built its media plan;
-// a 15-minute budget covers transient handoff outages while preventing an
-// abandoned PENDING render from occupying the queue for a day.
-const DefaultRuntimeAssetsPrepareTTL = 15 * time.Minute
+// FINALIZE. A worker-preparation DAG can contain many certified stock windows;
+// allow that DAG to finish on a single healthy worker while still reclaiming
+// abandoned PENDING renders within a bounded interval.
+const DefaultRuntimeAssetsPrepareTTL = 45 * time.Minute
 
 // NewLifecycleService constructs the transactional LifecycleService.
 func NewLifecycleService(repo Repository) (*LifecycleService, error) {
