@@ -94,7 +94,7 @@ func (s *SQLiteStore) IngestAssetDownloadProgress(ctx context.Context, p AssetDo
 			updated_at, completed_at, task_id, scene_ids_json, mime_type,
 			sha256, error_code, error_detail, checkpoint_sequence, transfer_generation, received_at,
 			http_status, hash_verified, download_work_ms, hash_verify_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(worker_id, asset_key) DO UPDATE SET
 			transfer_id=excluded.transfer_id, asset_id=excluded.asset_id,
 			role=excluded.role, state=excluded.state,
