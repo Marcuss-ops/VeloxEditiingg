@@ -40,7 +40,7 @@ func readSiblingContractFile(t *testing.T, relative string) string {
 // packaging contract must be made in all three (or fail here) so no producer
 // can certify bytes the assembler will reject.
 func TestCanonicalVideoStreamSignatureMirrorsProducerAndTransport(t *testing.T) {
-	pipeline := readSiblingContractFile(t, "refactored/internal/kernel/media/assembly_contract.go")
+	pipeline := readSiblingContractFile(t, filepath.Join("refactored", "internal/kernel/media/assembly_contract.go"))
 	rendering := readSiblingContractFile(t, "RenderingGen/renderinggen/internal/media/profile.go")
 
 	hash := regexp.MustCompile(`CanonicalVideoExtradataSHA256\s*=\s*"([0-9a-f]{64})"`).FindStringSubmatch(pipeline)
