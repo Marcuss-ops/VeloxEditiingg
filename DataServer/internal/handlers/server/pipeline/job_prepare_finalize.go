@@ -247,7 +247,7 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_runtime_assets", "message": bindingErr.Error()})
 			return
 		}
-		if compiledPlanHasDriveStock(planJSON, bindings) {
+		if requiresAsyncStockPreparation(planJSON, bindings) {
 			if h.assetService == nil || h.enqueuer == nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "stock_preparation_unavailable", "message": "Master stock window preparation is not configured"})
 				return

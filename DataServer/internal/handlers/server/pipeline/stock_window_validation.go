@@ -15,6 +15,10 @@ func compiledPlanHasDriveStock(planJSON string, runtimeAssets ...[]map[string]in
 	return voiceoverassets.PlanHasDriveStock(planJSON, bindings)
 }
 
+func requiresAsyncStockPreparation(planJSON string, runtimeAssets []map[string]interface{}) bool {
+	return compiledPlanHasDriveStock(planJSON, runtimeAssets) || compiledPlanHasStockPool(planJSON)
+}
+
 func compiledPlanHasStockPool(planJSON string) bool {
 	var plan struct {
 		StockPool *struct{} `json:"stock_pool"`

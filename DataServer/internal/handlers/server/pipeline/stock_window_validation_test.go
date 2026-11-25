@@ -57,3 +57,9 @@ func TestCompiledPlanHasDriveStockRequiresTimelineReference(t *testing.T) {
 		t.Fatal("unused Drive asset incorrectly triggered stock preparation")
 	}
 }
+
+func TestStockPoolRequiresAsyncStockPreparationWithoutExpandedBindings(t *testing.T) {
+	if !requiresAsyncStockPreparation(`{"stock_pool":{}}`, nil) {
+		t.Fatal("unexpanded stock pool must route through async finalization")
+	}
+}
