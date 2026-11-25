@@ -1,5 +1,18 @@
 ## [Unreleased] - 2026-11-08
 
+### Removed — unused Master-side video materialization
+
+- Removed the unreferenced Master source rewrite/trim implementation and its
+  legacy packet-copy planning helpers. Worker preparation is the sole
+  cold-window materializer; Master registration retains an independent media
+  probe for worker-produced fragments.
+- Removed the Master persisted keyframe probe index and its metrics. The Master
+  registration probe does not have a stable source SHA/size key, so that index
+  could not provide reusable source evidence. Worker certification remains
+  content-addressed.
+- Local full-module DataServer verification is required before this removal is
+  pushed. Production timing measurements remain operator-led after deployment.
+
 ### Fixed — remote stock-window capability and fractional-frame validation
 
 - Worker hello and heartbeats now advertise `stock_window_preparation` only

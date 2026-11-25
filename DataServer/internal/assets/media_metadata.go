@@ -94,7 +94,7 @@ func (r *MediaMetadataRecord) ToDomain() *MediaMetadata {
 }
 
 // mediaProbeRunner is the exec seam for MediaMetadataResolver. Production
-// uses execVideoCommandRunner (video_trimmer.go); tests inject a fake.
+// uses execVideoCommandRunner (video_probe.go); tests inject a fake.
 type mediaProbeRunner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }

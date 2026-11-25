@@ -29,7 +29,7 @@ func TestPlanDriveStockWindowTasksDeduplicatesImmutableWindowsWithoutDownloading
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &AssetService{videoTrimmer: NewVideoTrimmer()}
+	service := &AssetService{videoWindowVerifier: newVideoWindowVerifier()}
 	tasks, err := service.PlanDriveStockWindowTasks(string(planJSON), []map[string]interface{}{{
 		"asset_id": "drive-source", "drive_file_id": "drive-file-1", "source_uri": "https://objects.example/drive-file-1.mp4",
 		"sha256": sha, "size_bytes": int64(1_000_000),

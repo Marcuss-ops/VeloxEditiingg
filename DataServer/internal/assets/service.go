@@ -80,7 +80,7 @@ type AssetService struct {
 	blobStore            BlobStore
 	registry             *ResolverRegistry
 	clock                clock.Clock
-	videoTrimmer         *VideoTrimmer
+	videoWindowVerifier  *videoWindowVerifier
 	security             *inputsecurity.Fetcher
 	mediaMetadata        *MediaMetadataResolver
 	mediaMetadataMetrics *MediaMetadataMetrics
@@ -118,7 +118,7 @@ func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *Resolv
 		blobStore:            blobStore,
 		registry:             registry,
 		clock:                c,
-		videoTrimmer:         NewVideoTrimmer(),
+		videoWindowVerifier:  newVideoWindowVerifier(),
 		security:             inputsecurity.NewFetcher(policy),
 		mediaMetadata:        NewMediaMetadataResolver(),
 		mediaMetadataMetrics: NewMediaMetadataMetrics(),
@@ -133,15 +133,6 @@ func (s *AssetService) MediaMetadataMetrics() *MediaMetadataMetrics {
 		return nil
 	}
 	return s.mediaMetadataMetrics
-}
-
-// KeyframeIndexMetrics exposes bounded persisted-probe hit/miss counters for
-// the metrics composition root. It carries no source SHA-256, path or asset ID.
-func (s *AssetService) KeyframeIndexMetrics() *KeyframeIndexMetrics {
-	if s == nil || s.videoTrimmer == nil {
-		return nil
-	}
-	return s.videoTrimmer.KeyframeIndexMetrics()
 }
 
 // SecurityMetrics exposes bounded input rejection counters for the metrics

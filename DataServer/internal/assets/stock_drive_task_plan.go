@@ -34,7 +34,7 @@ func sourceWindowReadyForPacketCopy(plan *contract.CompiledRenderPlanV2, segment
 // Master. It requires an immutable source SHA and size; callers must reject
 // or explicitly route unknown identities through a separate identity stage.
 func (s *AssetService) PlanDriveStockWindowTasks(planJSON string, runtimeAssets []map[string]interface{}) ([]contract.VideoPrepareWindowTaskV1, error) {
-	if s == nil || s.videoTrimmer == nil {
+	if s == nil || s.videoWindowVerifier == nil {
 		return nil, fmt.Errorf("worker stock-window planning is unavailable")
 	}
 	var plan contract.CompiledRenderPlanV2
@@ -44,8 +44,8 @@ func (s *AssetService) PlanDriveStockWindowTasks(planJSON string, runtimeAssets 
 	if len(plan.VideoTracks) == 0 || len(plan.Assets) == 0 {
 		return nil, nil
 	}
-	profile := s.videoTrimmer.Profile()
-	revision := s.videoTrimmer.PreparationRevision()
+	profile := s.videoWindowVerifier.profile
+	revision := s.videoWindowVerifier.preparationRevision()
 	bindings := stockRuntimeBindings(runtimeAssets)
 	assetsByID := make(map[string]contract.AssetRefV2, len(plan.Assets))
 	for _, asset := range plan.Assets {

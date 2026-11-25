@@ -2,6 +2,22 @@
 
 Status updated: 2026-11-25
 
+## 2026-11-25 — remove the unused Master trimmer and duplicate probe index
+
+The last production code for Master-side source-window rewriting and trimming
+had no callers: FINALIZE schedules worker preparation, and the assembly path
+consumes registered prepared assets. Removed that dead materializer, its trim
+planning and normalization helpers, and the Master persistent keyframe index
+(which was not reusable because the Master probe had no immutable source SHA
+or size). The Master keeps only the independent ffprobe validation needed when
+registering worker-produced windows. Worker source certification and its
+content-addressed cache remain the active preparation authority.
+
+One-worker topology is the deployment target. Multi-worker test and rollout
+requirements are out of scope. Local verification is the completion gate for
+this source change; production latency and cold/warm render measurements are
+left to the operator after deployment, not a blocker for implementation.
+
 ## 2026-11-25 — direct certified source windows and single new-job route
 
 In the current working tree, the stock-window planner now skips
@@ -78,10 +94,11 @@ schema and preparation revision, so old entries miss rather than being treated
 as current evidence. Persisted v1 tasks remain executable for compatibility,
 but their evidence is revision-separated; a shared-contract regression pins
 that separation. Legacy blobs are retained and are not deleted by this change.
-Still open: measure the direct source mux path on representative production
-sources and collect cold/warm production measurements after rollout. The local
-DataServer, worker, and C++ verification gates pass; this workspace change does
-not deploy to another computer.
+The direct source mux path is ready for operator-led production measurement
+after deployment. Local DataServer, worker, shared-contract, and C++ gates are
+the completion criteria for this implementation; production timing collection
+is operational follow-up and this source change does not deploy to another
+computer.
 
 This checklist tracks the P0–P3 work needed to keep video bytes off the
 control plane, reuse certified work across retries, and publish one clean
