@@ -213,6 +213,36 @@ func TestDiagnoseSourceWindowCopyIgnoresAverageBitrateForCanonicalPacketCopy(t *
 	}
 }
 
+func TestDiagnoseSourceWindowCopyUsesNonZeroPresentationOrigin(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	const extradata = "7201ce80a2b2b32a0c1a89501851099f267c1767d59ff799db744f72032aae5a"
+	request := contract.VideoPrepareWindowV1{SourceStartUS: 0, SourceDurationUS: 4_958_333, OutputFrameCount: 119}
+	source := windowSourceProbe{
+		CodecName: profile.Codec, Profile: strings.ToLower(profile.CodecProfile),
+		Level: canonicalLevelNumber(profile.CodecLevel), Width: profile.Width, Height: profile.Height,
+		PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen,
+		TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+		BFrames: 0, StartTimeSec: 0.021, ExtradataSHA: extradata,
+		KeyframeTimes: []float64{0.021, 2.021, 4.021},
+	}
+	got := diagnoseSourceWindowCopy(source, request, profile, quality, extradata)
+	if !got.Eligible {
+		t.Fatalf("canonical window with a non-zero PTS origin was rejected: %v", got.Reasons)
+	}
+
+	args := canonicalWindowStreamCopyArgs(profile, "source.mp4", "window.mp4", request, source.StartTimeSec)
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-ss" {
+			if args[i+1] != "0.021000" {
+				t.Fatalf("seek = %q, want source presentation origin 0.021000s", args[i+1])
+			}
+			return
+		}
+	}
+	t.Fatal("packet-copy arguments are missing -ss")
+}
+
 func testSHA256(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

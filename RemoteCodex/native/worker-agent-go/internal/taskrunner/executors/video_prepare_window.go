@@ -363,7 +363,7 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 			var copyErr error
 			copyResult, copyErr = e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{
 				Operation: ffmpegrunner.OperationPacketCopy,
-				Args:      canonicalWindowStreamCopyArgs(e.profile, source.Path, tmpPath, resolvedRequest),
+				Args:      canonicalWindowStreamCopyArgs(e.profile, source.Path, tmpPath, resolvedRequest, sourceProbe.StartTimeSec),
 			})
 			if copyErr != nil {
 				copyFallback = []string{"packet_copy_failed"}

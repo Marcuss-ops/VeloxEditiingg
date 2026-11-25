@@ -211,8 +211,8 @@ func diagnoseSourceWindowCopy(source windowSourceProbe, request contract.VideoPr
 	// exceed that value even though the bytes are unchanged and the stream
 	// signature is canonical. Applying the encode-time ceiling here rejects
 	// valid immutable media and cannot improve packet-copy safety.
-	startSeconds, _, ok := requestedWindowSeconds(request)
-	if !ok || absFloat(source.StartTimeSec) > 1e-6 || request.OutputFrameCount <= 0 {
+	startSeconds, _, ok := sourceWindowStartSeconds(source.StartTimeSec, request)
+	if !ok || request.OutputFrameCount <= 0 {
 		reasons = append(reasons, "invalid_window_or_source_start_time")
 	}
 	if ok {
@@ -231,7 +231,7 @@ func diagnoseSourceWindowCopy(source windowSourceProbe, request contract.VideoPr
 	}
 	keyframeFound := false
 	for _, keyframeTime := range source.KeyframeTimes {
-		if absFloat(keyframeTime-startSeconds) <= 1e-6 {
+		if ok && absFloat(keyframeTime-startSeconds) <= 1e-6 {
 			// The end may be any frame: with B-frames disabled no packet in
 			// the copied window references a frame after its final packet.
 			keyframeFound = true
@@ -284,8 +284,25 @@ func requestedWindowSeconds(request contract.VideoPrepareWindowV1) (float64, flo
 	return float64(request.SourceStartFrame) / fps, float64(request.SourceFrameCount) / fps, true
 }
 
-func canonicalWindowStreamCopyArgs(profile contract.CanonicalVideoProfileV1, inputPath, outputPath string, request contract.VideoPrepareWindowV1) []string {
-	startSeconds, _, _ := requestedWindowSeconds(request)
+// sourceWindowStartSeconds converts the window's source-relative offset to the
+// absolute presentation timestamp ffmpeg must seek. Some valid H.264 MP4s
+// begin at a small positive PTS (for example 21 ms); that timestamp is the
+// source origin, not a leading gap that should make a first-frame window
+// incompatible with packet copy.
+func sourceWindowStartSeconds(sourceStartTimeSec float64, request contract.VideoPrepareWindowV1) (float64, float64, bool) {
+	startSeconds, durationSeconds, ok := requestedWindowSeconds(request)
+	if !ok || math.IsNaN(sourceStartTimeSec) || math.IsInf(sourceStartTimeSec, 0) || sourceStartTimeSec < 0 {
+		return 0, 0, false
+	}
+	absoluteStart := sourceStartTimeSec + startSeconds
+	if math.IsNaN(absoluteStart) || math.IsInf(absoluteStart, 0) {
+		return 0, 0, false
+	}
+	return absoluteStart, durationSeconds, true
+}
+
+func canonicalWindowStreamCopyArgs(profile contract.CanonicalVideoProfileV1, inputPath, outputPath string, request contract.VideoPrepareWindowV1, sourceStartTimeSec float64) []string {
+	startSeconds, _, _ := sourceWindowStartSeconds(sourceStartTimeSec, request)
 	return []string{
 		"-hide_banner", "-loglevel", "error", "-y", "-ss", strconv.FormatFloat(startSeconds, 'f', 6, 64), "-i", inputPath,
 		"-map", "0:v:0", "-an", "-sn", "-dn", "-c:v", "copy", "-frames:v", strconv.FormatInt(request.OutputFrameCount, 10),
