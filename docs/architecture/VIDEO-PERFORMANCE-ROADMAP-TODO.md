@@ -329,7 +329,7 @@ benchmark evidence and digest promotion — remain open below.
   successful prepared-window results persist through TaskGraph task attempts,
   and FINALIZE reuses matching certified fragments from the Master cache. The
   remaining check is production multi-worker measurement, tracked below.
-- [~] Build the internal prepared-window exchange outside final artifact
+- [x] Build the internal prepared-window exchange outside final artifact
   publication. The Master now has worker-authenticated GET/PUT endpoints keyed
   by the shared content identity; PUT validates the request/certificate,
   recomputes the output hash, independently probes the canonical stream and
@@ -339,10 +339,12 @@ benchmark evidence and digest promotion — remain open below.
   Master and worker tests pass. Successful task-attempt segment evidence is
   now readable from SQLite, including persisted `registered_asset_id`; a
   new query selects only the latest successful attempt for a prepared-window
-  task and excludes other executors. Remaining: wire this evidence into the
-  FINALIZE coordinator, rewrite the assembly plan only after every preparation
-  dependency succeeds, and verify the complete DAG on multiple workers. Do not
-  model intermediate windows as `final_video` artifacts.
+  task and excludes other executors. FINALIZE consumes that evidence, requires
+  a registered asset for each successful preparation, and rewrites the
+  immutable assembly plan only after every dependency and cache binding is
+  validated. A regression test covers recovery after the worker result has
+  been persisted. Remaining: collect production multi-worker measurements.
+  Do not model intermediate windows as `final_video` artifacts.
 
 ## P2 — transfer and publication overlap
 
