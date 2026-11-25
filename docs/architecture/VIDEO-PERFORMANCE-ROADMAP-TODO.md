@@ -30,11 +30,13 @@ separate from new evidence. CRF-only changes no longer invalidate packet-copy
 preparation evidence.
 
 Targeted planner, contract, DataServer pipeline, task-contract and worker
-executor tests pass. Broader package runs still expose the documented local
-avcC mismatch (`667044…` vs pinned `7201ce…`) and a prepared-window
-registration fixture that rejects the local FFprobe profile. These failures
-must be resolved or classified before the full verification gate can be
-reported green. This working-tree change has not been deployed.
+executor tests pass, including a direct-source execution test that verifies
+the worker sends the non-zero source offset to the native mux. Broader package
+runs still expose the documented local avcC mismatch (`667044…` vs pinned
+`7201ce…`) and a prepared-window registration fixture that rejects the local
+FFprobe profile. These failures must be resolved or classified before the full
+verification gate can be reported green. This working-tree change has not
+been deployed.
 
 ## 2026-11-25 — zero-reencode assembly correction
 

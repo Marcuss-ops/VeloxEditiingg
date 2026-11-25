@@ -128,6 +128,58 @@ func TestVideoAssembleCopy_UsesNativeV2WithoutFFmpegFallback(t *testing.T) {
 	}
 }
 
+func TestVideoAssembleCopy_MuxesCertifiedSourceWindowWithoutPreparedFragment(t *testing.T) {
+	source := []byte("canonical-source-bytes")
+	audio := []byte("final-audio")
+	sourceSHA, audioSHA := copyOnlySHA(source), copyOnlySHA(audio)
+	plan := copyOnlyPlan(sourceSHA, audioSHA, int64(len(source)), int64(len(audio)))
+	asset := &plan.Assets[0]
+	asset.Kind = "video"
+	asset.DurationUS = 2_000_000
+	asset.FrameCount = 48
+	asset.TimelineRevision = 0
+	asset.TimelineSHA256 = ""
+	asset.TimelineStartFrame = 0
+	asset.ExtradataSHA256 = contract.CanonicalVideoExtradataSHA256
+	plan.VideoTracks[0].Segments[0].SourceInUS = 1_000_000
+
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath, audioPath := filepath.Join(t.TempDir(), "source.mp4"), filepath.Join(t.TempDir(), "audio.m4a")
+	if err := os.WriteFile(sourcePath, source, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audioPath, audio, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	client := &copyOnlyRenderClient{}
+	exec := NewVideoAssembleCopy(pipeline.NewRunner(nil, client, logger.New(logger.WarnLevel, os.Stderr)), t.TempDir())
+	spec := executorTaskSpec(VideoAssembleCopyID, "job-direct-window", canonical, plan)
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"video": {AssetID: "video", Path: sourcePath, SHA256: sourceSHA, Size: int64(len(source))},
+		"audio": {AssetID: "audio", Path: audioPath, SHA256: audioSHA, Size: int64(len(audio))},
+	}), nil, spec)
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("direct source-window assembly = %+v, %v", result, err)
+	}
+	var sent contract.CompiledRenderPlanV2
+	if err := json.Unmarshal(client.planJSON, &sent); err != nil {
+		t.Fatalf("decode native packet-mux plan: %v", err)
+	}
+	videoAssetKind := ""
+	for _, asset := range sent.Assets {
+		if asset.AssetID == "video" {
+			videoAssetKind = asset.Kind
+			break
+		}
+	}
+	if len(sent.VideoTracks) != 1 || sent.VideoTracks[0].Segments[0].SourceInUS != 1_000_000 || videoAssetKind != "video" {
+		t.Fatalf("native mux did not receive the certified direct source window: %+v", sent.VideoTracks)
+	}
+}
+
 func TestValidateCopyOnlyPlan_AllowsSamePreparedAssetAtMultiplePlacements(t *testing.T) {
 	videoSHA, audioSHA := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	plan := copyOnlyPlan(videoSHA, audioSHA, 100, 100)
