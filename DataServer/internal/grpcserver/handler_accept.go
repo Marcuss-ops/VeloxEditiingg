@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"velox-server/internal/forwardingstore"
 	"velox-server/internal/logging"
@@ -168,6 +169,16 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 			// without a fresh ClaimNextReadyTask roundtrip.
 		}
 		return
+	}
+	acceptedAt := time.Now().UTC()
+	if h.dbStore != nil {
+		if err := h.dbStore.LogJobEvent(jobID, "lease.accepted", map[string]interface{}{
+			"task_id": taskID, "attempt_id": attemptID, "lease_id": leaseID,
+			"worker_id": workerID, "accepted_at": acceptedAt,
+		}); err != nil {
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptFailed,
+				"[GRPC] persist lease acceptance timestamp failed job=%s task=%s: %v", jobID, taskID, err)
+		}
 	}
 	// Send typed TaskLeaseGranted via sendCh with the full identity tuple.
 	grantTask := *masterTask

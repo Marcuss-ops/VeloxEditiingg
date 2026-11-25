@@ -43,6 +43,8 @@ type AssetDownloadProgressRecord struct {
 	ErrorDetail        string
 	HTTPStatus         int
 	HashVerified       bool
+	DownloadWorkMS     int64
+	HashVerifyMS       int64
 	CheckpointSequence int64
 	TransferGeneration int64
 	ReceivedAt         time.Time
@@ -91,8 +93,8 @@ func (s *SQLiteStore) IngestAssetDownloadProgress(ctx context.Context, p AssetDo
 			attempt, shared_waiters, cache_hit, queued_at, started_at,
 			updated_at, completed_at, task_id, scene_ids_json, mime_type,
 			sha256, error_code, error_detail, checkpoint_sequence, transfer_generation, received_at,
-			http_status, hash_verified
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			http_status, hash_verified, download_work_ms, hash_verify_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(worker_id, asset_key) DO UPDATE SET
 			transfer_id=excluded.transfer_id, asset_id=excluded.asset_id,
 			role=excluded.role, state=excluded.state,
@@ -108,7 +110,9 @@ func (s *SQLiteStore) IngestAssetDownloadProgress(ctx context.Context, p AssetDo
 			checkpoint_sequence=excluded.checkpoint_sequence,
 			transfer_generation=excluded.transfer_generation,
 			received_at=excluded.received_at, http_status=excluded.http_status,
-			hash_verified=excluded.hash_verified
+			hash_verified=excluded.hash_verified,
+			download_work_ms=excluded.download_work_ms,
+			hash_verify_ms=excluded.hash_verify_ms
 		WHERE (excluded.transfer_generation > worker_asset_downloads.transfer_generation)
 		   OR (excluded.transfer_generation = worker_asset_downloads.transfer_generation
 		       AND worker_asset_downloads.state NOT IN ('READY','FAILED','CANCELLED')
@@ -123,7 +127,7 @@ func (s *SQLiteStore) IngestAssetDownloadProgress(ctx context.Context, p AssetDo
 		p.Attempt, p.SharedWaiters, boolToSQLite(p.CacheHit), queuedAt, startedAt,
 		updatedAt, completedAt, p.TaskID, string(scenes), p.MIMEType, p.SHA256,
 		p.ErrorCode, p.ErrorDetail, p.CheckpointSequence, p.TransferGeneration, now,
-		p.HTTPStatus, boolToSQLite(p.HashVerified),
+		p.HTTPStatus, boolToSQLite(p.HashVerified), p.DownloadWorkMS, p.HashVerifyMS,
 	)
 	if err != nil {
 		return fmt.Errorf("asset download progress: upsert latest: %w", err)

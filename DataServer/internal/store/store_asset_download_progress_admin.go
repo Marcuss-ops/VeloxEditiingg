@@ -17,7 +17,8 @@ func (s *SQLiteStore) ListAssetDownloadProgressForJob(ctx context.Context, jobID
 		       d.bytes_downloaded, d.bytes_total, d.bytes_per_second, d.eta_seconds,
 		       d.attempt, d.shared_waiters, d.cache_hit, d.updated_at,
 		       d.error_code, d.error_detail, r.task_id, r.scene_ids_json,
-		       d.http_status, d.hash_verified, d.sha256
+		       d.http_status, d.hash_verified, d.sha256,
+		       d.queued_at, d.started_at, d.completed_at, d.download_work_ms, d.hash_verify_ms
 		FROM job_asset_refs r
 		JOIN worker_asset_downloads d ON d.worker_id=r.worker_id AND d.asset_key=r.asset_key
 		WHERE r.job_id=?

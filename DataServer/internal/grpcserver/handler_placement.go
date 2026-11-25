@@ -405,6 +405,7 @@ func (h *Handler) sendClaimedTaskOffer(
 		},
 	}
 
+	offeredAt := time.Now().UTC()
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", sess.workerID, tws.ID)
 		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
@@ -414,7 +415,16 @@ func (h *Handler) sendClaimedTaskOffer(
 	}
 
 	sess.pendingTaskOffer = tws
-	sess.pendingTaskOfferAt = time.Now().UTC()
+	sess.pendingTaskOfferAt = offeredAt
+	if h.dbStore != nil {
+		if err := h.dbStore.LogJobEvent(tws.JobID, "lease.offered", map[string]interface{}{
+			"task_id": tws.ID, "attempt_id": attempt.ID, "lease_id": leaseID,
+			"worker_id": sess.workerID, "offered_at": offeredAt,
+		}); err != nil {
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed,
+				"[PLACEMENT] persist lease offer timestamp failed job=%s task=%s: %v", tws.JobID, tws.ID, err)
+		}
+	}
 	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacement, "[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d", sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
 }
 

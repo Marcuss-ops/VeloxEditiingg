@@ -148,9 +148,11 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		var leaseAt string
 		var attemptStatus, attemptErrorCode, attemptErrorMessage string
 		var workerTiming gin.H
+		var attemptSnapshot *store.TaskAttemptSnapshot
 		if h.store != nil {
 			snap, sErr := h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
 			if sErr == nil && snap != nil {
+				attemptSnapshot = snap
 				workerID = snap.WorkerID
 				taskID = snap.TaskID
 				attemptID = snap.AttemptID
@@ -193,7 +195,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			}
 		}
 
-		prefetchDispatchStatus, futureAssetPlan, prefetchIssue := h.prefetchReadModel(ctx, jobID, clientID)
+		prefetchDispatchStatus, futureAssetPlan, prefetchIssue, prefetchEvents := h.prefetchReadModel(ctx, jobID, clientID)
 		prefetchDispatchStatus, futureAssetPlan, prefetchIssue = terminalPrefetchProjection(status, jobErrorMessage, prefetchDispatchStatus, futureAssetPlan, prefetchIssue)
 
 		created := forwarding.SourceProvider == ExternalAPISourceProvider
@@ -260,11 +262,15 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		if prefetchIssue != nil {
 			resp["prefetch_issue"] = prefetchIssue
 		}
+		runtimeAssetsPending := false
+		var runtimeTaskPayload map[string]interface{}
 		if h.jobs.TaskReader != nil {
 			if task, taskErr := h.jobs.TaskReader.GetByJobID(ctx, jobID); taskErr == nil && task != nil {
 				if specs, ok := h.jobs.TaskReader.(taskgraph.TaskSpecStore); ok {
 					if payload, payloadErr := specs.GetTaskSpecPayload(ctx, task.ID); payloadErr == nil {
+						runtimeTaskPayload = payload
 						if pending, ok := payload["runtime_assets_pending"].(bool); ok && pending {
+							runtimeAssetsPending = true
 							resp["runtime_assets_pending"] = true
 							resp["future_asset_plan"] = "awaiting_runtime_assets"
 							switch state, _ := payload[runtimeFinalizeStatusKey].(string); state {
@@ -294,6 +300,12 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 						}
 					}
 				}
+			}
+		}
+		if h.store != nil {
+			assetProgress, progressErr := h.store.ListAssetDownloadProgressForJobForClient(ctx, jobID, clientID)
+			if progressErr == nil {
+				resp["queue_telemetry"] = buildQueueTelemetry(status, runtimeAssetsPending, runtimeTaskPayload, prefetchEvents, assetProgress, attemptSnapshot)
 			}
 		}
 		c.JSON(http.StatusOK, resp)
@@ -327,23 +339,23 @@ func encodeFPS(frames int64, encodeMS float64) float64 {
 // the small polling response. The event journal remains the detailed source of
 // truth; this projection deliberately exposes only stable state labels and no
 // asset/job identifiers beyond the already-authorized job URL.
-func (h *Handlers) prefetchReadModel(ctx context.Context, jobID, clientID string) (dispatchStatus, futureAssetPlan string, issue map[string]interface{}) {
+func (h *Handlers) prefetchReadModel(ctx context.Context, jobID, clientID string) (dispatchStatus, futureAssetPlan string, issue map[string]interface{}, chronological []store.JobEvent) {
 	if h == nil || h.store == nil || jobID == "" || clientID == "" {
-		return "", "", nil
+		return "", "", nil, nil
 	}
-	events, err := h.store.ListJobEventsForClient(ctx, jobID, clientID, 100)
+	events, err := h.store.ListJobEventsForClient(ctx, jobID, clientID, 1000)
 	if err != nil {
-		return "", "", nil
+		return "", "", nil, nil
 	}
 	// The M2M read returns newest first; the state projection consumes the
 	// journal in chronological order so later events replace earlier state.
-	chronological := make([]store.JobEvent, len(events))
+	chronological = make([]store.JobEvent, len(events))
 	for i := range events {
 		chronological[len(events)-1-i] = events[i]
 	}
 	dispatchStatus, futureAssetPlan = prefetchStateFromEvents(chronological)
 	issue = prefetchIssueFromEvents(events)
-	return dispatchStatus, futureAssetPlan, issue
+	return dispatchStatus, futureAssetPlan, issue, chronological
 }
 
 func prefetchStateFromEvents(events []store.JobEvent) (dispatchStatus, futureAssetPlan string) {

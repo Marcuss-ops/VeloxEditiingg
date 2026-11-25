@@ -70,6 +70,10 @@ message AssetDownloadProgress {
   int64 transfer_generation = 27;
   int32 http_status = 28;
   bool hash_verified = 29;
+  // Per-transfer byte movement and integrity verification wall times.
+  // Zero means the worker predates this telemetry or the phase was not run.
+  int64 download_work_ms = 30;
+  int64 hash_verify_ms = 31;
 }
 
 // PrefetchLifecycleEvent is a lightweight worker-to-master event for

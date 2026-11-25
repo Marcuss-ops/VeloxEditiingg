@@ -51,6 +51,7 @@ func emitAssetProgressCheckpoint(ctx context.Context, snap downloader.DownloadSn
 			JobIds: jobs, TaskId: snap.TaskID, SceneIds: append([]string(nil), snap.SceneIDs...),
 			MimeType: snap.MIMEType, Sha256: string(snap.SHA256), ErrorCode: snap.ErrorCode, ErrorDetail: snap.ErrorDetail,
 			HttpStatus: int32(snap.HTTPStatus), HashVerified: snap.HashVerified,
+			DownloadWorkMs: snap.DownloadWorkMS, HashVerifyMs: snap.HashVerifyMS,
 			CheckpointSequence: snap.CheckpointSequence,
 			TransferGeneration: snap.TransferGeneration,
 		}

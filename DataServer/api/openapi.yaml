@@ -1288,6 +1288,80 @@ components:
                     description: Echoed from the URL path.
                     example: job_a1b2c3d4
                     type: string
+                queue_telemetry:
+                    description: |
+                        Durable queue/prefetch/lease breakdown and per-asset
+                        transfer evidence. Missing timestamps remain null;
+                        queue_reason is derived only from recorded lifecycle state.
+                    properties:
+                        prefetch_enqueued_at:
+                            format: date-time
+                            nullable: true
+                            type: string
+                        prefetch_started_at:
+                            format: date-time
+                            nullable: true
+                            type: string
+                        prefetch_completed_at:
+                            format: date-time
+                            nullable: true
+                            type: string
+                        lease_offered_at:
+                            format: date-time
+                            nullable: true
+                            type: string
+                        lease_accepted_at:
+                            format: date-time
+                            nullable: true
+                            type: string
+                        assets_total:
+                            type: integer
+                        assets_ready:
+                            type: integer
+                        assets_failed:
+                            type: integer
+                        assets_bytes:
+                            format: int64
+                            type: integer
+                        queue_reason:
+                            enum:
+                                - prefetch_wait
+                                - worker_unavailable
+                                - pin_wait
+                                - validation
+                                - unknown
+                                - none
+                            type: string
+                        assets:
+                            items:
+                                properties:
+                                    asset_id:
+                                        type: string
+                                    kind:
+                                        type: string
+                                    source:
+                                        enum:
+                                            - drive
+                                            - https
+                                            - objectstore
+                                            - unknown
+                                        type: string
+                                    sha256:
+                                        type: string
+                                    cache_hit:
+                                        type: boolean
+                                    state:
+                                        type: string
+                                    download_ms:
+                                        type: integer
+                                    verify_ms:
+                                        type: integer
+                                    error:
+                                        additionalProperties: true
+                                        type: object
+                                type: object
+                            type: array
+                    type: object
                 ok:
                     description: Always `true` on a successful 200.
                     enum:

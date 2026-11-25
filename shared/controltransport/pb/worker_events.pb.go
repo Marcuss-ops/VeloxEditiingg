@@ -292,8 +292,12 @@ type AssetDownloadProgress struct {
 	TransferGeneration int64                  `protobuf:"varint,27,opt,name=transfer_generation,json=transferGeneration,proto3" json:"transfer_generation,omitempty"`
 	HttpStatus         int32                  `protobuf:"varint,28,opt,name=http_status,json=httpStatus,proto3" json:"http_status,omitempty"`
 	HashVerified       bool                   `protobuf:"varint,29,opt,name=hash_verified,json=hashVerified,proto3" json:"hash_verified,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Per-transfer byte movement and integrity verification wall times.
+	// Zero means the worker predates this telemetry or the phase was not run.
+	DownloadWorkMs int64 `protobuf:"varint,30,opt,name=download_work_ms,json=downloadWorkMs,proto3" json:"download_work_ms,omitempty"`
+	HashVerifyMs   int64 `protobuf:"varint,31,opt,name=hash_verify_ms,json=hashVerifyMs,proto3" json:"hash_verify_ms,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AssetDownloadProgress) Reset() {
@@ -527,6 +531,20 @@ func (x *AssetDownloadProgress) GetHashVerified() bool {
 		return x.HashVerified
 	}
 	return false
+}
+
+func (x *AssetDownloadProgress) GetDownloadWorkMs() int64 {
+	if x != nil {
+		return x.DownloadWorkMs
+	}
+	return 0
+}
+
+func (x *AssetDownloadProgress) GetHashVerifyMs() int64 {
+	if x != nil {
+		return x.HashVerifyMs
+	}
+	return 0
 }
 
 // PrefetchLifecycleEvent is a lightweight worker-to-master event for
@@ -777,7 +795,7 @@ const file_velox_control_worker_events_proto_rawDesc = "" +
 	"\x11AssetJobReference\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12\x1b\n" +
-	"\tscene_ids\x18\x03 \x03(\tR\bsceneIds\"\x8d\b\n" +
+	"\tscene_ids\x18\x03 \x03(\tR\bsceneIds\"\xdd\b\n" +
 	"\x15AssetDownloadProgress\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1f\n" +
 	"\vtransfer_id\x18\x02 \x01(\tR\n" +
@@ -813,7 +831,9 @@ const file_velox_control_worker_events_proto_rawDesc = "" +
 	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\x12\x1f\n" +
 	"\vhttp_status\x18\x1c \x01(\x05R\n" +
 	"httpStatus\x12#\n" +
-	"\rhash_verified\x18\x1d \x01(\bR\fhashVerified\"\xe6\x06\n" +
+	"\rhash_verified\x18\x1d \x01(\bR\fhashVerified\x12(\n" +
+	"\x10download_work_ms\x18\x1e \x01(\x03R\x0edownloadWorkMs\x12$\n" +
+	"\x0ehash_verify_ms\x18\x1f \x01(\x03R\fhashVerifyMs\"\xe6\x06\n" +
 	"\x16PrefetchLifecycleEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x15\n" +

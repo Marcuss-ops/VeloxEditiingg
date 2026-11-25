@@ -21,6 +21,11 @@ type AssetDownloadProgressView struct {
 	HTTPStatus      int      `json:"http_status,omitempty"`
 	HashVerified    bool     `json:"hash_verified"`
 	SHA256          string   `json:"sha256,omitempty"`
+	QueuedAt        string   `json:"queued_at,omitempty"`
+	StartedAt       string   `json:"started_at,omitempty"`
+	CompletedAt     string   `json:"completed_at,omitempty"`
+	DownloadWorkMS  int64    `json:"download_work_ms,omitempty"`
+	HashVerifyMS    int64    `json:"hash_verify_ms,omitempty"`
 	TaskID          string   `json:"task_id,omitempty"`
 	SceneIDs        []string `json:"scene_ids,omitempty"`
 }

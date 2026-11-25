@@ -252,6 +252,8 @@ type DownloadSnapshot struct {
 	ErrorDetail        string
 	HTTPStatus         int
 	HashVerified       bool
+	DownloadWorkMS     int64
+	HashVerifyMS       int64
 	CheckpointSequence int64
 	TransferGeneration int64
 
