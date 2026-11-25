@@ -10,8 +10,10 @@ evidence. The copy assembler accepts such source windows with non-zero offsets;
 the native mux remains responsible for checking that the requested offset is
 an exact keyframe. New compiled video plans now route to
 `video.assemble.copy.v1`; the slice contract and executor remain registered to
-serve tasks already persisted with the legacy executor ID. This removes the
-slice executor from new-job scheduling without invalidating queued work.
+serve tasks already persisted with the legacy executor ID. The legacy executor
+is now an adapter to the copy implementation, so validation, native muxing,
+output handling and metrics have one implementation. This removes slice work
+from new-job scheduling without invalidating queued work.
 
 Targeted planner, contract, DataServer pipeline, task-contract and worker
 executor tests pass. Broader package runs still expose the documented local
