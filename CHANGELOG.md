@@ -31,12 +31,14 @@
 - The native mixed renderer, which normalized each video before packet mux,
   has been removed. Such plans fail with `video_reencode_forbidden`;
   copy-only assembly also refuses unsafe stock skipping.
+- The canonical x264 projection now pins BT.709 primaries, transfer, and
+  matrix coefficients in SPS VUI parameters as well as the FFmpeg container
+  metadata. This restores the pinned `7201ce…` avcC identity on the local
+  FFmpeg build; real producer, worker, and source-normalization probes pass.
 - Verification: the full DataServer removal gate passes (`go vet ./...`,
   `go build ./...`, `go test -count=1 ./...`); the full worker Go suite passes;
   the native C++ engine builds and all 23 CTest cases pass. Shared contract
-  tests have three local FFmpeg `avcC` identity failures: this machine produces
-  `667044…` instead of the pinned `7201ce…`, so incompatible output is rejected
-  as required. No remote computer or service was changed.
+  tests pass. No remote computer or service was changed.
 
 ### Fixed — remove redundant prefetch wait from packet-copy assembly
 

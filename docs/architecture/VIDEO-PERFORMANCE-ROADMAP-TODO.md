@@ -1,6 +1,6 @@
 # Video performance roadmap — action list
 
-Status updated: 2026-11-09
+Status updated: 2026-11-25
 
 ## 2026-11-25 — direct certified source windows and single new-job route
 
@@ -31,13 +31,15 @@ preparation evidence.
 
 Targeted planner, contract, DataServer pipeline, task-contract and worker
 executor tests pass, including a direct-source execution test that verifies
-the worker sends the non-zero source offset to the native mux. Broader package
-runs still expose the documented local avcC mismatch (`667044…` vs pinned
-`7201ce…`) in the shared FFmpeg encode tests. The Master now explicitly rejects
-that non-canonical avcC during prepared-window registration; the DataServer
-registration test passes by asserting this fail-closed behavior on the local
-FFmpeg build. The full verification gate is still not green. This working-tree
-change has not been deployed.
+the worker sends the non-zero source offset to the native mux. The canonical
+x264 argument projection now pins BT.709 primaries, transfer, and matrix
+coefficients in SPS VUI parameters as well as container metadata. That fixes
+the local FFmpeg 8 mismatch: producer, worker, and whole-source normalization
+real-FFmpeg tests now emit the pinned `7201ce…` avcC. The full DataServer gate
+(`go vet ./...`, `go build ./...`, `go test -count=1 ./...`) passes after
+updating a stale enqueue assertion that still expected new Drive stock plans
+to use the legacy slice executor. This working-tree change has not been
+deployed.
 
 The C++ `media_packet_pipeline_tests` and
 `render_copy_only_zero_intermediates_tests` also pass against the local LibAV
@@ -61,15 +63,13 @@ longer downloads the source and reconstructs a fragment inline. Registered
 worker fragments are recorded as packet-copy outputs without legacy
 re-encode/normalization metadata.
 
-Incompatible sources fail before publication. The local FFmpeg build currently
-produces avcC `667044…`, while the repository contract pins `7201ce…`; the
-worker's packet-copy preflight rejects that mismatch. This is an environment
-compatibility finding, not permission to normalize the source.
+Incompatible sources fail before publication. The canonical encoder arguments
+now emit the pinned avcC locally; other source encoders still need the same
+immutable stream evidence before direct packet-copy assembly can accept them.
 
-Still open: certify all legacy cache evidence and migration behavior, prove the
-copy-only path on a source carrying the pinned avcC (the local FFmpeg build
-produces a different avcC identity), and collect cold/warm production
-measurements after a separately authorized rollout. The local DataServer,
+Still open: certify all legacy cache evidence and migration behavior, measure
+the direct source mux path on representative production sources, and collect
+cold/warm production measurements after rollout. The local DataServer,
 worker, and C++ verification gates pass; this workspace change does not deploy
 to another computer.
 

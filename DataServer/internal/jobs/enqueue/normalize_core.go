@@ -15,7 +15,6 @@ import (
 )
 
 const canonicalCompiledPlanExecutor = contract.VideoAssemblyCopyExecutorID + "@1"
-const canonicalDriveSliceExecutor = contract.VideoAssemblySliceExecutorID + "@1"
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	return normalizeSceneVideoPayloadContext(context.Background(), payloadMap)
