@@ -203,7 +203,10 @@ if [[ "$SKIP_HEAVY" -ne 1 ]]; then
     -S "$REPO_ROOT/RemoteCodex/native/video-engine-cpp" \
     -B /tmp/velox-engine \
     -DCMAKE_BUILD_TYPE=Release
-  cmake --build /tmp/velox-engine --parallel
+  # The default `--parallel` uses every reported CPU. GitHub-hosted runners
+  # expose more CPUs than their memory budget can safely compile at once;
+  # cap this build to avoid cc1plus OOM kills during the full verification.
+  cmake --build /tmp/velox-engine --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 
   log "ctest: run C++ video engine tests"
   ctest --test-dir /tmp/velox-engine --output-on-failure
