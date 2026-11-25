@@ -127,6 +127,11 @@ const (
 	// selected upload transport can publish immutable file ranges before the
 	// renderer has finalized the artifact.
 	CapabilityArtifactProgressiveUploadV1 = "artifact.progressive-upload.v1"
+
+	// CapabilityStockWindowPreparation indicates that the worker accepts
+	// Master-planned stock windows through video.prepare.window.v1 and only
+	// certifies them when packet-copy preserves the canonical profile.
+	CapabilityStockWindowPreparationV1 = "stock_window_preparation"
 )
 
 // allCapabilities is the private canonical closed-set of capabilities the
@@ -142,6 +147,7 @@ var allCapabilities = [...]string{
 	CapabilityCanonicalPayloadV2,
 	CapabilityFutureAssetPrefetchV1,
 	CapabilityArtifactProgressiveUploadV1,
+	CapabilityStockWindowPreparationV1,
 }
 
 // KnownCapabilities returns a deterministic snapshot for logs, diagnostics

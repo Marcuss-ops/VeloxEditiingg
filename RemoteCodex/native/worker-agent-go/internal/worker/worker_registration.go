@@ -140,6 +140,9 @@ func (w *Worker) capabilityReport(hostname string) controltransport.CapabilityRe
 			report.AssetCacheKeys = keys
 		}
 	}
+	if w.executorRegistry.Has("video.prepare.window.v1", 1) {
+		report.Features = append(report.Features, controltransport.CapabilityStockWindowPreparationV1)
+	}
 	return report
 }
 

@@ -1,5 +1,15 @@
 ## [Unreleased] - 2026-11-08
 
+### Fixed — remote stock-window capability and fractional-frame validation
+
+- Worker hello and heartbeats now advertise `stock_window_preparation` only
+  when `video.prepare.window.v1` is actually registered, allowing the Master
+  to gate stock final jobs on the capability the worker implements.
+- Window validation compares integer-microsecond boundaries to rational frame
+  rates with explicit timestamp quantization tolerance. Valid windows at
+  fractional rates such as 24000/1001 no longer fail from floating-point
+  round-trip error; wrong frame counts and off-frame boundaries still fail.
+
 ### Changed — fail closed instead of re-encoding existing video
 
 - `video.prepare.window.v1` now packet-copies only. Source-window, avcC,

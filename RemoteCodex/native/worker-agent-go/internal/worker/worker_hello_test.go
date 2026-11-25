@@ -132,6 +132,24 @@ func TestBuildHello_MatchesRegistryContents(t *testing.T) {
 	require.Equal(t, "zzz.last", execs[3].(map[string]interface{})["id"])
 }
 
+func TestStockWindowPreparationFeatureFollowsRegisteredExecutor(t *testing.T) {
+	t.Run("advertised when executor is registered", func(t *testing.T) {
+		reg := executor.NewRegistry()
+		reg.MustRegister(&regStubExecutor{descriptor: executor.Descriptor{
+			ID: "video.prepare.window.v1", Version: 1,
+			ResourceClass: executor.ResourceCPU, TemporalMode: executor.TemporalFrameLocal,
+		}})
+		w, err := New(newInsecureDevCfg(t), "test", WithRegistry(reg))
+		require.NoError(t, err)
+		require.Contains(t, w.capabilityReport("test-host").Features, controltransport.CapabilityStockWindowPreparationV1)
+	})
+	t.Run("omitted without executor", func(t *testing.T) {
+		w, err := New(newInsecureDevCfg(t), "test", WithRegistry(executor.NewRegistry()))
+		require.NoError(t, err)
+		require.NotContains(t, w.capabilityReport("test-host").Features, controltransport.CapabilityStockWindowPreparationV1)
+	})
+}
+
 func TestBuildHello_EmptyRegistryExecutesClean(t *testing.T) {
 	// Empty registry must produce a valid hello with empty arrays —
 	// not nil, not missing keys. Encoding the payload must not panic

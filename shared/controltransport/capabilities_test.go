@@ -21,6 +21,7 @@ func TestCapabilities_KnownConstants(t *testing.T) {
 		"payload.contract.v2",
 		"prefetch.plan.v1",
 		"artifact.progressive-upload.v1",
+		"stock_window_preparation",
 	}
 	capabilities := KnownCapabilities()
 	if len(capabilities) != len(want) {
@@ -79,6 +80,7 @@ func TestCapabilities_KnownCapabilitiesIsClosedSet(t *testing.T) {
 		CapabilityCanonicalPayloadV2:          true,
 		CapabilityFutureAssetPrefetchV1:       true,
 		CapabilityArtifactProgressiveUploadV1: true,
+		CapabilityStockWindowPreparationV1:    true,
 	}
 	allAsSet := map[string]bool{}
 	for _, c := range KnownCapabilities() {

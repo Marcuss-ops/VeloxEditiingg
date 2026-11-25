@@ -209,19 +209,21 @@ func diagnoseSourceWindowCopy(source windowSourceProbe, request contract.VideoPr
 	if err != nil || maxRate <= 0 || source.BitRateBPS <= 0 || source.BitRateBPS > maxRate {
 		reasons = append(reasons, "bitrate_out_of_range")
 	}
-	startSeconds, durationSeconds, ok := requestedWindowSeconds(request)
+	startSeconds, _, ok := requestedWindowSeconds(request)
 	if !ok || absFloat(source.StartTimeSec) > 1e-6 || request.OutputFrameCount <= 0 {
 		reasons = append(reasons, "invalid_window_or_source_start_time")
 	}
 	if ok {
-		wantFrameCount := durationSeconds * float64(profile.FPSNum) / float64(profile.FPSDen)
-		if absFloat(wantFrameCount-float64(request.OutputFrameCount)) > 1e-6 {
+		frameCountMatches := request.SourceDurationUS > 0 && timestampMatchesFrames(request.SourceDurationUS, request.OutputFrameCount, profile.FPSNum, profile.FPSDen)
+		if request.SourceDurationUS == 0 {
+			frameCountMatches = request.SourceFPSNum == profile.FPSNum && request.SourceFPSDen == profile.FPSDen && request.SourceFrameCount == request.OutputFrameCount
+		}
+		if !frameCountMatches {
 			reasons = append(reasons, "output_frame_count_mismatch")
 		}
 	}
-	if ok {
-		startFrame := startSeconds * float64(profile.FPSNum) / float64(profile.FPSDen)
-		if absFloat(startFrame-math.Round(startFrame)) > 1e-6 {
+	if ok && request.SourceDurationUS > 0 {
+		if !timestampMatchesFrames(request.SourceStartUS, -1, profile.FPSNum, profile.FPSDen) {
 			reasons = append(reasons, "window_start_not_frame_aligned")
 		}
 	}
@@ -238,6 +240,34 @@ func diagnoseSourceWindowCopy(source windowSourceProbe, request contract.VideoPr
 		reasons = append(reasons, "window_start_not_keyframe")
 	}
 	return windowCopyEligibility{Eligible: len(reasons) == 0, Reasons: reasons}
+}
+
+// timestampMatchesFrames checks microsecond timestamps against an exact
+// rational frame rate. Window plans convert frame boundaries to integer
+// microseconds, so the round trip can differ by at most one microsecond;
+// floating-point equality incorrectly rejects valid 24000/1001 boundaries.
+func timestampMatchesFrames(timestampUS, expectedFrames int64, fpsNum, fpsDen int) bool {
+	if timestampUS < 0 || fpsNum <= 0 || fpsDen <= 0 {
+		return false
+	}
+	den := int64(1_000_000) * int64(fpsDen)
+	if den <= 0 || timestampUS > math.MaxInt64/int64(fpsNum) {
+		return false
+	}
+	numerator := timestampUS * int64(fpsNum)
+	frames, remainder := numerator/den, numerator%den
+	if remainder >= (den+1)/2 {
+		frames++
+	}
+	if expectedFrames >= 0 && frames != expectedFrames {
+		return false
+	}
+	if frames > numerator/den {
+		remainder = den - remainder
+	}
+	// Allow the quantization introduced when a frame boundary is stored in
+	// microseconds (<= 0.5 us), represented in numerator units.
+	return remainder <= int64(fpsNum)/2+int64(fpsNum)%2
 }
 
 func requestedWindowSeconds(request contract.VideoPrepareWindowV1) (float64, float64, bool) {
