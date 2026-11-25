@@ -29,6 +29,12 @@ for persisted tasks; the v2 cache key and the revision value keep those results
 separate from new evidence. CRF-only changes no longer invalidate packet-copy
 preparation evidence.
 
+Master registration also checks the READY asset for the same content-window
+identity before probing or staging an upload. It reuses that asset only when
+its persisted certificate validates against its original window and reproduces
+the current identity, output SHA/size, profile, and canonical avcC. A real-media
+registration test pins the cache hit to zero additional FFprobe calls.
+
 Targeted planner, contract, DataServer pipeline, task-contract and worker
 executor tests pass, including a direct-source execution test that verifies
 the worker sends the non-zero source offset to the native mux. The canonical

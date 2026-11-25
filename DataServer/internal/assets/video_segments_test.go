@@ -260,12 +260,14 @@ func TestRegisterPreparedWindowRejectsNonCanonicalAVCCAndDeduplicatesCanonical(t
 	if metadata["source_start_frame"] != float64(0) || metadata["window_certificate"] == nil {
 		t.Fatalf("prepared window certification missing from registry metadata: %#v", metadata)
 	}
+	cacheProbeRunner := &recordingVideoRunner{probeOutput: []byte("cache hit must not probe")}
+	service.videoTrimmer = newVideoTrimmerForTest(cacheProbeRunner)
 	second, err := service.RegisterPreparedWindow(context.Background(), preparedPath, request, certificate)
 	if err != nil {
 		t.Fatalf("reuse prepared window: %v", err)
 	}
-	if second.AssetID != asset.AssetID || len(repo.inserted) != 1 {
-		t.Fatalf("second registration=%+v inserts=%d, want content-addressed reuse", second, len(repo.inserted))
+	if second.AssetID != asset.AssetID || len(repo.inserted) != 1 || countFFProbeCommands(cacheProbeRunner) != 0 {
+		t.Fatalf("second registration=%+v inserts=%d probes=%d, want certified reuse without another probe", second, len(repo.inserted), countFFProbeCommands(cacheProbeRunner))
 	}
 }
 

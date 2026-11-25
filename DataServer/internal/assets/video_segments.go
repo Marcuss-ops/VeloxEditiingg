@@ -540,6 +540,22 @@ func (s *AssetService) RegisterPreparedWindow(
 		}
 		return nil, fmt.Errorf("prepared window file: %w", err)
 	}
+	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		return nil, err
+	}
+	existing, lookupErr := s.GetBySourceReference(ctx, "prepared-window:"+identity)
+	if lookupErr != nil {
+		return nil, fmt.Errorf("lookup prepared window identity: %w", lookupErr)
+	}
+	if existing != nil {
+		if existing.SHA256 != certificate.OutputSHA256 || existing.SizeBytes != certificate.OutputSizeBytes {
+			return nil, fmt.Errorf("prepared window identity already maps to different bytes")
+		}
+		if cachedPreparedWindowEvidenceMatches(existing, request, identity) {
+			return existing, nil
+		}
+	}
 	if s.security == nil {
 		return nil, fmt.Errorf("prepared window security validator is unavailable")
 	}
@@ -573,18 +589,7 @@ func (s *AssetService) RegisterPreparedWindow(
 	if len(probe.Keyframes) == 0 || probe.Keyframes[0] > float64(profile.FPSDen)/float64(profile.FPSNum) {
 		return nil, fmt.Errorf("prepared window does not begin with a keyframe")
 	}
-	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
-	if err != nil {
-		return nil, err
-	}
-	existing, lookupErr := s.GetBySourceReference(ctx, "prepared-window:"+identity)
-	if lookupErr != nil {
-		return nil, fmt.Errorf("lookup prepared window identity: %w", lookupErr)
-	}
 	if existing != nil {
-		if existing.SHA256 != certificate.OutputSHA256 || existing.SizeBytes != certificate.OutputSizeBytes {
-			return nil, fmt.Errorf("prepared window identity already maps to different bytes")
-		}
 		return existing, nil
 	}
 	startSeconds, durationSeconds := float64(request.SourceStartUS)/1_000_000, float64(request.SourceDurationUS)/1_000_000
@@ -609,6 +614,47 @@ func (s *AssetService) RegisterPreparedWindow(
 	}
 	plan.PreparationCertificateJSON = string(certificateJSON)
 	return s.registerPreparedVideoFile(ctx, preparedPath, "prepared-window:"+identity, plan)
+}
+
+// cachedPreparedWindowEvidenceMatches permits a repeated registration to reuse
+// the independently probed evidence already stored with an immutable asset.
+// The old certificate is revalidated against its original window and its
+// content key must match the current request; timeline placement may differ.
+func cachedPreparedWindowEvidenceMatches(asset *Asset, request contract.VideoPrepareWindowV1, identity string) bool {
+	if asset == nil || asset.Status != AssetStatusReady || asset.MimeType != "video/mp4" {
+		return false
+	}
+	var metadata struct {
+		Certificate contract.VideoPrepareWindowCertificateV1 `json:"window_certificate"`
+	}
+	if json.Unmarshal([]byte(asset.MetadataJSON), &metadata) != nil {
+		return false
+	}
+	certificate := metadata.Certificate
+	originalRequest := contract.VideoPrepareWindowV1{
+		Version: contract.VideoPrepareWindowVersion,
+		Source: contract.AssetRefV2{
+			AssetID: certificate.SourceAssetID, SHA256: certificate.SourceSHA256,
+			SizeBytes: certificate.SourceSizeBytes, Kind: "video",
+		},
+		SourceStartFrame: certificate.SourceStartFrame, SourceFrameCount: certificate.SourceFrameCount,
+		SourceFPSNum: certificate.SourceFPSNum, SourceFPSDen: certificate.SourceFPSDen,
+		SourceStartUS: certificate.SourceStartUS, SourceDurationUS: certificate.SourceDurationUS,
+		OutputFrameCount: certificate.OutputFrameCount, TimelineRevision: certificate.TimelineRevision,
+		TimelineSHA256: certificate.TimelineSHA256, TimelineStartFrame: certificate.TimelineStartFrame,
+		OutputProfileID: certificate.OutputProfileID, OutputProfileRevision: certificate.OutputProfileRevision,
+	}
+	if certificate.ValidateFor(originalRequest) != nil {
+		return false
+	}
+	cachedIdentity, err := contract.VideoPrepareWindowCacheIdentity(originalRequest)
+	if err != nil || cachedIdentity != identity || asset.SHA256 != certificate.OutputSHA256 ||
+		asset.SizeBytes != certificate.OutputSizeBytes || certificate.OutputFrameCount != request.OutputFrameCount ||
+		certificate.OutputProfileID != request.OutputProfileID || certificate.OutputProfileRevision != request.OutputProfileRevision ||
+		certificate.OutputEvidence.ExtradataSHA256 != contract.CanonicalVideoExtradataSHA256 {
+		return false
+	}
+	return true
 }
 
 func syncPreparedSegment(path string) error {
