@@ -45,6 +45,14 @@ func TestVideoPrepareWindowDiscoveryIdentityIsNotAContentCacheKey(t *testing.T) 
 	if err != nil || movedIdentity != first {
 		t.Fatalf("timeline placement changed the discovery identity: %q vs %q (%v)", movedIdentity, first, err)
 	}
+	frameWindow := request
+	frameWindow.SourceStartUS, frameWindow.SourceDurationUS = 0, 0
+	frameWindow.SourceStartFrame, frameWindow.SourceFrameCount = 30, 75
+	frameWindow.SourceFPSNum, frameWindow.SourceFPSDen = 24, 1
+	frameIdentity, err := VideoPrepareWindowDiscoveryIdentity(frameWindow)
+	if err != nil || frameIdentity != first {
+		t.Fatalf("equivalent time/frame windows changed discovery identity: %q vs %q (%v)", frameIdentity, first, err)
+	}
 	// A pre-declared SHA is contradictory and must fail closed.
 	contradictory := request
 	contradictory.Source.SHA256 = strings.Repeat("c", 64)

@@ -99,7 +99,27 @@ func TestVideoPrepareWindowCacheIdentityIgnoresTimelinePlacement(t *testing.T) {
 	if first != second {
 		t.Fatalf("cache identity changed with timeline placement: %s != %s", first, second)
 	}
-	request.SourceStartUS++
+	frameWindow := request
+	frameWindow.SourceStartUS, frameWindow.SourceDurationUS = 0, 0
+	frameWindow.SourceStartFrame, frameWindow.SourceFrameCount = 12, 48
+	frameWindow.SourceFPSNum, frameWindow.SourceFPSDen = 24, 1
+	frameIdentity, err := VideoPrepareWindowCacheIdentity(frameWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frameIdentity != first {
+		t.Fatalf("equivalent time/frame windows have different cache identities: %s != %s", first, frameIdentity)
+	}
+	unaligned := request
+	unaligned.SourceStartUS++
+	unalignedIdentity, err := VideoPrepareWindowCacheIdentity(unaligned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unalignedIdentity == first {
+		t.Fatal("a non-frame-aligned timestamp collided with a certified frame-aligned window")
+	}
+	request.SourceStartUS += 41_667
 	third, err := VideoPrepareWindowCacheIdentity(request)
 	if err != nil {
 		t.Fatal(err)

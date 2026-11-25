@@ -15,6 +15,13 @@ is now an adapter to the copy implementation, so validation, native muxing,
 output handling and metrics have one implementation. This removes slice work
 from new-job scheduling without invalidating queued work.
 
+The shared preparation cache key now uses a versioned normalized source-window
+identity. Frame windows and timestamp windows share a key when they denote the
+same canonical-profile frame range; non-frame-aligned timestamps retain their
+exact microsecond coordinates to avoid unsafe cache collisions. This makes old
+key-format entries miss and be rebuilt on demand; their stored blobs are not
+deleted by this change.
+
 Targeted planner, contract, DataServer pipeline, task-contract and worker
 executor tests pass. Broader package runs still expose the documented local
 avcC mismatch (`667044…` vs pinned `7201ce…`) and a prepared-window

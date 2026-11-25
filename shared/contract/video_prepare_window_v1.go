@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 )
 
@@ -198,19 +199,18 @@ func VideoPrepareWindowCacheIdentity(r VideoPrepareWindowV1) (string, error) {
 	if r.SourceIdentityDiscovery {
 		return "", fmt.Errorf("video.prepare.window.v1: content cache identity requires a discovered source SHA-256")
 	}
+	window, err := canonicalSourceWindowKey(r)
+	if err != nil {
+		return "", err
+	}
 	identity := struct {
-		SourceSHA        string `json:"source_sha256"`
-		Start            int64  `json:"source_start_frame"`
-		Count            int64  `json:"source_frame_count"`
-		SourceFPSNum     int    `json:"source_fps_num"`
-		SourceFPSDen     int    `json:"source_fps_den"`
-		SourceStartUS    int64  `json:"source_start_us,omitempty"`
-		SourceDurationUS int64  `json:"source_duration_us,omitempty"`
-		OutputFrames     int64  `json:"output_frame_count"`
-		ProfileID        string `json:"output_profile_id"`
-		ProfileRevision  string `json:"profile_revision"`
-	}{r.Source.SHA256, r.SourceStartFrame, r.SourceFrameCount, r.SourceFPSNum, r.SourceFPSDen,
-		r.SourceStartUS, r.SourceDurationUS, r.OutputFrameCount, r.OutputProfileID, r.OutputProfileRevision}
+		KeyVersion      string               `json:"key_version"`
+		SourceSHA       string               `json:"source_sha256"`
+		Window          sourceWindowCacheKey `json:"source_window"`
+		OutputFrames    int64                `json:"output_frame_count"`
+		ProfileID       string               `json:"output_profile_id"`
+		ProfileRevision string               `json:"profile_revision"`
+	}{"video-window-cache-key.v2", r.Source.SHA256, window, r.OutputFrameCount, r.OutputProfileID, r.OutputProfileRevision}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", fmt.Errorf("video.prepare.window.v1: encode cache identity: %w", err)
@@ -230,29 +230,107 @@ func VideoPrepareWindowDiscoveryIdentity(r VideoPrepareWindowV1) (string, error)
 	if !r.SourceIdentityDiscovery {
 		return "", fmt.Errorf("video.prepare.window.v1: discovery identity requires source identity discovery")
 	}
+	window, err := canonicalSourceWindowKey(r)
+	if err != nil {
+		return "", err
+	}
 	identity := struct {
-		Discovery        bool   `json:"source_identity_discovery"`
-		AssetID          string `json:"source_asset_id"`
-		DriveFileID      string `json:"source_drive_file_id,omitempty"`
-		SizeBytes        int64  `json:"source_size_bytes"`
-		Start            int64  `json:"source_start_frame"`
-		Count            int64  `json:"source_frame_count"`
-		SourceFPSNum     int    `json:"source_fps_num"`
-		SourceFPSDen     int    `json:"source_fps_den"`
-		SourceStartUS    int64  `json:"source_start_us,omitempty"`
-		SourceDurationUS int64  `json:"source_duration_us,omitempty"`
-		OutputFrames     int64  `json:"output_frame_count"`
-		ProfileID        string `json:"output_profile_id"`
-		ProfileRevision  string `json:"profile_revision"`
-	}{true, r.Source.AssetID, r.Source.DriveFileID, r.Source.SizeBytes,
-		r.SourceStartFrame, r.SourceFrameCount, r.SourceFPSNum, r.SourceFPSDen,
-		r.SourceStartUS, r.SourceDurationUS, r.OutputFrameCount, r.OutputProfileID, r.OutputProfileRevision}
+		KeyVersion      string               `json:"key_version"`
+		Discovery       bool                 `json:"source_identity_discovery"`
+		AssetID         string               `json:"source_asset_id"`
+		DriveFileID     string               `json:"source_drive_file_id,omitempty"`
+		SizeBytes       int64                `json:"source_size_bytes"`
+		Window          sourceWindowCacheKey `json:"source_window"`
+		OutputFrames    int64                `json:"output_frame_count"`
+		ProfileID       string               `json:"output_profile_id"`
+		ProfileRevision string               `json:"profile_revision"`
+	}{"video-window-cache-key.v2", true, r.Source.AssetID, r.Source.DriveFileID, r.Source.SizeBytes,
+		window, r.OutputFrameCount, r.OutputProfileID, r.OutputProfileRevision}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", fmt.Errorf("video.prepare.window.v1: encode discovery identity: %w", err)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// sourceWindowCacheKey describes the normalized coordinates of a requested
+// source window. Unaligned time coordinates remain in microseconds so two
+// distinct cuts cannot collide merely because they round to the same frame.
+type sourceWindowCacheKey struct {
+	CoordinateSystem string `json:"coordinate_system"`
+	StartFrame       int64  `json:"start_frame,omitempty"`
+	FrameCount       int64  `json:"frame_count,omitempty"`
+	StartUS          int64  `json:"start_us,omitempty"`
+	DurationUS       int64  `json:"duration_us,omitempty"`
+	SourceFPSNum     int    `json:"source_fps_num,omitempty"`
+	SourceFPSDen     int    `json:"source_fps_den,omitempty"`
+}
+
+func canonicalSourceWindowKey(r VideoPrepareWindowV1) (sourceWindowCacheKey, error) {
+	profile, err := KnownCanonicalVideoProfileV1(r.OutputProfileID)
+	if err != nil {
+		return sourceWindowCacheKey{}, fmt.Errorf("video.prepare.window.v1: cache identity profile: %w", err)
+	}
+	if r.SourceStartFrame >= 0 && r.SourceFrameCount > 0 {
+		if r.SourceFPSNum == profile.FPSNum && r.SourceFPSDen == profile.FPSDen {
+			if _, err := validateCanonicalWindowFrames(r.SourceStartFrame, r.SourceFrameCount); err != nil {
+				return sourceWindowCacheKey{}, err
+			}
+			return sourceWindowCacheKey{CoordinateSystem: "canonical-frames", StartFrame: r.SourceStartFrame, FrameCount: r.SourceFrameCount}, nil
+		}
+		return sourceWindowCacheKey{CoordinateSystem: "source-frames", StartFrame: r.SourceStartFrame, FrameCount: r.SourceFrameCount,
+			SourceFPSNum: r.SourceFPSNum, SourceFPSDen: r.SourceFPSDen}, nil
+	}
+	start, startAligned, err := alignedTimeFrame(r.SourceStartUS, profile.FPSNum, profile.FPSDen)
+	if err != nil {
+		return sourceWindowCacheKey{}, err
+	}
+	count, durationAligned, err := alignedTimeFrame(r.SourceDurationUS, profile.FPSNum, profile.FPSDen)
+	if err != nil {
+		return sourceWindowCacheKey{}, err
+	}
+	if startAligned && durationAligned {
+		return validateCanonicalWindowFrames(start, count)
+	}
+	return sourceWindowCacheKey{CoordinateSystem: "microseconds", StartUS: r.SourceStartUS, DurationUS: r.SourceDurationUS}, nil
+}
+
+func validateCanonicalWindowFrames(startFrame, frameCount int64) (sourceWindowCacheKey, error) {
+	if startFrame < 0 || frameCount <= 0 || startFrame > math.MaxInt64-frameCount {
+		return sourceWindowCacheKey{}, fmt.Errorf("video.prepare.window.v1: normalized source frame window is invalid or overflows")
+	}
+	return sourceWindowCacheKey{CoordinateSystem: "canonical-frames", StartFrame: startFrame, FrameCount: frameCount}, nil
+}
+
+func alignedTimeFrame(microseconds int64, targetFPSNum, targetFPSDen int) (int64, bool, error) {
+	numerator := new(big.Int).Mul(big.NewInt(microseconds), big.NewInt(int64(targetFPSNum)))
+	denominator := new(big.Int).Mul(big.NewInt(1_000_000), big.NewInt(int64(targetFPSDen)))
+	frame, err := roundPositiveRatio(numerator, denominator)
+	if err != nil {
+		return 0, false, err
+	}
+	frameTimeNumerator := new(big.Int).Mul(big.NewInt(frame), denominator)
+	difference := new(big.Int).Sub(numerator, frameTimeNumerator)
+	difference.Abs(difference)
+	// Integer microseconds can round a rational frame boundary by at most
+	// half a microsecond. Do not absorb a full microsecond of user-selected
+	// offset: that could make a distinct packet-copy cut hit this cache entry.
+	return frame, difference.Cmp(big.NewInt(int64(targetFPSNum))) < 0, nil
+}
+
+func roundPositiveRatio(numerator, denominator *big.Int) (int64, error) {
+	if numerator.Sign() < 0 || denominator.Sign() <= 0 {
+		return 0, fmt.Errorf("video.prepare.window.v1: invalid source frame ratio")
+	}
+	twiceNumerator := new(big.Int).Lsh(new(big.Int).Set(numerator), 1)
+	rounded := new(big.Int).Add(twiceNumerator, denominator)
+	twiceDenominator := new(big.Int).Lsh(new(big.Int).Set(denominator), 1)
+	rounded.Quo(rounded, twiceDenominator)
+	if !rounded.IsInt64() {
+		return 0, fmt.Errorf("video.prepare.window.v1: normalized source frame value overflows int64")
+	}
+	return rounded.Int64(), nil
 }
 
 // VideoWindowPreparationRevision binds cached fragments to the algorithm,
