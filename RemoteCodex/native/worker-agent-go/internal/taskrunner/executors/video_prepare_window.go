@@ -247,10 +247,6 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	if err != nil {
 		return fail("WINDOW_PLAN_INVALID", err)
 	}
-	encoderVersion, encoderBuildSHA, err := e.encoderIdentity(ctx)
-	if err != nil {
-		return fail("WINDOW_ENCODER_IDENTITY", err)
-	}
 	expectedExtradata := contract.CanonicalVideoExtradataSHA256
 	if strings.TrimSpace(spec.JobID) == "" {
 		return fail("WINDOW_JOB_ID_INVALID", errors.New("job_id is required"))
@@ -275,6 +271,14 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 			}}, StartedAt: started, CompletedAt: completed,
 		}, nil
 	}
+	var encoderVersion, encoderBuildSHA string
+	ensureEncoderIdentity := func() error {
+		if encoderVersion != "" && encoderBuildSHA != "" {
+			return nil
+		}
+		encoderVersion, encoderBuildSHA, err = e.encoderIdentity(ctx)
+		return err
+	}
 
 	// Cache-first: a known content identity can be served from the local
 	// fragment cache before the worker resolves, downloads or hashes the
@@ -289,8 +293,11 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		outputPath = e.preparedWindowPath(identity, request, resolver)
 		unlock := e.lockWindow(identity)
 		defer unlock()
-		if attestation, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, encoderVersion, encoderBuildSHA, expectedExtradata); cacheHit {
+		if attestation, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, expectedExtradata); cacheHit {
 			return cacheHitResult(identity, outputPath, request, attestation)
+		}
+		if err := ensureEncoderIdentity(); err != nil {
+			return fail("WINDOW_ENCODER_IDENTITY", err)
 		}
 	}
 
@@ -335,9 +342,12 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		outputPath = e.preparedWindowPath(identity, resolvedRequest, resolver)
 		unlock := e.lockWindow(identity)
 		defer unlock()
-		if attestation, cacheHit := readWindowArtifactAttestation(outputPath, resolvedRequest, e.profile, encoderVersion, encoderBuildSHA, expectedExtradata); cacheHit {
+		if attestation, cacheHit := readWindowArtifactAttestation(outputPath, resolvedRequest, e.profile, expectedExtradata); cacheHit {
 			return cacheHitResult(identity, outputPath, resolvedRequest, attestation)
 		}
+	}
+	if err := ensureEncoderIdentity(); err != nil {
+		return fail("WINDOW_ENCODER_IDENTITY", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fail("WINDOW_OUTPUT_DIRECTORY", err)
@@ -477,17 +487,13 @@ func (e *videoPrepareWindowExecutor) ProbeLocalPreparation(ctx context.Context, 
 	if request.SourceIdentityDiscovery {
 		return false, nil
 	}
-	encoderVersion, encoderBuildSHA, err := e.encoderIdentity(ctx)
-	if err != nil {
-		return false, err
-	}
 	expectedExtradata := contract.CanonicalVideoExtradataSHA256
 	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
 	if err != nil {
 		return false, err
 	}
 	outputPath := e.preparedWindowPath(identity, request, resolver)
-	_, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, encoderVersion, encoderBuildSHA, expectedExtradata)
+	_, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, expectedExtradata)
 	return cacheHit, nil
 }
 
@@ -539,7 +545,7 @@ func readWindowArtifactAttestation(
 	outputPath string,
 	request contract.VideoPrepareWindowV1,
 	profile contract.CanonicalVideoProfileV1,
-	encoderVersion, encoderBuildSHA, expectedExtradata string,
+	expectedExtradata string,
 ) (windowArtifactAttestation, bool) {
 	var attestation windowArtifactAttestation
 	data, err := os.ReadFile(outputPath + ".cert.json")
@@ -556,8 +562,8 @@ func readWindowArtifactAttestation(
 		attestation.SourceFPSNum != request.SourceFPSNum || attestation.SourceFPSDen != request.SourceFPSDen ||
 		attestation.SourceStartUS != request.SourceStartUS || attestation.SourceDurationUS != request.SourceDurationUS ||
 		attestation.OutputFrameCount != request.OutputFrameCount || attestation.OutputProfileID != request.OutputProfileID ||
-		attestation.OutputProfileRevision != request.OutputProfileRevision || attestation.EncoderVersion != encoderVersion ||
-		attestation.EncoderBuildSHA256 != encoderBuildSHA || !attestation.ClosedGOPAttested || !attestation.PacketCopyUsed ||
+		attestation.OutputProfileRevision != request.OutputProfileRevision || strings.TrimSpace(attestation.EncoderVersion) == "" ||
+		!isLowerSHA256(attestation.EncoderBuildSHA256) || !attestation.ClosedGOPAttested || !attestation.PacketCopyUsed ||
 		!isLowerSHA256(attestation.OutputSHA256) || attestation.OutputEvidence.ExtradataSHA256 != expectedExtradata ||
 		!windowEvidenceMatchesProfile(attestation.OutputEvidence, profile, request.OutputFrameCount) {
 		return windowArtifactAttestation{}, false

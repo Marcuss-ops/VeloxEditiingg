@@ -82,6 +82,75 @@ func TestVideoPrepareWindow_AcceptsPersistedV1AndRejectsInvalidRevision(t *testi
 	}
 }
 
+func TestProbeLocalPreparationCacheHitDoesNotRequireFFmpeg(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	revision, err := contract.VideoWindowPreparationRevision(profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contract.VideoPrepareWindowV1{
+		Version:          contract.VideoPrepareWindowVersion,
+		Source:           contract.AssetRefV2{AssetID: "source", SHA256: strings.Repeat("a", 64), SizeBytes: 123, Kind: "video"},
+		SourceStartFrame: 0, SourceFrameCount: 24, SourceFPSNum: profile.FPSNum, SourceFPSDen: profile.FPSDen,
+		OutputFrameCount: 24, TimelineRevision: 1, TimelineSHA256: strings.Repeat("b", 64),
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &videoPrepareWindowExecutor{
+		outputRoot: t.TempDir(), runner: &recordingWindowRunner{}, certifier: fixedWindowCertifier{frames: request.OutputFrameCount},
+		profile: profile, quality: quality,
+	}
+	outputPath := e.preparedWindowPath(identity, request, nil)
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outputPath, []byte("immutable prepared bytes"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestation := windowArtifactAttestation{
+		Version: contract.VideoPrepareWindowVersion, SourceSHA256: request.Source.SHA256,
+		SourceStartFrame: request.SourceStartFrame, SourceFrameCount: request.SourceFrameCount,
+		SourceFPSNum: request.SourceFPSNum, SourceFPSDen: request.SourceFPSDen,
+		OutputFrameCount: request.OutputFrameCount, OutputProfileID: request.OutputProfileID,
+		OutputProfileRevision: request.OutputProfileRevision, EncoderVersion: "original ffmpeg build",
+		EncoderBuildSHA256: strings.Repeat("c", 64), OutputSHA256: strings.Repeat("d", 64),
+		OutputSizeBytes: info.Size(), OutputModTimeUnixNano: info.ModTime().UnixNano(),
+		OutputEvidence: windowOutputEvidence{
+			Codec: profile.Codec, Profile: strings.ToLower(profile.CodecProfile), Level: canonicalLevelNumber(profile.CodecLevel),
+			Width: profile.Width, Height: profile.Height, PixelFormat: profile.PixelFormat,
+			FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, TimeBaseNum: profile.TimeBaseNum,
+			TimeBaseDen: profile.TimeBaseDen, BFrames: profile.BFrames, FrameCount: request.OutputFrameCount,
+			FirstFrameKeyframe: true, ExtradataSHA256: contract.CanonicalVideoExtradataSHA256,
+		},
+		ClosedGOPAttested: true, PacketCopyUsed: true,
+	}
+	data, err := json.Marshal(attestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outputPath+".cert.json", data, 0o440); err != nil {
+		t.Fatal(err)
+	}
+	spec := executor.TaskSpec{ExecutorID: VideoPrepareWindowID, Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	hit, err := e.ProbeLocalPreparation(ctx, spec, nil)
+	if err != nil {
+		t.Fatalf("cache probe unexpectedly required an executable FFmpeg: %v", err)
+	}
+	if !hit {
+		t.Fatal("valid immutable packet-copy attestation was not reused")
+	}
+}
+
 func TestTimestampMatchesFramesUsesRationalFrameRateAndMicrosecondQuantization(t *testing.T) {
 	tests := []struct {
 		name   string

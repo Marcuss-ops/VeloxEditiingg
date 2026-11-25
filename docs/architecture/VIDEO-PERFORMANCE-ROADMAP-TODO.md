@@ -277,11 +277,14 @@ benchmark evidence and digest promotion — remain open below.
   fan-out now lands through `publishWorkerPreparations`; when worker planning
   is wired, the Master fallback is disabled and a residual stock plan fails
   closed instead of downloading on the control plane.
-- [x] Reuse fragment certification evidence keyed by blob SHA-256, encoder
-  build revision and profile. Worker `video.prepare.window.v1` stores immutable
-  content-addressed blobs and output evidence in persistent cache, rebinds the
-  certificate to a new timeline, and warm reuse avoids encode, probe and SHA
-  rereads after stat/attestation checks. Master-side fragments carry their
+- [x] Reuse fragment certification evidence keyed by source-window identity,
+  canonical profile and output SHA-256. Worker `video.prepare.window.v1` stores
+  immutable content-addressed blobs and output evidence in persistent cache,
+  rebinds the certificate to a new timeline, and warm reuse avoids encode,
+  probe and SHA rereads after stat/attestation checks. The certificate keeps
+  the originating FFmpeg build as provenance; a warm hit validates the
+  recorded evidence and pinned avcC without launching the current FFmpeg.
+  Master-side fragments carry their
   certificate in the source metadata; `LookupPreparedWindowAsset` lets
   FINALIZE reuse a READY fragment from another job/worker before publishing a
   preparation task, and the reused bindings are persisted in
@@ -300,8 +303,9 @@ benchmark evidence and digest promotion — remain open below.
   normalization to produce byte-identical `avcC`.
 - [x] **Make the worker cache-first before source resolution.**
   `TaskRunner.ProbeLocalPreparation` asks the registered executor whether the
-  fragment identity, encoder build and canonical `avcC` already match a local
-  attestation. Dispatch skips both the legacy asset resolver and
+  fragment identity, immutable file metadata, canonical profile and `avcC`
+  already match a local attestation. A warm hit does not require the current
+  FFmpeg binary or version. Dispatch skips both the legacy asset resolver and
   `resolveCompiledRenderPlanAssets` on a hit; the executor serves the artifact
   without source bindings. A probe error is treated as a miss, so an
   unavailable probe never breaks a job that could still be prepared normally.

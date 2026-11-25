@@ -156,8 +156,9 @@
   same comparison; a formally valid 64-hex hash is no longer sufficient.
 - Worker dispatch is cache-first for prepared windows: before resolving or
   downloading the source it probes the worker-local fragment identity,
-  encoder build and canonical `avcC`. A hit skips both asset resolvers and
-  executes without source bindings; a probe error falls back to normal
+  immutable file metadata, profile and canonical `avcC`. A hit skips both
+  asset resolvers, does not need the current FFmpeg binary, and executes
+  without source bindings; an invalid local attestation falls back to normal
   resolution.
 - Cache-hit segments now report `frames_encoded = 0` instead of attributing
   the output frame count to a window that did not run FFmpeg. The exact
