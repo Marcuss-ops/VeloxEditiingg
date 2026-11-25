@@ -267,9 +267,10 @@ func timestampMatchesFrames(timestampUS, expectedFrames int64, fpsNum, fpsDen in
 	if frames > numerator/den {
 		remainder = den - remainder
 	}
-	// Allow the quantization introduced when a frame boundary is stored in
-	// microseconds (<= 0.5 us), represented in numerator units.
-	return remainder <= int64(fpsNum)/2+int64(fpsNum)%2
+	// Frame boundaries are stored as integer microseconds and producers may
+	// truncate or round the rational frame duration. Allow at most one
+	// microsecond of quantization, represented in numerator units.
+	return remainder <= int64(fpsNum)
 }
 
 func requestedWindowSeconds(request contract.VideoPrepareWindowV1) (float64, float64, bool) {

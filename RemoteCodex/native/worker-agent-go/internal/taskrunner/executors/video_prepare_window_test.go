@@ -86,6 +86,9 @@ func TestTimestampMatchesFramesUsesRationalFrameRateAndMicrosecondQuantization(t
 		want   bool
 	}{
 		{name: "integer fps exact", timeUS: 3_125_000, frames: 75, fpsNum: 24, fpsDen: 1, want: true},
+		{name: "integer fps truncated ten frames", timeUS: 416_666, frames: 10, fpsNum: 24, fpsDen: 1, want: true},
+		{name: "integer fps rounded ten frames", timeUS: 416_667, frames: 10, fpsNum: 24, fpsDen: 1, want: true},
+		{name: "integer fps more than one microsecond off", timeUS: 416_665, frames: 10, fpsNum: 24, fpsDen: 1, want: false},
 		{name: "fractional fps rounded one frame", timeUS: 41_708, frames: 1, fpsNum: 24_000, fpsDen: 1_001, want: true},
 		{name: "fractional fps rounded ten frames", timeUS: 417_083, frames: 10, fpsNum: 24_000, fpsDen: 1_001, want: true},
 		{name: "wrong frame count", timeUS: 417_083, frames: 9, fpsNum: 24_000, fpsDen: 1_001, want: false},
