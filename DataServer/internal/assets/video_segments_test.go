@@ -166,7 +166,7 @@ func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	}
 }
 
-func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
+func TestRegisterPreparedWindowRejectsNonCanonicalAVCCAndDeduplicatesCanonical(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is required for the prepared-window registry test")
 	}
@@ -190,6 +190,10 @@ func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
 	encode := exec.Command("ffmpeg", args...)
 	if output, err := encode.CombinedOutput(); err != nil {
 		t.Fatalf("generate canonical window: %v: %s", err, output)
+	}
+	preparedProbe, err := NewVideoTrimmer().Probe(context.Background(), preparedPath)
+	if err != nil {
+		t.Fatalf("probe generated window fixture: %v", err)
 	}
 	outputFile, err := os.Open(preparedPath)
 	if err != nil {
@@ -219,10 +223,12 @@ func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
 		OutputProfileRevision: request.OutputProfileRevision, EncoderVersion: "ffmpeg test",
 		EncoderBuildSHA256: strings.Repeat("c", 64), OutputSHA256: outputSHA, OutputSizeBytes: preparedInfo.Size(),
 		OutputEvidence: videoContract.VideoWindowOutputEvidenceV1{
-			Codec: profile.Codec, Profile: profile.CodecProfile, Level: 40, Width: profile.Width, Height: profile.Height,
-			PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen,
-			TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
-			BFrames: profile.BFrames, FrameCount: 48, FirstFrameKeyframe: true, ExtradataSHA256: strings.Repeat("d", 64),
+			Codec: preparedProbe.VideoCodec, Profile: preparedProbe.VideoProfile, Level: preparedProbe.VideoLevel,
+			Width: preparedProbe.Width, Height: preparedProbe.Height, PixelFormat: preparedProbe.PixelFormat,
+			FPSNum: preparedProbe.FPSNum, FPSDen: preparedProbe.FPSDen,
+			TimeBaseNum: preparedProbe.TimebaseNum, TimeBaseDen: preparedProbe.TimebaseDen,
+			BFrames: preparedProbe.BFrames, FrameCount: preparedProbe.FrameCount,
+			FirstFrameKeyframe: true, ExtradataSHA256: preparedProbe.ExtradataSHA256,
 		},
 		ClosedGOPAttested: true, PacketCopyUsed: true, SourceAssetID: request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
 		TimelineRevision: request.TimelineRevision, TimelineSHA256: request.TimelineSHA256,
@@ -232,6 +238,13 @@ func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
 		repo: repo, blobStore: &segmentTestBlobStore{root: filepath.Join(root, "assets")},
 		clock: clock.System{}, videoTrimmer: NewVideoTrimmer(),
 		security: inputsecurity.NewFetcher(inputsecurity.DefaultPolicy()), mediaMetadata: NewMediaMetadataResolver(),
+	}
+	if preparedProbe.ExtradataSHA256 != videoContract.CanonicalVideoExtradataSHA256 {
+		_, err := service.RegisterPreparedWindow(context.Background(), preparedPath, request, certificate)
+		if err == nil || !strings.Contains(err.Error(), "does not match canonical identity") {
+			t.Fatalf("non-canonical avcC was not rejected at the Master registration boundary: %v", err)
+		}
+		return
 	}
 	asset, err := service.RegisterPreparedWindow(context.Background(), preparedPath, request, certificate)
 	if err != nil {

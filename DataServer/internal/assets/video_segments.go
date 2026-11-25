@@ -550,6 +550,9 @@ func (s *AssetService) RegisterPreparedWindow(
 	if err != nil {
 		return nil, err
 	}
+	if probe.ExtradataSHA256 != contract.CanonicalVideoExtradataSHA256 {
+		return nil, fmt.Errorf("prepared window avcC %s does not match canonical identity %s", probe.ExtradataSHA256, contract.CanonicalVideoExtradataSHA256)
+	}
 	evidence := certificate.OutputEvidence
 	frames := evidence.FrameCount
 	if probe.FrameCount > 0 && probe.FrameCount != frames {

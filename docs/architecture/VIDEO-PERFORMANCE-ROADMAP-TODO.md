@@ -33,10 +33,11 @@ Targeted planner, contract, DataServer pipeline, task-contract and worker
 executor tests pass, including a direct-source execution test that verifies
 the worker sends the non-zero source offset to the native mux. Broader package
 runs still expose the documented local avcC mismatch (`667044…` vs pinned
-`7201ce…`) and a prepared-window registration fixture that rejects the local
-FFprobe profile. These failures must be resolved or classified before the full
-verification gate can be reported green. This working-tree change has not
-been deployed.
+`7201ce…`) in the shared FFmpeg encode tests. The Master now explicitly rejects
+that non-canonical avcC during prepared-window registration; the DataServer
+registration test passes by asserting this fail-closed behavior on the local
+FFmpeg build. The full verification gate is still not green. This working-tree
+change has not been deployed.
 
 The C++ `media_packet_pipeline_tests` and
 `render_copy_only_zero_intermediates_tests` also pass against the local LibAV
