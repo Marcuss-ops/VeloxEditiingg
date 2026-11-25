@@ -434,3 +434,33 @@ func assetSHA(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+func TestDiscoverLocalAssetSHA256FromCachedSource(t *testing.T) {
+	body := []byte("cached-drive-source-bytes")
+	path := filepath.Join(t.TempDir(), "source.mp4")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := discoverLocalAssetSHA256(path, int64(len(body)))
+	if err != nil {
+		t.Fatalf("discover source identity: %v", err)
+	}
+	want := sha256.Sum256(body)
+	if got != hex.EncodeToString(want[:]) {
+		t.Fatalf("discovered SHA-256 = %q, want %q", got, hex.EncodeToString(want[:]))
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("source file was changed or removed: %v", err)
+	}
+}
+
+func TestDiscoverLocalAssetSHA256RejectsSizeDrift(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "source.mp4")
+	if err := os.WriteFile(path, []byte("cached-drive-source-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discoverLocalAssetSHA256(path, 1); err == nil {
+		t.Fatal("expected size drift to fail identity discovery")
+	}
+}

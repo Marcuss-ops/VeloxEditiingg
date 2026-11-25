@@ -322,6 +322,17 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 		sha = strings.TrimSpace(asset.SHA256)
 	}
 	if request.SourceIdentityDiscovery {
+		// A Drive asset may already be present in the worker cache under its
+		// Drive file ID, while that cache binding has no content digest. The
+		// bytes are already local and verified by the common resolver; hash
+		// that same file to complete identity discovery without re-downloading
+		// or changing the Drive source.
+		if !isLowerHexSHA256(sha) {
+			sha, err = discoverLocalAssetSHA256(path, asset.SizeBytes)
+			if err != nil {
+				return nil, fmt.Errorf("video.prepare.window.v1: source identity discovery failed: %w", err)
+			}
+		}
 		if !isLowerHexSHA256(sha) || info.Size() != asset.SizeBytes {
 			return nil, fmt.Errorf("video.prepare.window.v1: source identity discovery failed (sha=%s size=%d)", sha, info.Size())
 		}
@@ -358,6 +369,17 @@ func firstNonBlank(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func discoverLocalAssetSHA256(path string, expectedSize int64) (string, error) {
+	sha, size, err := hashLocalAsset(path)
+	if err != nil {
+		return "", err
+	}
+	if size != expectedSize {
+		return "", fmt.Errorf("source size changed while discovering identity: got %d want %d", size, expectedSize)
+	}
+	return sha, nil
 }
 
 func hashLocalAsset(path string) (string, int64, error) {
