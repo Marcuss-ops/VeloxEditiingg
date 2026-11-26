@@ -126,6 +126,10 @@ func (runtimeFinalizeTestPreparer) PlanDriveStockWindowTasks(string, []map[strin
 	return nil, nil
 }
 
+func (runtimeFinalizeTestPreparer) PlanVideoSourceCertificationTasks(string, []map[string]interface{}) ([]contract.VideoSourceCertificationTaskV1, error) {
+	return nil, nil
+}
+
 type runtimeFinalizeTestNotifier struct{ jobs []string }
 
 func (n *runtimeFinalizeTestNotifier) NotifyTaskUpdated(_ context.Context, jobID string) {
@@ -168,6 +172,42 @@ func TestRuntimeFinalizationPublishesDurablePreparationFanOut(t *testing.T) {
 	}
 	if len(notifier.jobs) != 1 || notifier.jobs[0] != "job-1" {
 		t.Fatalf("notified jobs = %v, want [job-1]", notifier.jobs)
+	}
+}
+
+func TestRuntimeFinalizationPublishesArtifactFreeSourceCertification(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contract.VideoSourceCertificationV1{
+		Version:         contract.VideoSourceCertificationVersion,
+		Source:          contract.AssetRefV2{AssetID: "source-a", SourceKind: "drive", DriveFileID: "drive-a", Kind: "video", SHA256: strings.Repeat("a", 64), SizeBytes: 2048},
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	identity, err := contract.VideoSourceCertificationIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expander := &runtimeFinalizeTestExpander{}
+	notifier := &runtimeFinalizeTestNotifier{}
+	processor := &RuntimeFinalizationProcessor{expander: expander, notifier: notifier}
+	task := contract.VideoSourceCertificationTaskV1{Identity: identity, Request: request, AssetIDs: []string{"source-a"}}
+	if err := processor.publishSourceCertifications(context.Background(), taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-a", JobID: "job-a"}, []map[string]interface{}{{"asset_id": "source-a", "drive_file_id": "drive-a"}}, []contract.VideoSourceCertificationTaskV1{task}, `{"plan_version":2}`, strings.Repeat("b", 64), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(expander.additions) != 1 || expander.additions[0].ExecutorID != contract.VideoSourceCertificationExecutorID || len(expander.dependencies) != 1 {
+		t.Fatalf("source certification DAG = %+v", expander)
+	}
+	if _, exists := expander.additions[0].Payload[contract.VideoSourceCertificationPayloadKey]; !exists {
+		t.Fatal("source certification request missing from task payload")
+	}
+	if _, exists := expander.additions[0].Payload["outputs"]; exists {
+		t.Fatal("artifact-free source task unexpectedly declares outputs")
+	}
+	if expander.patch[runtimeSourceCertTasksKey] == nil || expander.patch["runtime_assets_pending"] != true || len(notifier.jobs) != 1 {
+		t.Fatalf("source certification finalization patch = %+v", expander.patch)
 	}
 }
 

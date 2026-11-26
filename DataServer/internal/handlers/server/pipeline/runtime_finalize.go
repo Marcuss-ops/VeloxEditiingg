@@ -27,6 +27,8 @@ const (
 	runtimePrepareTaskIDsKey          = "runtime_prepare_task_ids"
 	runtimePrepareTasksKey            = "runtime_prepare_window_tasks"
 	runtimePrepareWindowReuseKey      = "runtime_prepare_window_reuse"
+	runtimeSourceCertTaskIDsKey       = "runtime_source_certification_task_ids"
+	runtimeSourceCertTasksKey         = "runtime_source_certification_tasks"
 	runtimeFinalizeQueued             = "QUEUED"
 	runtimeFinalizeRunning            = "RUNNING"
 	runtimeFinalizeSucceeded          = "SUCCEEDED"
@@ -53,6 +55,10 @@ func isNilInterface(value interface{}) bool {
 
 type RuntimeStockWindowTaskPlanner interface {
 	PlanDriveStockWindowTasks(string, []map[string]interface{}) ([]contract.VideoPrepareWindowTaskV1, error)
+}
+
+type RuntimeSourceCertificationTaskPlanner interface {
+	PlanVideoSourceCertificationTasks(string, []map[string]interface{}) ([]contract.VideoSourceCertificationTaskV1, error)
 }
 
 // RuntimePreparedWindowCache exposes fragments already registered on this
@@ -125,6 +131,9 @@ func NewRuntimeFinalizationProcessor(
 	}
 	if isNilInterface(assets) {
 		return nil, errors.New("runtime finalizer: worker stock-window planner is not configured")
+	}
+	if planner, ok := interface{}(assets).(RuntimeSourceCertificationTaskPlanner); !ok || isNilInterface(planner) {
+		return nil, errors.New("runtime finalizer: immutable source certification planner is not configured")
 	}
 	if isNilInterface(notifier) {
 		return nil, errors.New("runtime finalizer: task update notifier is not configured")
@@ -259,6 +268,13 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 		}
 		return p.commitFinalization(ctx, candidate, patch)
 	}
+	if rawTasks, waiting := current[runtimeSourceCertTasksKey]; waiting {
+		patch, err := p.completeWorkerSourceCertifications(ctx, candidate, planJSON, req, current, bindings, rawTasks)
+		if err != nil {
+			return p.fail(ctx, candidate, err)
+		}
+		return p.commitFinalization(ctx, candidate, patch)
+	}
 	if enricher, ok := p.assets.(interface {
 		EnrichPlanWithSourceCertificates(context.Context, string, []map[string]interface{}) (string, error)
 	}); ok && strings.TrimSpace(planJSON) != "" {
@@ -291,6 +307,19 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 		req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
 		req.RuntimePayload["runtime_assets"] = bindings
 		req.RuntimePayload["runtime_stock_pool_snapshot"] = snapshot
+	}
+	if planner, ok := p.assets.(RuntimeSourceCertificationTaskPlanner); ok && strings.TrimSpace(planJSON) != "" {
+		certifications, planErr := planner.PlanVideoSourceCertificationTasks(planJSON, bindings)
+		if planErr != nil {
+			return p.fail(ctx, candidate, fmt.Errorf("plan immutable video source certification: %w", planErr))
+		}
+		if len(certifications) > 0 {
+			planHash := contract.HashCompiledPlanV2([]byte(planJSON))
+			if err := p.publishSourceCertifications(ctx, candidate, bindings, certifications, planJSON, planHash, stockPoolSnapshot); err != nil {
+				return p.fail(ctx, candidate, err)
+			}
+			return nil
+		}
 	}
 	if planner, ok := p.assets.(RuntimeStockWindowTaskPlanner); ok && strings.TrimSpace(planJSON) != "" {
 		preparations, planErr := planner.PlanDriveStockWindowTasks(planJSON, bindings)
@@ -423,6 +452,196 @@ func (p *RuntimeFinalizationProcessor) reusablePreparations(ctx context.Context,
 		reuse[preparation.Identity] = *binding
 	}
 	return reuse, misses, nil
+}
+
+func (p *RuntimeFinalizationProcessor) publishSourceCertifications(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, bindings []map[string]interface{}, tasks []contract.VideoSourceCertificationTaskV1, planJSON, planHash string, stockPoolSnapshot interface{}) error {
+	if p.expander == nil {
+		return errors.New("runtime finalizer: atomic task graph extension is unavailable")
+	}
+	additions := make([]taskgraph.ExpandedTask, 0, len(tasks))
+	dependencies := make([]string, 0, len(tasks))
+	identityToTask := make(map[string]string, len(tasks))
+	for _, task := range tasks {
+		if task.Identity == "" || len(task.Identity) < 24 || len(task.AssetIDs) == 0 {
+			return errors.New("runtime finalizer: source certification identity is invalid")
+		}
+		if err := task.Request.Validate(); err != nil {
+			return fmt.Errorf("runtime finalizer: invalid source certification request: %w", err)
+		}
+		canonicalIdentity, err := contract.VideoSourceCertificationIdentity(task.Request)
+		if err != nil || canonicalIdentity != task.Identity {
+			return errors.New("runtime finalizer: source certification identity does not match request")
+		}
+		taskID := candidate.TaskID + "-source-" + strings.TrimPrefix(task.Identity, "source:")[:24]
+		if strings.HasPrefix(task.Identity, "discovery:") {
+			taskID = candidate.TaskID + "-source-discovery-" + strings.TrimPrefix(task.Identity, "discovery:")[:24]
+		}
+		identityToTask[task.Identity] = taskID
+		dependencies = append(dependencies, taskID)
+		additions = append(additions, taskgraph.ExpandedTask{
+			TaskID: taskID, ExecutorID: contract.VideoSourceCertificationExecutorID, ExecutorVer: contract.VideoSourceCertificationVersion,
+			Payload: map[string]interface{}{
+				contract.VideoSourceCertificationPayloadKey: task.Request,
+				"runtime_assets":                        runtimeBindingsForSource(bindings, task.Request.Source),
+				"runtime_source_certification_identity": task.Identity,
+			},
+		})
+	}
+	patch := map[string]interface{}{
+		runtimeFinalizeStatusKey:    runtimeFinalizeWaitingPreparation,
+		runtimePrepareTaskIDsKey:    dependencies,
+		runtimeSourceCertTaskIDsKey: dependencies,
+		runtimeSourceCertTasksKey:   identityToTask,
+		"runtime_assets":            bindings,
+		"runtime_assets_pending":    true,
+	}
+	if planJSON != "" {
+		patch[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+	}
+	if planHash != "" {
+		patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+	}
+	if stockPoolSnapshot != nil {
+		patch["runtime_stock_pool_snapshot"] = stockPoolSnapshot
+	}
+	if _, err := p.expander.Extend(ctx, candidate.TaskID, additions, dependencies, patch); err != nil {
+		return fmt.Errorf("runtime finalizer: publish source certification DAG: %w", err)
+	}
+	p.notifier.NotifyTaskUpdated(ctx, candidate.JobID)
+	log.Printf("[PIPELINE] runtime FINALIZE published source certification DAG job_id=%s task_id=%s sources=%d", candidate.JobID, candidate.TaskID, len(additions))
+	return nil
+}
+
+func (p *RuntimeFinalizationProcessor) completeWorkerSourceCertifications(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, planJSON string, req FinalizeJobRequest, current map[string]interface{}, bindings []map[string]interface{}, rawTasks interface{}) (map[string]interface{}, error) {
+	planner, ok := p.assets.(RuntimeSourceCertificationTaskPlanner)
+	if !ok || isNilInterface(planner) || isNilInterface(p.evidence) {
+		return nil, errors.New("runtime finalizer: source certification recovery is not configured")
+	}
+	encoded, err := json.Marshal(rawTasks)
+	if err != nil {
+		return nil, fmt.Errorf("decode source certification task map: %w", err)
+	}
+	var identityToTask map[string]string
+	if err := json.Unmarshal(encoded, &identityToTask); err != nil || len(identityToTask) == 0 {
+		return nil, errors.New("runtime finalizer: source certification task map is invalid")
+	}
+	tasks, err := planner.PlanVideoSourceCertificationTasks(planJSON, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("rebuild source certification plan: %w", err)
+	}
+	byIdentity := make(map[string]contract.VideoSourceCertificationTaskV1, len(tasks))
+	taskIDs := make([]string, 0, len(identityToTask))
+	taskToIdentity := make(map[string]string, len(identityToTask))
+	for _, task := range tasks {
+		byIdentity[task.Identity] = task
+	}
+	for identity, taskID := range identityToTask {
+		if _, exists := byIdentity[identity]; !exists || taskID == "" {
+			return nil, fmt.Errorf("runtime finalizer: source certification %q no longer matches immutable plan", identity)
+		}
+		taskIDs = append(taskIDs, taskID)
+		taskToIdentity[taskID] = identity
+	}
+	segmentEvidence, err := p.evidence.ListSuccessfulSegmentTimings(ctx, taskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("runtime finalizer: read source certification evidence: %w", err)
+	}
+	certificates := make(map[string]contract.VideoSourceCertificateV1, len(identityToTask))
+	for _, segment := range segmentEvidence {
+		identity := taskToIdentity[segment.TaskID]
+		task, exists := byIdentity[identity]
+		if !exists || segment.SourceType != contract.VideoSourceCertificationExecutorID || segment.Status != "succeeded" || segment.MetadataJSON == "" {
+			continue
+		}
+		var certificate contract.VideoSourceCertificateV1
+		if err := json.Unmarshal([]byte(segment.MetadataJSON), &certificate); err != nil {
+			return nil, fmt.Errorf("runtime finalizer: decode source certificate for %s: %w", segment.TaskID, err)
+		}
+		if err := certificate.Validate(); err != nil || certificate.Chunks == nil || certificate.SHA256 == "" || certificate.SizeBytes != task.Request.Source.SizeBytes || certificate.ProfileID != task.Request.OutputProfileID || certificate.PreparationRevision != task.Request.OutputProfileRevision || (task.Request.Source.SHA256 != "" && certificate.SHA256 != task.Request.Source.SHA256) {
+			return nil, fmt.Errorf("runtime finalizer: invalid full-source certificate for %s", segment.TaskID)
+		}
+		if err := certificate.Chunks.Validate(certificate.SizeBytes); err != nil {
+			return nil, fmt.Errorf("runtime finalizer: invalid authenticated source blocks for %s: %w", segment.TaskID, err)
+		}
+		certificates[identity] = certificate
+	}
+	if len(certificates) != len(byIdentity) {
+		return nil, fmt.Errorf("runtime finalizer: recovered %d of %d source certificates", len(certificates), len(byIdentity))
+	}
+	certifiedBindings, err := bindSourceCertificateIdentities(bindings, byIdentity, certificates)
+	if err != nil {
+		return nil, err
+	}
+	enricher, ok := p.assets.(RuntimeSourceCertificateEnricher)
+	if !ok || isNilInterface(enricher) {
+		return nil, errors.New("runtime finalizer: source certificate plan enricher is not configured")
+	}
+	enriched, err := enricher.EnrichPlanWithSourceCertificates(ctx, planJSON, certifiedBindings)
+	if err != nil {
+		return nil, fmt.Errorf("runtime finalizer: project certified sources into plan: %w", err)
+	}
+	remaining, err := planner.PlanVideoSourceCertificationTasks(enriched, certifiedBindings)
+	if err != nil || len(remaining) != 0 {
+		if err != nil {
+			return nil, fmt.Errorf("runtime finalizer: validate certified plan: %w", err)
+		}
+		return nil, errors.New("runtime finalizer: source certificates did not resolve all required sources")
+	}
+	if req.RuntimePayload == nil {
+		req.RuntimePayload = make(map[string]interface{})
+	}
+	planHash := contract.HashCompiledPlanV2([]byte(enriched))
+	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = enriched
+	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+	req.RuntimePayload["runtime_assets"] = certifiedBindings
+	req.RuntimeAssets = certifiedBindings
+	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, enriched, req, current, p.assets)
+	if err != nil {
+		return nil, err
+	}
+	patch[contract.PayloadKeyCompiledRenderPlanJSON] = enriched
+	patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+	patch["runtime_assets"] = certifiedBindings
+	patch[runtimePrepareTaskIDsKey] = nil
+	patch[runtimePrepareTasksKey] = nil
+	patch[runtimeSourceCertTaskIDsKey] = nil
+	patch[runtimeSourceCertTasksKey] = nil
+	return patch, nil
+}
+
+func bindSourceCertificateIdentities(bindings []map[string]interface{}, tasks map[string]contract.VideoSourceCertificationTaskV1, certificates map[string]contract.VideoSourceCertificateV1) ([]map[string]interface{}, error) {
+	out := make([]map[string]interface{}, len(bindings))
+	for i, binding := range bindings {
+		copyBinding := make(map[string]interface{}, len(binding)+2)
+		for key, value := range binding {
+			copyBinding[key] = value
+		}
+		for identity, task := range tasks {
+			certificate, exists := certificates[identity]
+			if !exists {
+				continue
+			}
+			assetID := runtimeBindingString(copyBinding, "asset_id", "id")
+			driveID := runtimeBindingString(copyBinding, "drive_file_id")
+			matches := false
+			for _, candidate := range task.AssetIDs {
+				matches = matches || candidate == assetID
+			}
+			matches = matches || (task.Request.Source.DriveFileID != "" && task.Request.Source.DriveFileID == driveID)
+			if !matches {
+				continue
+			}
+			declaredSHA := runtimeBindingString(copyBinding, "source_sha256", "sha256", "asset_sha256")
+			declaredSize := runtimeBindingInt64(copyBinding, "size_bytes")
+			if (declaredSHA != "" && !strings.EqualFold(declaredSHA, certificate.SHA256)) || (declaredSize > 0 && declaredSize != certificate.SizeBytes) {
+				return nil, fmt.Errorf("runtime source binding conflicts with certificate for %s", assetID)
+			}
+			copyBinding["source_sha256"] = certificate.SHA256
+			copyBinding["size_bytes"] = certificate.SizeBytes
+		}
+		out[i] = copyBinding
+	}
+	return out, nil
 }
 
 func validPreparedWindowBinding(binding voiceoverassets.PreparedWindowAssetBinding) bool {

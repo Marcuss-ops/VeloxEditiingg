@@ -151,6 +151,7 @@ func TestCommitSourceCertificateNeedsNoPreparedAssetAndIsFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	certificate := contract.VideoSourceCertificateV1{
+		Chunks:  &contract.VideoSourceChunksV1{ChunkSize: contract.VideoSourceChunkSize, SHA256: []string{strings.Repeat("c", 64)}},
 		Version: 1, SHA256: strings.Repeat("b", 64), SizeBytes: request.Source.SizeBytes,
 		ProfileID: profile.ProfileID, PreparationRevision: revision, DurationUS: 5_000_000, KeyframesUS: []int64{0},
 		Evidence: contract.VideoWindowOutputEvidenceV1{

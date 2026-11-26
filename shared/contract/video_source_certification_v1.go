@@ -23,6 +23,12 @@ type VideoSourceCertificationV1 struct {
 	OutputProfileRevision string     `json:"output_profile_revision"`
 }
 
+type VideoSourceCertificationTaskV1 struct {
+	Identity string                     `json:"identity"`
+	Request  VideoSourceCertificationV1 `json:"request"`
+	AssetIDs []string                   `json:"asset_ids"`
+}
+
 func (r VideoSourceCertificationV1) Validate() error {
 	if r.Version != VideoSourceCertificationVersion {
 		return fmt.Errorf("video.source.certify.v1: unsupported version %d", r.Version)
