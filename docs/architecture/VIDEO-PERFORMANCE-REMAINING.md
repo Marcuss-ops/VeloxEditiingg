@@ -1,6 +1,10 @@
 # Video performance: remaining work
 
-Tracking issue: [#38 — Complete source certification and retire remaining render work](https://github.com/Marcuss-ops/VeloxEditiingg/issues/38)
+Production evidence: [2026-11-26 live report](VIDEO-PERFORMANCE-LIVE-2026-11-26.md).
+
+Legacy retirement follow-up: tracked separately after the production inventory;
+do not remove legacy executors until open dead letters and persisted references
+have a safe migration/drain plan.
 
 Audit base: `main` at `e8a0d0f9` (2026-11-26).
 
@@ -24,9 +28,9 @@ Audit base: `main` at `e8a0d0f9` (2026-11-26).
   worker race suite passes locally. Commit `e8a0d0f9` adds complete native
   source inspection and was pushed to `main`.
 
-## Remaining
+## Status and remaining work
 
-### 1. Native source certification — implemented locally
+### 1. Native source certification — deployed and verified
 
 The worker now calls `velox_video_engine --probe-source`, backed by a complete
 LibAV packet walk and decoded-frame count. It validates codec/profile/extradata,
@@ -35,56 +39,58 @@ declared frame rates, and packet keyframe timestamps. New source certificates
 retain the verified origin and average-rate facts. The packet mux continues to
 inspect the H.264 access unit and requires IDR at each requested boundary.
 The worker image build now requires LibAV, so this capability cannot silently
-ship in the FFprobe-only compatibility configuration.
+ship in the FFprobe-only compatibility configuration. Production deployment
+and successful cold/warm execution are recorded in the live report.
 
 ### 2. Persisted legacy work
 
-Inventory persisted TaskGraph tasks, attempts, retries and recovery references
-for `video.prepare.window.v1` and `video.assemble.slice.v1`. Migrate or drain
-persisted work before retiring their executors, contracts, cache paths or
-wrappers. Before any exported-symbol or cross-package removal commit, run:
+The production inventory is complete and recorded in the live report. It found
+498 OPEN dead-letter entries, 5,108 task-spec references, and 783,337 task-ID
+references. Migrate or drain persisted work before retiring executors,
+contracts, cache paths or wrappers. Before any exported-symbol or cross-package
+removal commit, run:
 
 ```bash
 bash scripts/ci/pre-removal-verify.sh
 ```
 
 The read-only report is available as
-`scripts/ops/audit-legacy-video-tasks.py --db "$VELOX_DB_PATH" --json` and
-must run against the production Master database before any legacy removal.
+`scripts/ops/audit-legacy-video-tasks.py --db "$VELOX_DB_PATH" --json`.
+Legacy retirement remains open; no destructive migration was attempted.
 
 ### 3. Transfer and cache measurements
 
-Measure cold and warm cache behavior, full-download versus authenticated-range
-bytes, local I/O, duplicate downloads/certifications and task counts. Keep
-cryptographic verification. Optimize the read/hash path only when measurements
-show a material gain.
+Focused production cold/warm cache behavior, transfer bytes, source-certificate
+time and task counts are recorded in the live report. The exact
+`gervais-final-v1` stock/voiceover/music/ASS comparison, authenticated-range
+versus full-download matrix, and local disk-I/O measurements remain open.
+Keep cryptographic verification; optimize the read/hash path only when
+measurements show a material gain.
 
 ### 4. Image release and production proof
 
 - [x] Local worker image build succeeds from commit `e8a0d0f9`; native LibAV
   is enabled and the complete C++ test suite passes in the build.
-- [x] GitHub worker-image workflow builds, signs, verifies and certifies the
-  immutable digest
-  `ghcr.io/marcuss-ops/velox-worker@sha256:bff23b4b910851bbf9cdb40adeb972d2111adeaed931b70a6434c462cb1d30e4`.
-  Worker race tests and image smoke passed in
-  [run 45814976896](https://github.com/Marcuss-ops/VeloxEditiingg/actions/runs/45814976896).
-- [x] FleetController drained `host_57_129_132_133`, deployed that exact
-  digest, and verified the authenticated running digest. Update operation:
-  `deploy-host_57_129_132_133-1795694584711984868` (SUCCEEDED).
-- [ ] Resume the worker. The canonical resume operation refused placement
-  because its fresh Level-D smoke could not download the configured asset:
-  `curl` on the worker could not connect to `localhost:8000`. The worker
-  remains DRAINING; repair the Master smoke asset pickup URL/configuration,
-  then rerun the resume smoke gate. Do not bypass the gate.
-- [ ] Run authorized cold/warm production renders and record process counts,
-  intermediate bytes/uploads, transferred bytes and wall time against the
-  agreed PERFLIVE baselines.
+- [x] GitHub built, signed, verified and certified worker digest
+  `ghcr.io/marcuss-ops/velox-worker@sha256:2a05e76c13d47a1aa9cc3e79217a93a456419de6656bacaba405f0be27aa87c0`
+  in [run 45824073441](https://github.com/Marcuss-ops/VeloxEditiingg/actions/runs/45824073441).
+- [x] FleetController deployed the signed worker digest to
+  `host_57_129_132_133`; update operation
+  `fed9b40b-1344-4281-842e-9195ce7721b6` SUCCEEDED.
+- [x] Master image digest
+  `ghcr.io/marcuss-ops/velox-server@sha256:869c1ff9cf7e36ed77770c0dd6ac6c1cce99ec272ddb474d747cc30e71a07840`
+  was signed/verified, deployed locally, and reports commit `a5dc8323` ready.
+- [x] Correct the Master smoke pickup URL and pass the canonical resume gate;
+  worker is CONNECTED/HEALTHY.
+- [x] Run a production cold/warm synthetic source-certification and direct-copy
+  render pair; record job IDs, task counts, cache transfer, duration, output
+  hashes, and deployed digests in the live report. This is not the full
+  `gervais-final-v1` PERFLIVE matrix; OS process-launch counts are unavailable.
 
-The legacy task inventory is also still open. The production API token can
-read fleet operations, but the canonical Master SSH identity rejected the
-session and no SQLite snapshot was available. Run the read-only audit against
-the Master DB once that access is restored; do not remove legacy executors
-before inventorying persisted tasks, attempts, and references.
+The production legacy task inventory is complete. Executor retirement remains
+open because 498 dead letters are OPEN and historical references remain. No
+legacy executor removal is safe until those entries and references are
+migrated or drained.
 
 Do not claim production performance improvements based on source inspection,
 local tests or an image build alone.
