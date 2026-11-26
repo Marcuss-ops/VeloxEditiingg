@@ -41,9 +41,9 @@ func TestPlanDriveStockWindowTasksDeduplicatesImmutableWindowsWithoutDownloading
 		t.Fatalf("known immutable source scheduled %d preparation tasks; direct assembly should decide compatibility", len(tasks))
 	}
 
-	// If the immutable digest has not yet been copied into the plan itself, the
-	// enrichment step must do that before deciding to bypass preparation. Until
-	// then the planner still publishes a worker task with the known digest.
+	// A runtime binding may already provide the immutable source identity even
+	// before it has been projected into the plan. That still must not schedule
+	// a per-window MP4: source certification is planned separately by identity.
 	plan.Assets[0].SHA256 = ""
 	sourcePlan, err := json.Marshal(plan)
 	if err != nil {
@@ -52,11 +52,8 @@ func TestPlanDriveStockWindowTasksDeduplicatesImmutableWindowsWithoutDownloading
 	known, err := service.PlanDriveStockWindowTasks(string(sourcePlan), []map[string]interface{}{{
 		"asset_id": "drive-source", "source_sha256": sha, "size_bytes": int64(1_000_000),
 	}})
-	if err != nil || len(known) != 1 {
+	if err != nil || len(known) != 0 {
 		t.Fatalf("known source planning: tasks=%v err=%v", known, err)
-	}
-	if known[0].Request.SourceIdentityDiscovery || known[0].Request.Source.SHA256 != sha {
-		t.Fatalf("known SHA lost: %+v", known[0].Request)
 	}
 	plan.Assets[0].SHA256 = sha
 

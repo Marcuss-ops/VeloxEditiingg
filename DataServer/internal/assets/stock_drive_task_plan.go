@@ -87,7 +87,7 @@ func (s *AssetService) PlanDriveStockWindowTasks(planJSON string, runtimeAssets 
 			// complete source through the SHA-verifying asset path, and the native
 			// packet mux independently checks canonical stream compatibility and
 			// the exact IDR boundary. Unknown identities still use discovery.
-			if validStockSourceSHA256(asset.SHA256) && asset.SizeBytes > 0 {
+			if validStockSourceSHA256(sha) && size > 0 {
 				continue
 			}
 			// An unknown SHA is not a reason to materialize bytes on the

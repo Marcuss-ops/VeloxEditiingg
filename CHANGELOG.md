@@ -47,6 +47,9 @@
   invalidated. Media inspection still invokes FFprobe and remains a candidate
   for consolidation into the existing LibAV engine after equivalent packet,
   timestamp, IDR and stream-profile evidence is available there.
+- Window planning now uses the reconciled SHA-256 and size from runtime source
+  bindings, so a known immutable source never creates a redundant per-window
+  fragment task while its source certificate is being established.
 
 ### Performance — fetch authenticated source ranges for direct assembly
 
