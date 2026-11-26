@@ -106,6 +106,14 @@ type assetSourceAssetsReader interface {
 	GetBySourceReferences(ctx context.Context, references []string) (map[string]*AssetRecord, error)
 }
 
+// sourceCertificateRegistry stores reusable media evidence by immutable
+// content identity, independently of whether a prepared fragment exists.
+type sourceCertificateRegistry interface {
+	GetVideoSourceCertificates(ctx context.Context, references []string) (map[string]string, error)
+	PutVideoSourceCertificate(ctx context.Context, reference, sha256 string, sizeBytes int64, revision, metadataJSON, createdAt string) error
+	ReplaceVideoSourceCertificate(ctx context.Context, reference, expectedJSON, metadataJSON string) (bool, error)
+}
+
 // NewAssetService creates a new generic asset service.
 func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *ResolverRegistry, c clock.Clock) *AssetService {
 	if c == nil {

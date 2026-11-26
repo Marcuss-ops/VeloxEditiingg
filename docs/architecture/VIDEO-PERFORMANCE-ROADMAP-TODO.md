@@ -7,10 +7,11 @@ Status updated: 2026-11-26
 Full-source certificates now optionally carry SHA-256 evidence for fixed
 1 MiB source blocks. Workers produce the block list while rereading a complete
 source whose whole-file SHA and exact frame facts have already been verified;
-the evidence is stored in the existing certificate registry and may be
-upgraded from a prior certificate without block hashes. Conflicting source or
-block evidence is rejected. Sources above 1 GiB omit this optional evidence
-and continue through complete download.
+the evidence is stored in the dedicated `video_source_certificates` registry,
+independent of media asset/blob rows, and may be upgraded from a prior
+certificate without block hashes. Conflicting source or block evidence is
+rejected. Sources above 1 GiB omit this optional evidence and continue through
+complete download.
 
 When a cold approved HTTPS video source has a complete block certificate and every
 referenced segment is directly packet-copy eligible, the assembly resolver
@@ -41,8 +42,9 @@ Still open: a source with no immutable SHA requires identity discovery, which
 currently uses `video.prepare.window.v1` and produces a packet-copy fragment.
 That discovery result cannot yet be reused by the same first job as a
 source-only certificate because the persisted task/result contract requires a
-registered prepared asset. No second preparer or silent no-op completion is
-safe here.
+registered prepared asset. The certificate registry is now blob-independent,
+but no certificate-only task completion has been wired yet. No silent no-op
+completion is safe here.
 
 ## 2026-11-26 — remaining source-contract work
 

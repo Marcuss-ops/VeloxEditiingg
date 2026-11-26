@@ -14,8 +14,8 @@ func sourceCertificateReference(sha, revision string) string {
 	return "certified-video-source:" + sha + ":" + revision
 }
 
-// Source facts share the existing evidence registry, anchored to the independently
-// verified fragment that first carried them. No source bytes enter the Master.
+// Source facts are indexed independently by immutable source identity. Older
+// repositories retain a fragment-anchored fallback during migration.
 func (s *AssetService) registerSourceCertificate(ctx context.Context, asset *Asset, source *contract.VideoSourceCertificateV1) (*Asset, error) {
 	if source == nil {
 		return asset, nil
@@ -26,6 +26,63 @@ func (s *AssetService) registerSourceCertificate(ctx context.Context, asset *Ass
 	metadata, err := json.Marshal(source)
 	if err != nil {
 		return nil, err
+	}
+	if registry, ok := s.repo.(sourceCertificateRegistry); ok {
+		reference := sourceCertificateReference(source.SHA256, source.PreparationRevision)
+		existing, readErr := registry.GetVideoSourceCertificates(ctx, []string{reference})
+		if readErr != nil {
+			return nil, fmt.Errorf("read source certificate before registration: %w", readErr)
+		}
+		if previousJSON := existing[reference]; previousJSON != "" {
+			var previous contract.VideoSourceCertificateV1
+			if json.Unmarshal([]byte(previousJSON), &previous) != nil || previous.Validate() != nil {
+				return nil, fmt.Errorf("stored source certificate is invalid")
+			}
+			previousChunks := previous.Chunks
+			if !sameSourceCertificateFacts(previous, *source) {
+				return nil, fmt.Errorf("source certificate conflicts with existing immutable evidence")
+			}
+			if previousChunks != nil {
+				if source.Chunks != nil && !sameSourceChunks(previousChunks, source.Chunks) {
+					return nil, fmt.Errorf("source blocks conflict with existing immutable evidence")
+				}
+				return asset, nil
+			}
+			if source.Chunks == nil {
+				return asset, nil
+			}
+			upgraded, updateErr := registry.ReplaceVideoSourceCertificate(ctx, reference, previousJSON, string(metadata))
+			if updateErr != nil {
+				return nil, updateErr
+			}
+			if !upgraded {
+				latest, latestErr := registry.GetVideoSourceCertificates(ctx, []string{reference})
+				if latestErr != nil {
+					return nil, latestErr
+				}
+				var concurrent contract.VideoSourceCertificateV1
+				if json.Unmarshal([]byte(latest[reference]), &concurrent) != nil || concurrent.Validate() != nil || concurrent.Chunks == nil || source.Chunks == nil || !sameSourceCertificateFacts(concurrent, *source) || !sameSourceChunks(concurrent.Chunks, source.Chunks) {
+					return nil, fmt.Errorf("concurrent source certificate upgrade conflicts with immutable evidence")
+				}
+			}
+			return asset, nil
+		}
+		if err := registry.PutVideoSourceCertificate(ctx, reference, source.SHA256, source.SizeBytes, source.PreparationRevision, string(metadata), s.clock.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return nil, fmt.Errorf("register source certificate: %w", err)
+		}
+		// INSERT OR IGNORE makes registration safe under races. Verify that a
+		// concurrent producer did not win with conflicting immutable evidence.
+		stored, readErr := registry.GetVideoSourceCertificates(ctx, []string{reference})
+		if readErr != nil {
+			return nil, fmt.Errorf("verify source certificate registration: %w", readErr)
+		}
+		if stored[reference] != string(metadata) {
+			var previous contract.VideoSourceCertificateV1
+			if json.Unmarshal([]byte(stored[reference]), &previous) != nil || previous.Validate() != nil || !sameSourceCertificateFacts(previous, *source) || !sameSourceChunks(previous.Chunks, source.Chunks) {
+				return nil, fmt.Errorf("concurrent source certificate conflicts with immutable evidence")
+			}
+		}
+		return asset, nil
 	}
 	if reader, ok := s.repo.(assetSourceAssetReader); ok {
 		existing, readErr := reader.GetBySourceReference(ctx, sourceCertificateReference(source.SHA256, source.PreparationRevision))
@@ -72,6 +129,20 @@ func (s *AssetService) registerSourceCertificate(ctx context.Context, asset *Ass
 	return asset, nil
 }
 
+func sameSourceCertificateFacts(left, right contract.VideoSourceCertificateV1) bool {
+	left.Chunks = nil
+	right.Chunks = nil
+	a, errA := json.Marshal(left)
+	b, errB := json.Marshal(right)
+	return errA == nil && errB == nil && string(a) == string(b)
+}
+
+func sameSourceChunks(left, right *contract.VideoSourceChunksV1) bool {
+	a, errA := json.Marshal(left)
+	b, errB := json.Marshal(right)
+	return errA == nil && errB == nil && string(a) == string(b)
+}
+
 // EnrichPlanWithSourceCertificates projects existing immutable source evidence
 // into the plan before stock selection and dependency planning. Missing proofs
 // retain worker preparation. Store failures fail FINALIZE instead of hiding a miss.
@@ -88,8 +159,9 @@ func (s *AssetService) EnrichPlanWithSourceCertificates(ctx context.Context, pla
 	if err != nil {
 		return "", err
 	}
-	reader, ok := s.repo.(assetSourceAssetReader)
-	if !ok {
+	reader, legacyReaderOK := s.repo.(assetSourceAssetReader)
+	registry, registryOK := s.repo.(sourceCertificateRegistry)
+	if !legacyReaderOK && !registryOK {
 		return "", fmt.Errorf("source certificate reverse index unavailable")
 	}
 	bindings := stockRuntimeBindings(runtimeAssets)
@@ -137,33 +209,47 @@ func (s *AssetService) EnrichPlanWithSourceCertificates(ctx context.Context, pla
 		}
 	}
 	var records map[string]*AssetRecord
+	var independent map[string]string
+	references := make([]string, 0, len(plan.Assets))
+	seenReferences := make(map[string]bool)
+	for _, asset := range plan.Assets {
+		if asset.Kind != "video" {
+			continue
+		}
+		sha := asset.SHA256
+		if sha == "" {
+			sha = bindingString(stockRuntimeBindingForAsset(asset, bindings), "source_sha256", "sha256", "asset_sha256")
+		}
+		if !validStockSourceSHA256(sha) {
+			continue
+		}
+		reference := sourceCertificateReference(sha, revision)
+		if !seenReferences[reference] {
+			references = append(references, reference)
+			seenReferences[reference] = true
+		}
+	}
+	if registryOK && len(references) > 0 {
+		independent, err = registry.GetVideoSourceCertificates(ctx, references)
+		if err != nil {
+			return "", fmt.Errorf("batch lookup source certificates: %w", err)
+		}
+	}
 	batch, batchOK := s.repo.(assetSourceAssetsReader)
-	if batchOK {
-		references := make([]string, 0, len(plan.Assets))
-		seen := make(map[string]bool)
-		for _, asset := range plan.Assets {
-			if asset.Kind != "video" {
-				continue
-			}
-			sha := asset.SHA256
-			if sha == "" {
-				sha = bindingString(stockRuntimeBindingForAsset(asset, bindings), "source_sha256", "sha256", "asset_sha256")
-			}
-			if !validStockSourceSHA256(sha) {
-				continue
-			}
-			ref := sourceCertificateReference(sha, revision)
-			if !seen[ref] {
-				references = append(references, ref)
-				seen[ref] = true
+	legacyReferences := references
+	if registryOK {
+		legacyReferences = legacyReferences[:0]
+		for _, reference := range references {
+			if independent[reference] == "" {
+				legacyReferences = append(legacyReferences, reference)
 			}
 		}
-		if len(references) > 0 {
-			var readErr error
-			records, readErr = batch.GetBySourceReferences(ctx, references)
-			if readErr != nil {
-				return "", fmt.Errorf("batch lookup source certificates: %w", readErr)
-			}
+	}
+	if batchOK && len(legacyReferences) > 0 {
+		var readErr error
+		records, readErr = batch.GetBySourceReferences(ctx, legacyReferences)
+		if readErr != nil {
+			return "", fmt.Errorf("batch lookup source certificates: %w", readErr)
 		}
 	}
 	retained := plan.Assets[:0]
@@ -188,22 +274,34 @@ func (s *AssetService) EnrichPlanWithSourceCertificates(ctx context.Context, pla
 			continue
 		}
 		ref := sourceCertificateReference(sha, revision)
-		record := records[ref]
-		if !batchOK {
+		var metadataJSON string
+		if registryOK {
+			metadataJSON = independent[ref]
+		}
+		if metadataJSON == "" {
+			if record := records[ref]; record != nil && record.Status == AssetStatusReady {
+				metadataJSON = record.MetadataJSON
+			}
+		}
+		if metadataJSON == "" && !batchOK && !registryOK {
 			var readErr error
+			var record *AssetRecord
 			record, readErr = reader.GetBySourceReference(ctx, ref)
 			if readErr != nil {
 				return "", fmt.Errorf("lookup source certificate: %w", readErr)
 			}
+			if record != nil && record.Status == AssetStatusReady {
+				metadataJSON = record.MetadataJSON
+			}
 		}
-		if record == nil || record.Status != AssetStatusReady {
+		if metadataJSON == "" {
 			if !added[asset.AssetID] {
 				retained = append(retained, asset)
 			}
 			continue
 		}
 		var source contract.VideoSourceCertificateV1
-		if json.Unmarshal([]byte(record.MetadataJSON), &source) != nil || source.Validate() != nil || source.SHA256 != sha || source.SizeBytes != size || source.ProfileID != profile.ProfileID || source.PreparationRevision != revision {
+		if json.Unmarshal([]byte(metadataJSON), &source) != nil || source.Validate() != nil || source.SHA256 != sha || source.SizeBytes != size || source.ProfileID != profile.ProfileID || source.PreparationRevision != revision {
 			if !added[asset.AssetID] {
 				retained = append(retained, asset)
 			}

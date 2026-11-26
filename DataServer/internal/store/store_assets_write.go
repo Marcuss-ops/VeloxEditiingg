@@ -198,6 +198,49 @@ func (r *SQLiteAssetRepository) InsertSource(ctx context.Context, s AssetSourceR
 	return nil
 }
 
+// PutVideoSourceCertificate writes reusable source evidence without creating
+// or referencing an asset blob. Callers validate immutable conflicts before
+// invoking this method; ON CONFLICT is deliberately ignored so a racing
+// producer cannot replace the first committed certificate.
+func (r *SQLiteAssetRepository) PutVideoSourceCertificate(ctx context.Context, reference, sha256 string, sizeBytes int64, revision, metadataJSON, createdAt string) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("asset repository: store not initialized")
+	}
+	if strings.TrimSpace(reference) == "" || len(sha256) != 64 || sizeBytes <= 0 || strings.TrimSpace(revision) == "" || strings.TrimSpace(metadataJSON) == "" {
+		return fmt.Errorf("asset repository: incomplete video source certificate identity")
+	}
+	if strings.TrimSpace(createdAt) == "" {
+		createdAt = nowRFC3339()
+	}
+	_, err := r.store.db.ExecContext(ctx, `INSERT OR IGNORE INTO video_source_certificates
+		(source_reference,source_sha256,source_size_bytes,profile_revision,certificate_json,created_at)
+		VALUES(?,?,?,?,?,?)`, reference, sha256, sizeBytes, revision, metadataJSON, createdAt)
+	if err != nil {
+		return fmt.Errorf("put video source certificate: %w", err)
+	}
+	return nil
+}
+
+// ReplaceVideoSourceCertificate upgrades optional evidence only when the
+// previously read certificate is still the row's current value.
+func (r *SQLiteAssetRepository) ReplaceVideoSourceCertificate(ctx context.Context, reference, expectedJSON, metadataJSON string) (bool, error) {
+	if r.store == nil || r.store.db == nil {
+		return false, fmt.Errorf("asset repository: store not initialized")
+	}
+	if strings.TrimSpace(reference) == "" || strings.TrimSpace(expectedJSON) == "" || strings.TrimSpace(metadataJSON) == "" {
+		return false, fmt.Errorf("asset repository: incomplete video source certificate upgrade")
+	}
+	result, err := r.store.db.ExecContext(ctx, `UPDATE video_source_certificates SET certificate_json=? WHERE source_reference=? AND certificate_json=?`, metadataJSON, reference, expectedJSON)
+	if err != nil {
+		return false, fmt.Errorf("upgrade video source certificate: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("upgrade video source certificate rows: %w", err)
+	}
+	return rows == 1, nil
+}
+
 // UpsertMediaMetadata persists (insert-or-replace) the canonical one-time
 // media probe row for an asset (Fase C1: registry-authoritative metadata;
 // consumers read it instead of spawning ffprobe).

@@ -8,6 +8,15 @@
   assembly with certificate-backed block SHA-256 verification; legacy window
   preparation uses the complete resolver and its full-content verification.
 
+### Architecture — store source certificates independently of media blobs
+
+- Added the `video_source_certificates` registry keyed by source SHA-256 and
+  preparation revision. Source evidence no longer needs an asset/blob foreign
+  key; registration checks immutable facts and allows a compare-and-swap upgrade
+  for authenticated block hashes. Existing prepared-window completion still
+  produces the certificate, so the certificate-only task/result path remains
+  to be implemented.
+
 ### Performance — fetch authenticated source ranges for direct assembly
 
 - Full-source certificates may carry SHA-256 hashes for fixed 1 MiB blocks,

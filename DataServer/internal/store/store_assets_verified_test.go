@@ -134,3 +134,37 @@ func TestSourceCertificateLookupPrefersNanosecondPrecisionUpgrade(t *testing.T) 
 		t.Fatalf("batch lookup = %#v err=%v; single=%#v", batch[reference], err, got)
 	}
 }
+
+func TestVideoSourceCertificateRegistryNeedsNoAssetBlob(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/source-certificate-registry.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	repo := NewSQLiteAssetRepository(s)
+	ctx := context.Background()
+	reference := "certified-video-source:" + strings.Repeat("a", 64) + ":profile-r1"
+	first := `{"sha256":"` + strings.Repeat("a", 64) + `","chunks":null}`
+	if err := repo.PutVideoSourceCertificate(ctx, reference, strings.Repeat("a", 64), 1234, "profile-r1", first, "2026-11-26T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetVideoSourceCertificates(ctx, []string{reference})
+	if err != nil || got[reference] != first {
+		t.Fatalf("independent source certificate lookup = %#v, err=%v", got, err)
+	}
+	upgraded := `{"sha256":"` + strings.Repeat("a", 64) + `","chunks":{"chunk_size":1048576}}`
+	if replaced, err := repo.ReplaceVideoSourceCertificate(ctx, reference, first, upgraded); err != nil || !replaced {
+		t.Fatalf("compare-and-swap evidence upgrade = %v, err=%v", replaced, err)
+	}
+	if replaced, err := repo.ReplaceVideoSourceCertificate(ctx, reference, first, `{"conflict":true}`); err != nil || replaced {
+		t.Fatalf("stale evidence writer replaced current row: replaced=%v err=%v", replaced, err)
+	}
+	got, err = repo.GetVideoSourceCertificates(ctx, []string{reference})
+	if err != nil || got[reference] != upgraded {
+		t.Fatalf("certificate after stale writer = %#v, err=%v", got, err)
+	}
+	var assetCount int
+	if err := s.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM assets`).Scan(&assetCount); err != nil || assetCount != 0 {
+		t.Fatalf("certificate registration created asset rows: count=%d err=%v", assetCount, err)
+	}
+}

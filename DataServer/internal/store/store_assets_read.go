@@ -181,6 +181,52 @@ func (r *SQLiteAssetRepository) GetBySourceReferences(ctx context.Context, refer
 	return out, nil
 }
 
+// GetVideoSourceCertificates returns the certificate JSON for each requested
+// immutable source reference. These rows have no asset/blob foreign key.
+func (r *SQLiteAssetRepository) GetVideoSourceCertificates(ctx context.Context, references []string) (map[string]string, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("asset repository: store not initialized")
+	}
+	out := make(map[string]string, len(references))
+	const maxParameters = 900
+	for offset := 0; offset < len(references); offset += maxParameters {
+		end := offset + maxParameters
+		if end > len(references) {
+			end = len(references)
+		}
+		chunk := references[offset:end]
+		placeholders := make([]byte, 0, len(chunk)*2)
+		args := make([]interface{}, len(chunk))
+		for i, reference := range chunk {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = reference
+		}
+		rows, err := r.store.db.QueryContext(ctx, `SELECT source_reference,certificate_json FROM video_source_certificates WHERE source_reference IN (`+string(placeholders)+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("get video source certificates: %w", err)
+		}
+		for rows.Next() {
+			var reference, metadata string
+			if err := rows.Scan(&reference, &metadata); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan video source certificate: %w", err)
+			}
+			out[reference] = metadata
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate video source certificates: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("close video source certificates: %w", err)
+		}
+	}
+	return out, nil
+}
+
 // GetMediaMetadata returns the verified media metadata row for an asset, or
 // (nil, nil) when no row exists (metadata_verified=false).
 func (r *SQLiteAssetRepository) GetMediaMetadata(ctx context.Context, assetID string) (*MediaMetadataRecord, error) {
