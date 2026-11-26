@@ -169,7 +169,7 @@ smoke_mint_m2m "$ADMIN_TOKEN" "$VELOX_MASTER_URL" || { log_error "M2M provisioni
 log_info "M2M provisioned: client_id=$PROVISIONED_CLIENT_ID"
 
 # ─── Resolve assets ────────────────────────────────────────────────────────
-ASSETS_FILE="${SCRIPT_DIR}/fixtures/assets.json"
+ASSETS_FILE="${BENCH_ASSETS_FILE:-${SCRIPT_DIR}/fixtures/assets.json}"
 [[ -r "$ASSETS_FILE" ]] || { log_error "fixtures not readable: $ASSETS_FILE"; exit 2; }
 ASSET_VO=$(jq -er '.voiceover[0].asset_id' "$ASSETS_FILE")
 ASSET_CLIP_A=$(jq -er '.clips[0].asset_id' "$ASSETS_FILE")
