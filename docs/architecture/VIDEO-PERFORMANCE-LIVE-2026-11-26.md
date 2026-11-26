@@ -6,7 +6,7 @@ Master: `51.91.11.36` (local production host). All times UTC.
 
 - Master runs commit `a5dc832368f1c1f34b0e1ac45c6668ee14a2644a` (v1.4.54), image digest `ghcr.io/marcuss-ops/velox-server@sha256:869c1ff9cf7e36ed77770c0dd6ac6c1cce99ec272ddb474d747cc30e71a07840`.
 - Worker `host_57_129_132_133` runs signed image digest `ghcr.io/marcuss-ops/velox-worker@sha256:2a05e76c13d47a1aa9cc3e79217a93a456419de6656bacaba405f0be27aa87c0`, is CONNECTED/HEALTHY, and registered `video.source.certify.v1`.
-- Pickup uses `https://veloxmanager.duckdns.org`; configured smoke asset is `e03b99c8d0c6c3f6e9a2bec26f332c4effbea21db54eba0394dc841eb1441e41`.
+- Pickup uses the configured Master public URL; the smoke gate used the configured smoke asset.
 - The canonical resume operation succeeded: `b384d6c6-2de4-4188-9b82-e87337c5ae4e`. The smoke gate was not bypassed.
 
 ## Focused cold/warm production renders
