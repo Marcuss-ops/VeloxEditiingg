@@ -26,7 +26,8 @@ func (c *coordinator) CommitPreparedWindow(ctx context.Context, cmd PreparedWind
 		committedID, err = tx.CommitPreparedWindow(ctx, repository.PreparedWindowCommitParams{
 			Fence: completionFence(cmd.Fence), JobID: cmd.JobID, Identity: cmd.Identity,
 			AssetID: cmd.AssetID, SHA256: cmd.SHA256, ExtradataSHA256: cmd.ExtradataSHA256,
-			SizeBytes: cmd.SizeBytes, TokenHash: tokenHash, Now: time.Now().UTC().Format(time.RFC3339Nano),
+			SourceCertificateJSON: cmd.SourceCertificateJSON,
+			SizeBytes:             cmd.SizeBytes, TokenHash: tokenHash, Now: time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		return err
 	})

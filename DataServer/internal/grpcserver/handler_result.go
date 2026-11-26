@@ -383,6 +383,17 @@ func (h *Handler) commitPreparedWindowResult(ctx context.Context, workerID, jobI
 	if err := cert.ValidateFor(request); err != nil {
 		return fmt.Errorf("prepared-window certificate does not match canonical request: %w", err)
 	}
+	sourceCertificateJSON := ""
+	if cert.SourceCertificate != nil {
+		if err := cert.SourceCertificate.Validate(); err != nil {
+			return fmt.Errorf("source certificate is invalid: %w", err)
+		}
+		encodedSourceCertificate, marshalErr := json.Marshal(cert.SourceCertificate)
+		if marshalErr != nil {
+			return fmt.Errorf("encode source certificate: %w", marshalErr)
+		}
+		sourceCertificateJSON = string(encodedSourceCertificate)
+	}
 	identityHash, err := contract.VideoPrepareWindowCacheIdentity(request)
 	if err != nil {
 		return err
@@ -394,6 +405,7 @@ func (h *Handler) commitPreparedWindowResult(ctx context.Context, workerID, jobI
 	_, err = preparedCoordinator.CommitPreparedWindow(ctx, completion.PreparedWindowCommitCommand{
 		Fence: completion.FenceTuple{TaskID: taskID, AttemptID: attemptID, WorkerID: identity.ParseWorkerID(workerID), LeaseID: leaseID, Revision: revision},
 		JobID: jobID, Identity: identityHash, AssetID: assetID, SHA256: cert.OutputSHA256, SizeBytes: cert.OutputSizeBytes, ExtradataSHA256: cert.OutputEvidence.ExtradataSHA256,
+		SourceCertificateJSON: string(sourceCertificateJSON),
 	})
 	return err
 }

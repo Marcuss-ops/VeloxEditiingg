@@ -13,9 +13,10 @@
 - Added the `video_source_certificates` registry keyed by source SHA-256 and
   preparation revision. Source evidence no longer needs an asset/blob foreign
   key; registration checks immutable facts and allows a compare-and-swap upgrade
-  for authenticated block hashes. Existing prepared-window completion still
-  produces the certificate, so the certificate-only task/result path remains
-  to be implemented.
+  for authenticated block hashes. The existing prepared-window result now
+  commits source evidence inside its fenced completion transaction, after the
+  Master verifies the registered window. The certificate-only task/result path
+  remains to be implemented.
 - FINALIZE now reuses source certificates emitted by a preparation result in
   the same job, binds discovered SHA/size into the canonical plan, and hashes
   that plan before dispatch. It chooses direct assembly when all windows are

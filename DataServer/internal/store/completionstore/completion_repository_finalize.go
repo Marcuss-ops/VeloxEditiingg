@@ -111,6 +111,18 @@ func (r *sqliteCompletionTx) CommitPreparedWindow(ctx context.Context, p reposit
 	if certificateExtradata != extradataSHA256 {
 		return "", fmt.Errorf("%w: prepared-window extradata certificate mismatch", ErrCompletionTransitionConflict)
 	}
+	if p.SourceCertificateJSON != "" {
+		var sourceCertificate contract.VideoSourceCertificateV1
+		if err := json.Unmarshal([]byte(p.SourceCertificateJSON), &sourceCertificate); err != nil {
+			return "", fmt.Errorf("store: decode source certificate: %w", err)
+		}
+		if err := sourceCertificate.Validate(); err != nil || sourceCertificate.SHA256 != canonicalSpec.Request.Source.SHA256 || sourceCertificate.SizeBytes != canonicalSpec.Request.Source.SizeBytes || sourceCertificate.ProfileID != canonicalSpec.Request.OutputProfileID || sourceCertificate.PreparationRevision != canonicalSpec.Request.OutputProfileRevision {
+			return "", fmt.Errorf("%w: source certificate does not match fenced preparation request", ErrCompletionTransitionConflict)
+		}
+		if err := r.persistVideoSourceCertificate(ctx, sourceCertificate, now); err != nil {
+			return "", err
+		}
+	}
 	if _, err := r.tx.ExecContext(ctx, `INSERT OR IGNORE INTO attempt_commits (commit_id,task_id,attempt_id,job_id,worker_id,lease_id,task_revision,status,required_output_count,ready_output_count,commit_token_hash,commit_deadline_at,last_progress_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'VERIFYING',0,0,?,?,?,?,?)`, commitID, f.TaskID, f.AttemptID, jobID, f.WorkerID, f.LeaseID, f.Revision, tokenHash, now, now, now, now, now); err != nil {
 		return "", fmt.Errorf("store: prepared-window commit record: %w", err)
 	}
@@ -124,6 +136,62 @@ func (r *sqliteCompletionTx) CommitPreparedWindow(ctx context.Context, p reposit
 		return "", err
 	}
 	return commitID, nil
+}
+
+func (r *sqliteCompletionTx) persistVideoSourceCertificate(ctx context.Context, source contract.VideoSourceCertificateV1, now string) error {
+	reference := "certified-video-source:" + source.SHA256 + ":" + source.PreparationRevision
+	var existing string
+	err := r.tx.QueryRowContext(ctx, `SELECT certificate_json FROM video_source_certificates WHERE source_reference=?`, reference).Scan(&existing)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("store: read source certificate in completion transaction: %w", err)
+	}
+	notFound := err == sql.ErrNoRows
+	encoded, err := json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	if notFound {
+		if _, err := r.tx.ExecContext(ctx, `INSERT INTO video_source_certificates (source_reference,source_sha256,source_size_bytes,profile_revision,certificate_json,created_at) VALUES (?,?,?,?,?,?)`, reference, source.SHA256, source.SizeBytes, source.PreparationRevision, string(encoded), now); err != nil {
+			return fmt.Errorf("store: insert source certificate in completion transaction: %w", err)
+		}
+		return nil
+	}
+	var previous contract.VideoSourceCertificateV1
+	if json.Unmarshal([]byte(existing), &previous) != nil || previous.Validate() != nil || !sameSourceCertificateFacts(previous, source) {
+		return fmt.Errorf("%w: conflicting source certificate already registered", ErrCompletionTransitionConflict)
+	}
+	if previous.Chunks != nil {
+		if source.Chunks != nil && !sameSourceChunks(previous.Chunks, source.Chunks) {
+			return fmt.Errorf("%w: conflicting source block hashes already registered", ErrCompletionTransitionConflict)
+		}
+		return nil
+	}
+	if source.Chunks == nil {
+		return nil
+	}
+	result, err := r.tx.ExecContext(ctx, `UPDATE video_source_certificates SET certificate_json=? WHERE source_reference=? AND certificate_json=?`, string(encoded), reference, existing)
+	if err != nil {
+		return fmt.Errorf("store: upgrade source certificate in completion transaction: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		return fmt.Errorf("%w: source certificate upgrade lost its compare-and-swap", ErrCompletionTransitionConflict)
+	}
+	return nil
+}
+
+func sameSourceCertificateFacts(left, right contract.VideoSourceCertificateV1) bool {
+	left.Chunks = nil
+	right.Chunks = nil
+	a, errA := json.Marshal(left)
+	b, errB := json.Marshal(right)
+	return errA == nil && errB == nil && string(a) == string(b)
+}
+
+func sameSourceChunks(left, right *contract.VideoSourceChunksV1) bool {
+	a, errA := json.Marshal(left)
+	b, errB := json.Marshal(right)
+	return errA == nil && errB == nil && string(a) == string(b)
 }
 
 func (r *sqliteCompletionTx) MarkCompletionTaskAttemptSucceeded(ctx context.Context, attemptID, workerID, leaseID, now string) error {

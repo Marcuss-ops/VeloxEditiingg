@@ -70,6 +70,7 @@ type CompletionDeclareParams struct {
 type PreparedWindowCommitParams struct {
 	Fence                                                        CompletionFence
 	JobID, Identity, AssetID, SHA256, ExtradataSHA256, TokenHash string
+	SourceCertificateJSON                                        string
 	SizeBytes                                                    int64
 	Now                                                          string
 }

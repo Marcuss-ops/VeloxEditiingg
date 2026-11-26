@@ -61,13 +61,33 @@ func TestCommitPreparedWindowClosesFencedInternalTask(t *testing.T) {
 	sourceSHA := strings.Repeat("b", 64)
 	outputSHA := strings.Repeat("c", 64)
 	extraSHA := strings.Repeat("d", 64)
-	req := contract.VideoPrepareWindowV1{Version: 1, Source: contract.AssetRefV2{AssetID: "source", Kind: "video", SHA256: sourceSHA, SizeBytes: 123}, SourceStartUS: 10, SourceDurationUS: 5000000, OutputFrameCount: 120, TimelineRevision: 1, TimelineSHA256: strings.Repeat("e", 64), TimelineStartFrame: 0, OutputProfileID: "VELOX_ASSEMBLY_READY_V1", OutputProfileRevision: "video-window-preparer.v1:" + strings.Repeat("f", 64)}
+	profile := contract.CanonicalVideoProfileV1Default
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := contract.VideoPrepareWindowV1{Version: 1, Source: contract.AssetRefV2{AssetID: "source", Kind: "video", SHA256: sourceSHA, SizeBytes: 123}, SourceStartUS: 10, SourceDurationUS: 5000000, OutputFrameCount: 120, TimelineRevision: 1, TimelineSHA256: strings.Repeat("e", 64), TimelineStartFrame: 0, OutputProfileID: profile.ProfileID, OutputProfileRevision: revision}
 	identity, err := contract.VideoPrepareWindowCacheIdentity(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cert := contract.VideoPrepareWindowCertificateV1{SourceSHA256: sourceSHA, OutputSHA256: outputSHA, OutputSizeBytes: 10, ClosedGOPAttested: true, PacketCopyUsed: true, OutputEvidence: contract.VideoWindowOutputEvidenceV1{Codec: "h264", ExtradataSHA256: extraSHA}}
 	certJSON, _ := json.Marshal(cert)
+	sourceCertificate := contract.VideoSourceCertificateV1{
+		Version: 1, SHA256: sourceSHA, SizeBytes: req.Source.SizeBytes, ProfileID: profile.ProfileID,
+		PreparationRevision: revision, DurationUS: 5_000_000, KeyframesUS: []int64{0},
+		Evidence: contract.VideoWindowOutputEvidenceV1{
+			Codec: profile.Codec, Profile: strings.ToLower(profile.CodecProfile), Level: 40,
+			Width: profile.Width, Height: profile.Height, PixelFormat: profile.PixelFormat,
+			FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, TimeBaseNum: profile.TimeBaseNum,
+			TimeBaseDen: profile.TimeBaseDen, FrameCount: 120, FirstFrameKeyframe: true,
+			ExtradataSHA256: contract.CanonicalVideoExtradataSHA256,
+		},
+	}
+	if err := sourceCertificate.Validate(); err != nil {
+		t.Fatalf("source certificate fixture: %v", err)
+	}
+	sourceCertificateJSON := mustJSON(t, sourceCertificate)
 	if _, err := db.Exec(`INSERT INTO task_specs(task_id,executor_id,payload_json,created_at) VALUES(?,?,?,?)`, taskID, contract.VideoPrepareWindowExecutorID, mustJSON(t, map[string]any{contract.VideoPrepareWindowPayloadKey: req}), now); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +98,7 @@ func TestCommitPreparedWindowClosesFencedInternalTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	coord := c.(PreparedWindowCoordinator)
-	id, err := coord.CommitPreparedWindow(context.Background(), PreparedWindowCommitCommand{Fence: f, JobID: jobID, Identity: identity, AssetID: "prep-asset", SHA256: outputSHA, SizeBytes: 10, ExtradataSHA256: extraSHA})
+	id, err := coord.CommitPreparedWindow(context.Background(), PreparedWindowCommitCommand{Fence: f, JobID: jobID, Identity: identity, AssetID: "prep-asset", SHA256: outputSHA, SizeBytes: 10, ExtradataSHA256: extraSHA, SourceCertificateJSON: sourceCertificateJSON})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +113,11 @@ func TestCommitPreparedWindowClosesFencedInternalTask(t *testing.T) {
 	if taskStatus != "SUCCEEDED" || commitStatus != "COMMITTED" || required != 0 {
 		t.Fatalf("task=%s commit=%s required_outputs=%d", taskStatus, commitStatus, required)
 	}
-	_, err = coord.CommitPreparedWindow(context.Background(), PreparedWindowCommitCommand{Fence: f, JobID: jobID, Identity: identity, AssetID: "prep-asset", SHA256: outputSHA, SizeBytes: 10, ExtradataSHA256: extraSHA})
+	var savedSourceCertificate string
+	if err := db.QueryRow(`SELECT certificate_json FROM video_source_certificates WHERE source_sha256=?`, sourceSHA).Scan(&savedSourceCertificate); err != nil || savedSourceCertificate != sourceCertificateJSON {
+		t.Fatalf("source certificate was not committed with task: certificate=%s err=%v", savedSourceCertificate, err)
+	}
+	_, err = coord.CommitPreparedWindow(context.Background(), PreparedWindowCommitCommand{Fence: f, JobID: jobID, Identity: identity, AssetID: "prep-asset", SHA256: outputSHA, SizeBytes: 10, ExtradataSHA256: extraSHA, SourceCertificateJSON: sourceCertificateJSON})
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}

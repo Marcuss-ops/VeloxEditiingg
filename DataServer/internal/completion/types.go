@@ -238,5 +238,6 @@ type PreparedWindowCoordinator interface {
 type PreparedWindowCommitCommand struct {
 	Fence                                             FenceTuple
 	JobID, Identity, AssetID, SHA256, ExtradataSHA256 string
+	SourceCertificateJSON                             string
 	SizeBytes                                         int64
 }

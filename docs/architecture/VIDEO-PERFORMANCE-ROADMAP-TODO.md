@@ -61,11 +61,12 @@ Source-contract state and remaining work:
 
 - Implemented: worker preparation now emits an optional full-source certificate
   from verified complete files with exact container frame count and zero
-  presentation origin. It persists with fragment attestations and is indexed in
-  the existing source registry by SHA and preparation revision. FINALIZE resolves
-  these proofs in a batch before stock selection/dependency planning; later
-  renders can mux source windows directly. Missing counts, non-zero origins,
-  sparse files and invalid proofs retain the existing window path.
+  presentation origin. The Master commits it to the independent source registry
+  inside the fenced completion transaction after independently verifying the
+  prepared fragment. FINALIZE resolves these proofs in a batch before stock
+  selection/dependency planning; later renders can mux source windows directly.
+  Missing counts, non-zero origins, sparse files and invalid proofs retain the
+  existing window path.
 - Implemented: sparse assembly inputs require fixed-size block SHA evidence
   bound to a complete source certificate. Only authenticated materialized bytes
   enter the mux; sparse files never claim full-file SHA verification and never

@@ -267,7 +267,7 @@ func (s *AssetService) RegisterPreparedWindow(
 			return nil, fmt.Errorf("prepared window identity already maps to different bytes")
 		}
 		if cachedPreparedWindowEvidenceMatches(existing, request, identity) {
-			return s.registerSourceCertificate(ctx, existing, certificate.SourceCertificate)
+			return existing, nil
 		}
 	}
 	if s.security == nil {
@@ -304,7 +304,7 @@ func (s *AssetService) RegisterPreparedWindow(
 		return nil, fmt.Errorf("prepared window does not begin with a keyframe")
 	}
 	if existing != nil {
-		return s.registerSourceCertificate(ctx, existing, certificate.SourceCertificate)
+		return existing, nil
 	}
 	startSeconds, durationSeconds := float64(request.SourceStartUS)/1_000_000, float64(request.SourceDurationUS)/1_000_000
 	if request.SourceDurationUS == 0 {
@@ -331,7 +331,7 @@ func (s *AssetService) RegisterPreparedWindow(
 	if err != nil {
 		return nil, err
 	}
-	return s.registerSourceCertificate(ctx, asset, certificate.SourceCertificate)
+	return asset, nil
 }
 
 // cachedPreparedWindowEvidenceMatches permits a repeated registration to reuse
