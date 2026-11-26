@@ -2,10 +2,7 @@
 
 Production evidence: [2026-11-26 live report](VIDEO-PERFORMANCE-LIVE-2026-11-26.md).
 
-Open follow-ups: [#39 — drain legacy TaskGraph work](https://github.com/Marcuss-ops/VeloxEditiingg/issues/39)
-and [#40 — full production `gervais-final-v1` PERFLIVE matrix](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40).
-Do not remove legacy executors until open dead letters and persisted references
-have a safe migration/drain plan.
+Open follow-up: [#40 — full production `gervais-final-v1` PERFLIVE matrix](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40).
 
 Audit base: `main` at `e8a0d0f9` (2026-11-26).
 
@@ -45,11 +42,20 @@ and successful cold/warm execution are recorded in the live report.
 
 ### 2. Persisted legacy work
 
-The production inventory is complete and recorded in the live report. It found
-498 OPEN dead-letter entries, 5,108 task-spec references, and 783,337 task-ID
-references. Migrate or drain persisted work before retiring executors,
-contracts, cache paths or wrappers. Before any exported-symbol or cross-package
-removal commit, run:
+The production inventory is complete and recorded in the live report. Its
+498 OPEN dead letters were reconciled against the Master DB: 47 refer to failed
+attempts followed by a successful task and are `RESOLVED`; 451 refer to failed
+or cancelled terminal tasks and are `CANCELLED` in the queue. All 498 had
+`retryable=0`; no live legacy task or live parent job was found. The operation
+preserves task, attempt, payload, spec, and audit history. It does not delete
+rows or touch non-legacy dead letters.
+
+The 5,108 task-spec references and 783,337 task-ID references are historical
+records retained for audit and forensic recovery; their presence is not active
+retry work. `video.assemble.slice.v1` remains a supported current assembly
+adapter, so this work does not remove its executor or contract. Any later
+retirement is a separate change gated on current producer/worker compatibility.
+Before any exported-symbol or cross-package removal commit, run:
 
 ```bash
 bash scripts/ci/pre-removal-verify.sh
@@ -88,10 +94,9 @@ measurements show a material gain.
   hashes, and deployed digests in the live report. This is not the full
   `gervais-final-v1` PERFLIVE matrix; OS process-launch counts are unavailable.
 
-The production legacy task inventory is complete. Executor retirement remains
-open because 498 dead letters are OPEN and historical references remain. No
-legacy executor removal is safe until those entries and references are
-migrated or drained.
+The production legacy queue drain is complete. The original historical task
+and reference rows remain intentionally retained; no active retry/recovery
+references remain. Supported executor compatibility remains in place.
 
 Do not claim production performance improvements based on source inspection,
 local tests or an image build alone.

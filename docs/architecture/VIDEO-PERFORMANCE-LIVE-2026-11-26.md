@@ -29,7 +29,7 @@ Read-only report generated from `/opt/velox/current/.velox/data/velox.db` with `
 - 12,687 legacy tasks: 11,121 SUCCEEDED, 401 FAILED, 1,165 CANCELLED.
 - 11,685 attempts: 11,123 SUCCEEDED, 498 FAILED, 47 TIMED_OUT, 17 CANCELLED.
 - 5,108 task-spec references and 783,337 task-ID references remain.
-- 498 dead-letter entries are OPEN. References include execution events, phase timings, attempt metrics/segments, commits, asset references/downloads, worker events and output metadata.
-- No legacy executor/contracts/cache paths were removed. The open dead letters and persisted references require a separately tracked drain/migration and retention decision before a removal commit.
+- The initial 498 OPEN legacy dead-letter entries were reconciled on the Master: 47 entries whose tasks later succeeded are `RESOLVED`; 451 failed/cancelled terminal entries with `retryable=0` are `CANCELLED`. No legacy task or parent job was live. The operation changes only dead-letter queue status and preserves all task/attempt/spec/payload history.
+- The 5,108 task-spec references and 783,337 task-ID references are retained historical audit records, not live retries. `video.assemble.slice.v1` remains a current assembly adapter; executor/contract removal is outside this drain and requires a separate compatibility change.
 
 The full audit JSON was kept outside the repository because it contains row-level production task and attempt identifiers. The aggregate above is the reviewable operational result.
