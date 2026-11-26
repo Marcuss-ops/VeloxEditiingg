@@ -432,7 +432,7 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	if !source.Sparse {
 		attestation.SourceCertificate = sourceCertificateFromProbe(sourceProbe, resolvedRequest, e.profile)
 		if attestation.SourceCertificate != nil {
-			chunks, chunkErr := e.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, sourceProbe)
+			chunks, chunkErr := e.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, sourceProbe, source.SourceChunks)
 			if chunkErr != nil {
 				return fail("WINDOW_SOURCE_CERTIFICATE_FAILED", chunkErr)
 			}

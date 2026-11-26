@@ -11,12 +11,23 @@ import (
 	"velox-shared/contract"
 )
 
-func (e *videoPrepareWindowExecutor) certifySourceChunks(ctx context.Context, path, sourceSHA string, size int64, probe windowSourceProbe) (*contract.VideoSourceChunksV1, error) {
+func (e *videoPrepareWindowExecutor) certifySourceChunks(ctx context.Context, path, sourceSHA string, size int64, probe windowSourceProbe, downloaded *contract.VideoSourceChunksV1) (*contract.VideoSourceChunksV1, error) {
 	if size <= 0 || size > contract.VideoSourceChunkSize*contract.VideoSourceMaxChunks {
 		return nil, nil
 	}
 	unlock := e.lockWindow("source-chunks:" + sourceSHA)
 	defer unlock()
+	if downloaded != nil && downloaded.Validate(size) == nil {
+		probe.Chunks = downloaded
+		e.sourceProbeMu.Lock()
+		if e.sourceProbes == nil {
+			e.sourceProbes = make(map[string]windowSourceProbe)
+		}
+		e.sourceProbes[sourceSHA] = probe
+		e.sourceProbeMu.Unlock()
+		e.writePersistedSourceProbe(sourceSHA, probe)
+		return downloaded, nil
+	}
 	e.sourceProbeMu.Lock()
 	cached, ok := e.sourceProbes[sourceSHA]
 	e.sourceProbeMu.Unlock()

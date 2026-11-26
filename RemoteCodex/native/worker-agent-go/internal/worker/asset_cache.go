@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"velox-shared/contract"
 	"velox-worker-agent/internal/telemetry"
 )
 
@@ -355,7 +357,7 @@ func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpect
 		elapsed := time.Since(verifyStarted)
 		return "", written, "", elapsed, 0, fmt.Errorf("%w: downloaded asset size mismatch (got %d, want %d)", ErrAssetIncomplete, written, effectiveExpectedSize)
 	}
-	actualSHA256, err := sha256File(partPath)
+	actualSHA256, chunks, err := sha256FileWithVideoChunks(partPath, written, ext)
 	if err != nil {
 		_ = os.Remove(partPath)
 		elapsed := time.Since(verifyStarted)
@@ -447,7 +449,55 @@ func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpect
 		// rollback copy is harmless and will be cleaned on a later cache pass.
 		_ = syncDir(cacheDir)
 	}
+	if chunks != nil {
+		// Chunk digests are derived during the same complete-file integrity
+		// pass as SHA-256. They are advisory cache metadata; a missing or
+		// corrupt sidecar falls back to a verified full-file scan at use time.
+		_ = writeVideoSourceChunks(finalPath, actualSHA256, written, chunks)
+	}
 	return finalPath, written, actualSHA256, hashVerifyMS, time.Since(materializeStarted), nil
+}
+
+func sha256FileWithVideoChunks(path string, size int64, ext string) (string, *contract.VideoSourceChunksV1, error) {
+	videoExt := strings.ToLower(ext)
+	switch videoExt {
+	case ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".ts":
+	default:
+		sha, err := sha256File(path)
+		return sha, nil, err
+	}
+	if size <= 0 || size > contract.VideoSourceChunkSize*contract.VideoSourceMaxChunks {
+		sha, err := sha256File(path)
+		return sha, nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", nil, err
+	}
+	defer file.Close()
+	complete := sha256.New()
+	chunks := &contract.VideoSourceChunksV1{ChunkSize: contract.VideoSourceChunkSize}
+	buffer := make([]byte, contract.VideoSourceChunkSize)
+	var read int64
+	for read < size {
+		want := size - read
+		if want > int64(len(buffer)) {
+			want = int64(len(buffer))
+		}
+		n, readErr := io.ReadFull(file, buffer[:want])
+		if readErr != nil {
+			return "", nil, readErr
+		}
+		_, _ = complete.Write(buffer[:n])
+		chunkSHA := sha256.Sum256(buffer[:n])
+		chunks.SHA256 = append(chunks.SHA256, hex.EncodeToString(chunkSHA[:]))
+		read += int64(n)
+	}
+	var extra [1]byte
+	if n, readErr := file.Read(extra[:]); n != 0 || readErr != io.EOF {
+		return "", nil, fmt.Errorf("video source changed size during verification")
+	}
+	return hex.EncodeToString(complete.Sum(nil)), chunks, nil
 }
 
 // isHTMLMediaType reports whether a Content-Type looks like HTML.

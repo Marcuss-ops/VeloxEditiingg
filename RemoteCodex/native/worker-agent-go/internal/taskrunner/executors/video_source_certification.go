@@ -108,7 +108,7 @@ func (e *videoSourceCertificationExecutor) Execute(ctx context.Context, execCtx 
 	if certificate == nil {
 		return fail("SOURCE_CERTIFICATION_INCOMPATIBLE", errors.New("complete source facts do not satisfy the canonical certification contract"))
 	}
-	chunks, err := e.preparer.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, probe)
+	chunks, err := e.preparer.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, probe, source.SourceChunks)
 	if err != nil {
 		return fail("SOURCE_CERTIFICATION_HASH_FAILED", err)
 	}

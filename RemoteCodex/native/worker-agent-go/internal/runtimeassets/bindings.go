@@ -3,6 +3,7 @@ package runtimeassets
 import (
 	"context"
 
+	"velox-shared/contract"
 	"velox-worker-agent/internal/downloader"
 )
 
@@ -38,6 +39,11 @@ type Binding struct {
 	// VerifiedRanges means every materialized byte was checked against block
 	// hashes bound to the full-source certificate. Holes remain unverified bytes.
 	VerifiedRanges bool
+	// SourceChunks are the 1 MiB block hashes computed during the cache's
+	// complete-file SHA verification pass. They are optional for large or
+	// legacy cached assets; callers validate the exact source identity before
+	// using them for authenticated range fetches.
+	SourceChunks *contract.VideoSourceChunksV1
 }
 
 // Bindings maps canonical asset IDs to verified local files.

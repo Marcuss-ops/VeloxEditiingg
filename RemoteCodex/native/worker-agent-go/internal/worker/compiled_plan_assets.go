@@ -380,9 +380,10 @@ func (w *Worker) resolveSingleVideoSource(ctx context.Context, payload map[strin
 	} else if sha != asset.SHA256 || info.Size() != asset.SizeBytes {
 		return nil, fmt.Errorf("%s: resolved source identity changed (sha=%s size=%d)", operation, sha, info.Size())
 	}
+	chunks, _ := readVideoSourceChunks(path, sha, info.Size())
 	return runtimeassets.Bindings{asset.AssetID: {
 		AssetID: asset.AssetID, CacheKey: identity, Path: path,
-		SHA256: sha, Size: info.Size(), Verified: true,
+		SHA256: sha, Size: info.Size(), Verified: true, SourceChunks: chunks,
 	}}, nil
 }
 
