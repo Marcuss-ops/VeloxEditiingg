@@ -232,11 +232,11 @@ func TestFetchWindowRejectsNonMP4(t *testing.T) {
 func TestFetchWindowAuthenticatesBlocksBeforeMaterializingMultipleWindows(t *testing.T) {
 	data, sampleOffset := syntheticMP4WithSamples(t, 150000)
 	proof := sourceChunkProof(data)
-	var served int64
+	var served atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		counter := &countingWriter{ResponseWriter: w}
 		http.ServeContent(counter, r, "source.mp4", time.Time{}, bytes.NewReader(data))
-		served += counter.written
+		served.Add(counter.written)
 	}))
 	defer server.Close()
 	dest := filepath.Join(t.TempDir(), "sparse.mp4")
@@ -247,8 +247,9 @@ func TestFetchWindowAuthenticatesBlocksBeforeMaterializingMultipleWindows(t *tes
 	if err != nil {
 		t.Fatalf("FetchWindow: %v", err)
 	}
-	if stats.DownloadedBytes <= 0 || stats.DownloadedBytes >= int64(len(data))/2 || served != stats.DownloadedBytes {
-		t.Fatalf("authenticated transfer = %d reported / %d served of %d bytes", stats.DownloadedBytes, served, len(data))
+	servedBytes := served.Load()
+	if stats.DownloadedBytes <= 0 || stats.DownloadedBytes >= int64(len(data))/2 || servedBytes != stats.DownloadedBytes {
+		t.Fatalf("authenticated transfer = %d reported / %d served of %d bytes", stats.DownloadedBytes, servedBytes, len(data))
 	}
 	t.Logf("authenticated sparse fixture: source=%d downloaded=%d (%.1f%%)", len(data), stats.DownloadedBytes, 100*float64(stats.DownloadedBytes)/float64(len(data)))
 	got, err := os.ReadFile(dest)
