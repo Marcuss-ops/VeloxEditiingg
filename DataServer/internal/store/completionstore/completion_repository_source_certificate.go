@@ -53,7 +53,7 @@ func (r *sqliteCompletionTx) CommitSourceCertificate(ctx context.Context, p repo
 	if err := json.Unmarshal([]byte(p.CertificateJSON), &source); err != nil {
 		return "", fmt.Errorf("store: decode source-certificate result: %w", err)
 	}
-	if err := source.Validate(); err != nil || source.Chunks == nil || source.Chunks.Validate(source.SizeBytes) != nil || source.SizeBytes != canonicalSpec.Request.Source.SizeBytes || source.ProfileID != canonicalSpec.Request.OutputProfileID || source.PreparationRevision != canonicalSpec.Request.OutputProfileRevision || (canonicalSpec.Request.Source.SHA256 != "" && source.SHA256 != canonicalSpec.Request.Source.SHA256) {
+	if err := source.Validate(); err != nil || source.SizeBytes != canonicalSpec.Request.Source.SizeBytes || source.ProfileID != canonicalSpec.Request.OutputProfileID || source.PreparationRevision != canonicalSpec.Request.OutputProfileRevision || (canonicalSpec.Request.Source.SHA256 != "" && source.SHA256 != canonicalSpec.Request.Source.SHA256) {
 		return "", fmt.Errorf("%w: source certificate does not match fenced request", ErrCompletionTransitionConflict)
 	}
 	if err := r.PersistVideoSourceCertificate(ctx, p.CertificateJSON, p.Now); err != nil {

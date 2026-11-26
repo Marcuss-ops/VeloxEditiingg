@@ -557,11 +557,13 @@ func (p *RuntimeFinalizationProcessor) completeWorkerSourceCertifications(ctx co
 		if err := json.Unmarshal([]byte(segment.MetadataJSON), &certificate); err != nil {
 			return nil, fmt.Errorf("runtime finalizer: decode source certificate for %s: %w", segment.TaskID, err)
 		}
-		if err := certificate.Validate(); err != nil || certificate.Chunks == nil || certificate.SHA256 == "" || certificate.SizeBytes != task.Request.Source.SizeBytes || certificate.ProfileID != task.Request.OutputProfileID || certificate.PreparationRevision != task.Request.OutputProfileRevision || (task.Request.Source.SHA256 != "" && certificate.SHA256 != task.Request.Source.SHA256) {
+		if err := certificate.Validate(); err != nil || certificate.SHA256 == "" || certificate.SizeBytes != task.Request.Source.SizeBytes || certificate.ProfileID != task.Request.OutputProfileID || certificate.PreparationRevision != task.Request.OutputProfileRevision || (task.Request.Source.SHA256 != "" && certificate.SHA256 != task.Request.Source.SHA256) {
 			return nil, fmt.Errorf("runtime finalizer: invalid full-source certificate for %s", segment.TaskID)
 		}
-		if err := certificate.Chunks.Validate(certificate.SizeBytes); err != nil {
-			return nil, fmt.Errorf("runtime finalizer: invalid authenticated source blocks for %s: %w", segment.TaskID, err)
+		if certificate.Chunks != nil {
+			if err := certificate.Chunks.Validate(certificate.SizeBytes); err != nil {
+				return nil, fmt.Errorf("runtime finalizer: invalid authenticated source blocks for %s: %w", segment.TaskID, err)
+			}
 		}
 		certificates[identity] = certificate
 	}

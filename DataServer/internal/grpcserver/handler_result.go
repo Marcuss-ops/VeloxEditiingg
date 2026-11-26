@@ -359,7 +359,7 @@ func (h *Handler) commitVideoSourceCertificateResult(ctx context.Context, worker
 	if !found {
 		return fmt.Errorf("source-certificate task result is missing certificate evidence")
 	}
-	if err := certificate.Validate(); err != nil || certificate.Chunks == nil || certificate.Chunks.Validate(certificate.SizeBytes) != nil || certificate.SizeBytes != request.Source.SizeBytes || certificate.ProfileID != request.OutputProfileID || certificate.PreparationRevision != request.OutputProfileRevision || (request.Source.SHA256 != "" && certificate.SHA256 != request.Source.SHA256) {
+	if err := certificate.Validate(); err != nil || certificate.SizeBytes != request.Source.SizeBytes || certificate.ProfileID != request.OutputProfileID || certificate.PreparationRevision != request.OutputProfileRevision || (request.Source.SHA256 != "" && certificate.SHA256 != request.Source.SHA256) {
 		return fmt.Errorf("source certificate does not match canonical request")
 	}
 	coordinator, ok := h.completionCoord.(completion.SourceCertificateCoordinator)
