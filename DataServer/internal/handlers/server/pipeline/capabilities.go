@@ -7,6 +7,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/workers"
+	"velox-shared/contract"
+	"velox-shared/controltransport"
 )
 
 // Capabilities exposes the worker-backed runtime features needed by M2M
@@ -18,19 +20,31 @@ func (h *Handlers) Capabilities() gin.HandlerFunc {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "worker_capabilities_unavailable"})
 			return
 		}
-		available := false
+		prepareAvailable := false
+		certificationAvailable := false
 		for _, worker := range h.workerRegistry.List(c.Request.Context()) {
 			if hasStockWindowPreparation(worker) {
-				available = true
-				break
+				prepareAvailable = true
+			}
+			if hasVideoSourceCertification(worker) {
+				certificationAvailable = true
 			}
 		}
 		capabilities := []string{}
-		if available {
+		if prepareAvailable {
 			capabilities = append(capabilities, "stock_window_preparation")
+		}
+		if certificationAvailable {
+			capabilities = append(capabilities, controltransport.CapabilityVideoSourceCertificationV1)
 		}
 		c.JSON(http.StatusOK, gin.H{"capabilities": capabilities})
 	}
+}
+
+func hasVideoSourceCertification(worker workers.Worker) bool {
+	return worker.SessionActive &&
+		strings.EqualFold(worker.ConnectionStatus, workers.StatusConnected) &&
+		worker.ExecutorRegistrySnapshot().Has(contract.VideoSourceCertificationExecutorID, contract.VideoSourceCertificationVersion)
 }
 
 func hasStockWindowPreparation(worker workers.Worker) bool {
