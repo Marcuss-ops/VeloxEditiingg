@@ -1,5 +1,16 @@
 ## [Unreleased] - 2026-11-08
 
+### Fixed — validate prepared-window evidence before reuse
+
+- FINALIZE and the worker reuse endpoint require a complete certificate tied
+  to the requested content-window identity, registered SHA/size and current
+  preparation revision. An avcC hash alone no longer produces a cache hit.
+- Single and batch repository lookups return the specific prepared-window
+  source certificate. Byte-identical fragments shared by multiple windows
+  cannot accidentally inherit another window's asset-level metadata.
+- Verification: complete assets, worker-assets, pipeline and store suites pass;
+  targeted certificate/identity regressions and affected-package vet pass.
+
 ### Fixed — preserve stock source digests through FINALIZE
 
 - Stock snapshots, runtime binding indexes and preparation planning preserve

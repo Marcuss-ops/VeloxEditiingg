@@ -68,3 +68,38 @@ END;`); err != nil {
 		t.Fatalf("metadata after metadata failure = %#v, err=%v; metadata insert must roll back", got, err)
 	}
 }
+
+func TestAssetSourceLookupUsesWindowSpecificCertificate(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/source-evidence.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	repo := NewSQLiteAssetRepository(s)
+	ctx := context.Background()
+	asset := AssetRecord{AssetID: "same-bytes", Kind: "video_segment", Status: "READY", SHA256: strings.Repeat("a", 64), MimeType: "video/mp4", SizeBytes: 100, StorageProvider: "local", StorageKey: "fragment.mp4", MetadataJSON: `{"producer":"original"}`}
+	if err := repo.Insert(ctx, asset); err != nil {
+		t.Fatal(err)
+	}
+	refs := []string{"prepared-window:first", "prepared-window:second", "external-source"}
+	for i, ref := range refs {
+		metadata := []string{`{"window_certificate":"first"}`, `{"window_certificate":"second"}`, `{"external":true}`}[i]
+		if err := repo.InsertSource(ctx, AssetSourceRecord{SourceID: ref, AssetID: asset.AssetID, SourceType: "worker_prepared", SourceReference: ref, MetadataJSON: metadata}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batch, err := repo.GetBySourceReferences(ctx, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, ref := range refs {
+		want := []string{`{"window_certificate":"first"}`, `{"window_certificate":"second"}`, asset.MetadataJSON}[i]
+		single, err := repo.GetBySourceReference(ctx, ref)
+		if err != nil || single == nil {
+			t.Fatalf("single %s: %+v %v", ref, single, err)
+		}
+		if single.MetadataJSON != want || batch[ref] == nil || batch[ref].MetadataJSON != want {
+			t.Fatalf("reference %s has wrong evidence: single=%+v batch=%+v", ref, single, batch[ref])
+		}
+	}
+}

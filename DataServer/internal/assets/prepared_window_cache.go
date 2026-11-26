@@ -108,18 +108,24 @@ func preparedWindowBindingFromAsset(identity string, asset *Asset) (*PreparedWin
 		return nil, fmt.Errorf("prepared-window cache asset %q is not a certified READY fragment", identity)
 	}
 	var metadata struct {
-		WindowCertificate struct {
-			OutputEvidence struct {
-				ExtradataSHA256 string `json:"extradata_sha256"`
-			} `json:"output_evidence"`
-		} `json:"window_certificate"`
+		Certificate contract.VideoPrepareWindowCertificateV1 `json:"window_certificate"`
 	}
 	if err := json.Unmarshal([]byte(asset.MetadataJSON), &metadata); err != nil {
 		return nil, nil
 	}
-	extradata := strings.ToLower(strings.TrimSpace(metadata.WindowCertificate.OutputEvidence.ExtradataSHA256))
-	if extradata != contract.CanonicalVideoExtradataSHA256 {
+	certificate := metadata.Certificate
+	profile, err := contract.KnownCanonicalVideoProfileV1(certificate.OutputProfileID)
+	if err != nil {
 		return nil, nil
 	}
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil || revision != certificate.OutputProfileRevision {
+		return nil, nil
+	}
+	request := contract.VideoPrepareWindowV1{OutputFrameCount: certificate.OutputFrameCount, OutputProfileID: certificate.OutputProfileID, OutputProfileRevision: revision}
+	if !cachedPreparedWindowEvidenceMatches(asset, request, identity) {
+		return nil, nil
+	}
+	extradata := certificate.OutputEvidence.ExtradataSHA256
 	return &PreparedWindowAssetBinding{AssetID: asset.AssetID, SHA256: asset.SHA256, SizeBytes: asset.SizeBytes, ExtradataSHA256: extradata}, nil
 }

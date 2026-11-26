@@ -55,7 +55,7 @@ func (h *Handler) PreparedWindowByIdentity() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prepared-window identity"})
 			return
 		}
-		asset, err := h.assetSvc.GetBySourceReference(c.Request.Context(), "prepared-window:"+identity)
+		asset, err := h.assetSvc.LookupPreparedWindowAsset(c.Request.Context(), identity)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "prepared-window lookup failed"})
 			return
