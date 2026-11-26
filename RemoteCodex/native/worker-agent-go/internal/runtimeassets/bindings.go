@@ -17,10 +17,11 @@ type Binding struct {
 	Path     string
 	SHA256   string
 	Size     int64
-	// Verified is true only when the canonical worker asset resolver has
-	// already completed the size/SHA-256 verification before projecting the
-	// binding. Executors still stat the file, but do not reread a warm cache
-	// blob solely to repeat the same integrity scan for every job.
+	// Verified means the binding's declared identity was checked before
+	// projection. For a full binding this is a complete size/SHA-256 check;
+	// for Sparse it only means the size and each materialized range were
+	// checked, as detailed by VerifiedRanges. Executors still stat the file,
+	// but do not reread a warm full cache blob solely to repeat the same scan.
 	Verified bool
 	// Origin records how this asset was materialized: warm_cache, prefetch,
 	// or runtime_download. Propagated from PreparedAssetMetadata by the
@@ -34,6 +35,9 @@ type Binding struct {
 	// recomputed on this host. Executors must never emit a full-file hash for
 	// a Sparse binding.
 	Sparse bool
+	// VerifiedRanges means every materialized byte was checked against block
+	// hashes bound to the full-source certificate. Holes remain unverified bytes.
+	VerifiedRanges bool
 }
 
 // Bindings maps canonical asset IDs to verified local files.

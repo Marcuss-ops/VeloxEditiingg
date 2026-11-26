@@ -150,6 +150,7 @@ type videoPrepareWindowExecutor struct {
 }
 
 type windowSourceProbe struct {
+	Chunks        *contract.VideoSourceChunksV1 `json:"chunks,omitempty"`
 	FrameCount    int64
 	CodecName     string
 	Profile       string
@@ -178,7 +179,7 @@ type windowSourceProbeIndex struct {
 	Probe     windowSourceProbe `json:"probe"`
 }
 
-const windowSourceProbeIndexVersion = 2
+const windowSourceProbeIndexVersion = 3
 
 type keyedWindowLock struct {
 	mu   sync.Mutex
@@ -365,7 +366,7 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		copyEligible bool
 		copyFallback []string
 	)
-	sourceProbe, probeErr := e.probeSource(ctx, source.Path, source.SHA256)
+	sourceProbe, probeErr := e.probeSource(ctx, source.Path, source.SHA256, !source.Sparse)
 	if probeErr != nil {
 		copyFallback = []string{"source_probe_failed"}
 	} else {
@@ -430,6 +431,13 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	}
 	if !source.Sparse {
 		attestation.SourceCertificate = sourceCertificateFromProbe(sourceProbe, resolvedRequest, e.profile)
+		if attestation.SourceCertificate != nil {
+			chunks, chunkErr := e.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, sourceProbe)
+			if chunkErr != nil {
+				return fail("WINDOW_SOURCE_CERTIFICATE_FAILED", chunkErr)
+			}
+			attestation.SourceCertificate.Chunks = chunks
+		}
 	}
 	attestationJSON, err := json.Marshal(attestation)
 	if err != nil {

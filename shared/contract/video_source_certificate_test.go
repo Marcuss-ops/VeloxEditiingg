@@ -38,6 +38,33 @@ func TestVideoSourceCertificateRejectsIncompleteAndIncompatibleEvidence(t *testi
 	}
 }
 
+func TestVideoSourceChunksRequireExactFixedBlockLayout(t *testing.T) {
+	proof := VideoSourceChunksV1{ChunkSize: VideoSourceChunkSize, SHA256: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}}
+	if err := proof.Validate(VideoSourceChunkSize + 1); err != nil {
+		t.Fatalf("valid final short block: %v", err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*VideoSourceChunksV1)
+		size   int64
+	}{
+		{"wrong chunk size", func(c *VideoSourceChunksV1) { c.ChunkSize /= 2 }, VideoSourceChunkSize + 1},
+		{"missing block", func(c *VideoSourceChunksV1) { c.SHA256 = c.SHA256[:1] }, VideoSourceChunkSize + 1},
+		{"malformed digest", func(c *VideoSourceChunksV1) { c.SHA256[1] = "BAD" }, VideoSourceChunkSize + 1},
+		{"too many blocks", func(c *VideoSourceChunksV1) { c.SHA256 = make([]string, VideoSourceMaxChunks+1) }, VideoSourceChunkSize*VideoSourceMaxChunks + 1},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := proof
+			candidate.SHA256 = append([]string(nil), proof.SHA256...)
+			test.mutate(&candidate)
+			if err := candidate.Validate(test.size); err == nil {
+				t.Fatal("invalid block proof was accepted")
+			}
+		})
+	}
+}
+
 func sourceCertificateFixture(t *testing.T) VideoSourceCertificateV1 {
 	t.Helper()
 	p := CanonicalVideoProfileV1Default

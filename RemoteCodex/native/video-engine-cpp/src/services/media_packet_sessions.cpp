@@ -13,6 +13,7 @@ extern "C" {
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -44,6 +45,41 @@ bool rawAacContainer(const std::string& format_name) {
     return normalized == "aac" || normalized.find("adts") != std::string::npos ||
            normalized.find("latm") != std::string::npos ||
            normalized.find("loas") != std::string::npos;
+}
+
+bool packetContainsH264Idr(const AVCodecParameters* parameters,
+                           const AVPacket* packet) {
+    if (parameters == nullptr || packet == nullptr ||
+        parameters->codec_id != AV_CODEC_ID_H264 || parameters->extradata == nullptr ||
+        parameters->extradata_size < 5 || parameters->extradata[0] != 1 ||
+        packet->data == nullptr || packet->size <= 0) {
+        return false;
+    }
+    const int length_size = (parameters->extradata[4] & 0x03) + 1;
+    if (length_size == 3) {
+        return false;
+    }
+    int offset = 0;
+    while (offset < packet->size) {
+        if (packet->size - offset < length_size) {
+            return false;
+        }
+        uint32_t nal_size = 0;
+        for (int i = 0; i < length_size; ++i) {
+            nal_size = (nal_size << 8) | packet->data[offset + i];
+        }
+        offset += length_size;
+        if (nal_size == 0 || nal_size > static_cast<uint32_t>(packet->size - offset)) {
+            return false;
+        }
+        const uint8_t nal_header = packet->data[offset];
+        if ((nal_header & 0x80) == 0 && (nal_header & 0x60) != 0 &&
+            (nal_header & 0x1f) == 5) {
+            return true;
+        }
+        offset += static_cast<int>(nal_size);
+    }
+    return false;
 }
 
 } // namespace
@@ -191,11 +227,10 @@ bool InputSession::sourceWindowStartsOnKeyframe(int input_stream_index,
     const auto cache_key = std::make_pair(input_stream_index, source_in_us);
     const auto cached = keyframe_decisions_.find(cache_key);
     if (cached != keyframe_decisions_.end()) {
-        if (!cached->second) {
-            error = "copy-only source window must start on an exact video keyframe: " +
-                path_.string() + " source_in_us=" + std::to_string(source_in_us);
+        if (!cached->second.empty()) {
+            error = cached->second;
         }
-        return cached->second;
+        return cached->second.empty();
     }
     if (!demuxer_.isOpen()) {
         error = "input session is not open";
@@ -225,6 +260,8 @@ bool InputSession::sourceWindowStartsOnKeyframe(int input_stream_index,
     }
     bool found = false;
     bool eof = false;
+    std::string rejection = "copy-only source window must start on an exact video keyframe: " +
+        path_.string() + " source_in_us=" + std::to_string(source_in_us);
     std::string read_error;
     while (!eof) {
         if (!demuxer_.readFrame(*packet, eof, read_error)) {
@@ -242,18 +279,21 @@ bool InputSession::sourceWindowStartsOnKeyframe(int input_stream_index,
                 packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts,
                 source_start, input_stream->time_base);
             if (packet_us == source_in_us) {
-                found = true;
+                found = packetContainsH264Idr(input_stream->codecpar, packet);
                 av_packet_unref(packet);
+                if (!found) {
+                    rejection = "copy-only source window must start on an H.264 IDR access unit: " +
+                        path_.string() + " source_in_us=" + std::to_string(source_in_us);
+                }
                 break;
             }
         }
         av_packet_unref(packet);
     }
     av_packet_free(&packet);
-    keyframe_decisions_[cache_key] = found;
+    keyframe_decisions_[cache_key] = found ? std::string{} : rejection;
     if (!found) {
-        error = "copy-only source window must start on an exact video keyframe: " +
-            path_.string() + " source_in_us=" + std::to_string(source_in_us);
+        error = rejection;
     }
     return found;
 }

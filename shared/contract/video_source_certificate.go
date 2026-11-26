@@ -14,6 +14,7 @@ import (
 // Keyframes are microseconds from the source presentation origin, not timeline
 // placement. The native mux still checks the requested packet boundary.
 type VideoSourceCertificateV1 struct {
+	Chunks              *VideoSourceChunksV1        `json:"chunks,omitempty"`
 	Version             int                         `json:"version"`
 	SHA256              string                      `json:"sha256"`
 	SizeBytes           int64                       `json:"size_bytes"`
@@ -32,6 +33,11 @@ func (c VideoSourceCertificateV1) Validate() error {
 	revision, err := VideoWindowPreparationRevision(p, CanonicalPreparationQualityPolicyDefault)
 	if err != nil {
 		return err
+	}
+	if c.Chunks != nil {
+		if err := c.Chunks.Validate(c.SizeBytes); err != nil {
+			return err
+		}
 	}
 	e := c.Evidence
 	level, err := strconv.Atoi(strings.ReplaceAll(p.CodecLevel, ".", ""))

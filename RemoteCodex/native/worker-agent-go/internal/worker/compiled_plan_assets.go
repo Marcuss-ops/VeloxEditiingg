@@ -67,6 +67,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 	}
 	assetEnvelopes := make([]interface{}, 0, len(planAssets))
 	assetCacheKeys := make([]string, 0, len(planAssets))
+	sourceURLs := make([]string, 0, len(planAssets))
 	seenIdentities := make(map[string]string, len(planAssets))
 	runtimeDriveIDs := compiledRuntimeDriveFileIDs(payload["runtime_assets"])
 	runtimeDriveSources := compiledRuntimeDriveSourceURIs(payload["runtime_assets"])
@@ -80,6 +81,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 		}
 		seenIdentities[identity] = asset.AssetID
 		uri := compiledAssetReference(asset)
+		sourceURL := uri
 		driveID := strings.TrimSpace(asset.DriveFileID)
 		if driveID == "" {
 			driveID = runtimeDriveIDs[strings.TrimSpace(asset.AssetID)]
@@ -108,8 +110,10 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 				sourceURI = "https://drive.google.com/uc?export=download&id=" + url.QueryEscape(driveID)
 			}
 			w.rememberSourceLocator(identity, sourceURI)
+			sourceURL = sourceURI
 		}
 		assetCacheKeys = append(assetCacheKeys, identity)
+		sourceURLs = append(sourceURLs, sourceURL)
 		assetEnvelopes = append(assetEnvelopes, map[string]interface{}{
 			"asset_id":   identity,
 			"uri":        uri,
@@ -126,6 +130,15 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 	resolveCtx, cancelResolves := context.WithCancel(ctx)
 	defer cancelResolves()
 	resolvedAssets := make([]interface{}, len(assetEnvelopes))
+	sparseBindings := make(runtimeassets.Bindings)
+	var sparseMu sync.Mutex
+	keepSparse := false
+	defer func() {
+		if !keepSparse {
+			cleanupSparsePlanBindings(sparseBindings)
+		}
+	}()
+
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var firstErr error
@@ -143,6 +156,20 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 			}
 			defer func() { <-sem }()
 			if resolveCtx.Err() != nil {
+				return
+			}
+			if sparse, hit, sparseErr := w.resolveCertifiedSparseAsset(resolveCtx, plan, planAssets[index], sourceURLs[index]); sparseErr != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = sparseErr
+					cancelResolves()
+				}
+				errMu.Unlock()
+				return
+			} else if hit {
+				sparseMu.Lock()
+				sparseBindings[planAssets[index].AssetID] = sparse
+				sparseMu.Unlock()
 				return
 			}
 			resolvedPayload, resolveErr := w.resolveCommonAssetPayloadMutable(resolveCtx, map[string]interface{}{
@@ -179,6 +206,10 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 	}
 	bindings := make(runtimeassets.Bindings, len(planAssets))
 	for index, asset := range planAssets {
+		if binding, ok := sparseBindings[asset.AssetID]; ok {
+			bindings[asset.AssetID] = binding
+			continue
+		}
 		resolved, ok := resolvedAssets[index].(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("compiled render plan v2: resolved assets[%d] is %T, want object", index, resolvedAssets[index])
@@ -234,6 +265,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 			Verified: true,
 		}
 	}
+	keepSparse = true
 	return bindings, nil
 }
 

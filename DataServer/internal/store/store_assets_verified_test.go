@@ -103,3 +103,34 @@ func TestAssetSourceLookupUsesWindowSpecificCertificate(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceCertificateLookupPrefersNanosecondPrecisionUpgrade(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/source-certificate-upgrade.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	repo := NewSQLiteAssetRepository(s)
+	ctx := context.Background()
+	asset := AssetRecord{AssetID: "certified-source", Kind: "video_segment", Status: "READY", SHA256: strings.Repeat("a", 64), MimeType: "video/mp4", SizeBytes: 100, StorageProvider: "local", StorageKey: "fragment.mp4"}
+	if err := repo.Insert(ctx, asset); err != nil {
+		t.Fatal(err)
+	}
+	reference := "certified-video-source:" + asset.SHA256 + ":video-window-preparer.v2"
+	for _, source := range []AssetSourceRecord{
+		{SourceID: "z-old-source-proof", AssetID: asset.AssetID, SourceType: "video.source.certificate.v1", SourceReference: reference, MetadataJSON: `{"chunks":null}`, CreatedAt: "2026-11-26T10:00:00Z"},
+		{SourceID: "a-upgraded-source-proof", AssetID: asset.AssetID, SourceType: "video.source.certificate.v1", SourceReference: reference, MetadataJSON: `{"chunks":{"chunk_size":1048576}}`, CreatedAt: "2026-11-26T10:00:00.000000001Z"},
+	} {
+		if err := repo.InsertSource(ctx, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := repo.GetBySourceReference(ctx, reference)
+	if err != nil || got == nil || got.MetadataJSON != `{"chunks":{"chunk_size":1048576}}` {
+		t.Fatalf("single lookup returned %#v err=%v; want nanosecond proof upgrade", got, err)
+	}
+	batch, err := repo.GetBySourceReferences(ctx, []string{reference})
+	if err != nil || batch[reference] == nil || batch[reference].MetadataJSON != got.MetadataJSON {
+		t.Fatalf("batch lookup = %#v err=%v; single=%#v", batch[reference], err, got)
+	}
+}

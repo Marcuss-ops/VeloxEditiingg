@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"velox-shared/contract"
 )
 
 var (
@@ -31,7 +32,14 @@ const (
 )
 
 // Options declares the source window to materialize.
+type Window struct {
+	StartUS    int64
+	DurationUS int64
+}
+
 type Options struct {
+	Windows    []Window
+	Integrity  *contract.VideoSourceChunksV1
 	Size       int64
 	StartFrame int64
 	FrameCount int64
@@ -59,6 +67,9 @@ type byteRange struct {
 }
 
 type rangeReader struct {
+	integrity  *contract.VideoSourceChunksV1
+	chunkFile  *os.File
+	verified   map[int64]bool
 	ctx        context.Context
 	client     *http.Client
 	url        string
@@ -67,7 +78,7 @@ type rangeReader struct {
 	limit      int64
 }
 
-func (r *rangeReader) readAt(offset int64, buf []byte) (int, error) {
+func (r *rangeReader) readRemoteAt(offset int64, buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
@@ -219,6 +230,11 @@ func FetchWindow(ctx context.Context, client *http.Client, sourceURL string, opt
 		limit = defaultMaxBytes
 	}
 	reader := &rangeReader{ctx: ctx, client: client, url: sourceURL, size: opts.Size, limit: limit}
+	cleanup, err := reader.enableIntegrity(opts.Integrity, filepath.Dir(opts.Dest))
+	if err != nil {
+		return Stats{}, err
+	}
+	defer cleanup()
 	boxes, err := scanTopLevel(reader)
 	if err != nil {
 		return Stats{}, err
@@ -239,13 +255,39 @@ func FetchWindow(ctx context.Context, client *http.Client, sourceURL string, opt
 	if err != nil {
 		return Stats{}, err
 	}
-	first, last, err := index.resolveWindow(opts)
-	if err != nil {
-		return Stats{}, err
+	windows := opts.Windows
+	if len(windows) > 4096 {
+		return Stats{}, fmt.Errorf("mediarange: too many source windows")
 	}
-	preRoll := index.preRoll(first)
-	decodeEnd := index.decodeEnd(last)
-	ranges := buildRanges(boxes, index, preRoll, decodeEnd)
+	if len(windows) == 0 {
+		windows = []Window{{StartUS: opts.StartUS, DurationUS: opts.DurationUS}}
+	}
+	var ranges []byteRange
+	var first, last, preRoll int64
+	for i, window := range windows {
+		request := opts
+		if len(opts.Windows) > 0 {
+			request.StartFrame = 0
+			request.FrameCount = 0
+			request.StartUS = window.StartUS
+			request.DurationUS = window.DurationUS
+		}
+		f, l, err := index.resolveWindow(request)
+		if err != nil {
+			return Stats{}, err
+		}
+		pre := index.preRoll(f)
+		end := index.decodeEnd(l)
+		ranges = append(ranges, buildRanges(boxes, index, pre, end)...)
+		if i == 0 || f < first {
+			first = f
+			preRoll = pre
+		}
+		if i == 0 || l > last {
+			last = l
+		}
+	}
+	ranges = mergeRanges(ranges)
 	stats, err := writeSparseFile(reader, ranges, opts.Dest)
 	if err != nil {
 		return Stats{}, err
@@ -270,6 +312,10 @@ func buildRanges(boxes []box, index *sampleIndex, first, last int64) []byteRange
 	for i := first; i <= last; i++ {
 		ranges = append(ranges, byteRange{start: index.offsets[i], end: index.offsets[i] + index.sizes[i]})
 	}
+	return mergeRanges(ranges)
+}
+
+func mergeRanges(ranges []byteRange) []byteRange {
 	sort.Slice(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
 	merged := ranges[:0]
 	for _, current := range ranges {

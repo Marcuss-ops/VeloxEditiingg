@@ -75,6 +75,9 @@ func validateBinding(assetID, wantSHA string, wantSize int64, bindings runtimeas
 	if info.Size() != wantSize {
 		return fmt.Errorf("%w: asset_id=%q actual size=%d want=%d", errPreparedAssetIntegrity, assetID, info.Size(), wantSize)
 	}
+	if binding.Sparse && (!binding.Verified || !binding.VerifiedRanges) {
+		return fmt.Errorf("%w: asset_id=%q sparse ranges are not verified", errPreparedAssetIntegrity, assetID)
+	}
 	if binding.Verified {
 		return nil
 	}

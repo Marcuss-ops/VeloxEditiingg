@@ -228,6 +228,15 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// AssetRefV2 through the same verified resolver separately, then carry only
 	// local runtime bindings in context.Context. The canonical JSON and its
 	// SHA remain byte-identical across workers and retries.
+	privateSparseBindings := make(runtimeassets.Bindings)
+	defer cleanupSparsePlanBindings(privateSparseBindings)
+	retainSparse := func(bindings runtimeassets.Bindings) {
+		for _, binding := range bindings {
+			if binding.Sparse && binding.VerifiedRanges {
+				privateSparseBindings[binding.Path] = binding
+			}
+		}
+	}
 	usesVerifiedRuntimeBindings := (isCompiledPlan || isWindowPreparation) && !preparedWindowCacheHit
 	if usesVerifiedRuntimeBindings {
 		// Operational lifecycle: materializing runtime assets.
@@ -242,6 +251,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		// makes reservation look up a cache row that does not exist. Bindings
 		// also contain only the stock-pool members actually selected for this
 		// run, avoiding leases for every file in the Drive folder.
+		retainSparse(bindings)
 		leaseAssetKeys = compiledPlanLeaseKeys(bindings)
 		ctx = runtimeassets.WithBindings(ctx, bindings)
 	}
@@ -258,6 +268,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			if err != nil {
 				return err
 			}
+			retainSparse(bindings)
 			leaseAssetKeys = compiledPlanLeaseKeys(bindings)
 			ctx = runtimeassets.WithBindings(ctx, bindings)
 			return nil
@@ -505,6 +516,9 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 func compiledPlanLeaseKeys(bindings runtimeassets.Bindings) []string {
 	keys := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
+		if binding.Sparse {
+			continue
+		}
 		key := strings.TrimSpace(binding.CacheKey)
 		if key == "" {
 			continue

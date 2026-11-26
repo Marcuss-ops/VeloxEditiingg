@@ -26,13 +26,14 @@ func (e *videoPrepareWindowExecutor) preparedWindowPath(identity string, request
 	return outputPath
 }
 
-func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha256 string) (windowSourceProbe, error) {
+func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha256 string, cacheable bool) (windowSourceProbe, error) {
 	// Coalesce probes for the same immutable source while allowing different
-	// sources to proceed concurrently. Recheck the cache after acquiring the
-	// keyed lock because another caller may have populated it while we waited.
+	// sources to proceed concurrently. Complete files may reuse persisted probe
+	// facts; a Sparse binding must neither read nor populate this cache because
+	// its declared full-source SHA does not identify the bytes ffprobe observed.
 	unlock := e.lockWindow("source-probe:" + sha256)
 	defer unlock()
-	if e != nil {
+	if e != nil && cacheable {
 		e.sourceProbeMu.Lock()
 		cached, ok := e.sourceProbes[sha256]
 		e.sourceProbeMu.Unlock()
@@ -40,14 +41,16 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 			return cached, nil
 		}
 	}
-	if cached, ok := e.readPersistedSourceProbe(sha256); ok {
-		e.sourceProbeMu.Lock()
-		if e.sourceProbes == nil {
-			e.sourceProbes = make(map[string]windowSourceProbe)
+	if cacheable {
+		if cached, ok := e.readPersistedSourceProbe(sha256); ok {
+			e.sourceProbeMu.Lock()
+			if e.sourceProbes == nil {
+				e.sourceProbes = make(map[string]windowSourceProbe)
+			}
+			e.sourceProbes[sha256] = cached
+			e.sourceProbeMu.Unlock()
+			return cached, nil
 		}
-		e.sourceProbes[sha256] = cached
-		e.sourceProbeMu.Unlock()
-		return cached, nil
 	}
 	args := []string{
 		"-v", "error", "-skip_frame", "nokey", "-select_streams", "v:0", "-show_streams", "-show_frames", "-show_data_hash", "sha256",
@@ -98,7 +101,7 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 		}
 		probe.KeyframeTimes = append(probe.KeyframeTimes, timestamp)
 	}
-	if e != nil {
+	if e != nil && cacheable {
 		e.sourceProbeMu.Lock()
 		if e.sourceProbes == nil {
 			e.sourceProbes = make(map[string]windowSourceProbe)

@@ -37,17 +37,13 @@ func TestPlanDriveStockWindowTasksDeduplicatesImmutableWindowsWithoutDownloading
 	if err != nil {
 		t.Fatalf("PlanDriveStockWindowTasks: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("planned preparation tasks = %d, want one reused immutable window", len(tasks))
-	}
-	got := tasks[0].Request
-	if got.Source.SHA256 != sha || got.Source.SizeBytes != 1_000_000 || got.Source.DriveFileID != "drive-file-1" ||
-		got.SourceStartUS != 1_250_000 || got.SourceDurationUS != 3_125_000 || got.OutputFrameCount != 75 || got.TimelineStartFrame != 0 {
-		t.Fatalf("preparation request = %+v; source identity/window or stable placement is wrong", got)
+	if len(tasks) != 0 {
+		t.Fatalf("known immutable source scheduled %d preparation tasks; direct assembly should decide compatibility", len(tasks))
 	}
 
-	// The stock snapshot's canonical source digest must avoid identity discovery
-	// even when the plan has not yet copied the source metadata into its asset.
+	// If the immutable digest has not yet been copied into the plan itself, the
+	// enrichment step must do that before deciding to bypass preparation. Until
+	// then the planner still publishes a worker task with the known digest.
 	plan.Assets[0].SHA256 = ""
 	sourcePlan, err := json.Marshal(plan)
 	if err != nil {

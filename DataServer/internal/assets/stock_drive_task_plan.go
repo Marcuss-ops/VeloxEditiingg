@@ -82,6 +82,14 @@ func (s *AssetService) PlanDriveStockWindowTasks(planJSON string, runtimeAssets 
 			if segment.SourceInUS < 0 || segment.SourceDurationUS <= 0 || segment.FrameCount <= 0 {
 				return nil, fmt.Errorf("video segment %q has an invalid source window", segment.SegmentID)
 			}
+			// A known immutable source identity does not need a fragment task just
+			// to certify one editorial window. The assembly worker resolves the
+			// complete source through the SHA-verifying asset path, and the native
+			// packet mux independently checks canonical stream compatibility and
+			// the exact IDR boundary. Unknown identities still use discovery.
+			if validStockSourceSHA256(asset.SHA256) && asset.SizeBytes > 0 {
+				continue
+			}
 			// An unknown SHA is not a reason to materialize bytes on the
 			// control plane: the worker establishes the identity from the same
 			// verified download it needs for the window and returns it in the

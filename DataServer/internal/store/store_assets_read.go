@@ -6,6 +6,16 @@ import (
 	"fmt"
 )
 
+// Source certificates can be upgraded over time (for example when a worker
+// later supplies authenticated block hashes). Sort the whole-second epoch and
+// a separately zero-padded nanosecond fraction; SQLite julianday loses
+// sub-millisecond precision, and RFC3339Nano strings are not lexically ordered
+// when timestamps use different fractional widths.
+const assetSourceCreatedAtOrder = `CAST(strftime('%s', s.created_at) AS INTEGER) DESC,
+	CASE WHEN substr(s.created_at, 20, 1) = '.'
+	THEN substr(replace(substr(s.created_at, 21), 'Z', '') || '000000000', 1, 9)
+	ELSE '000000000' END DESC, s.source_id DESC`
+
 // store_assets_read.go owns the read paths for assets and their dependent
 // tables (asset_media_metadata, asset_sources, job_assets). Write paths live
 // in store_assets_write.go.
@@ -95,7 +105,7 @@ func (r *SQLiteAssetRepository) GetBySourceReference(ctx context.Context, refere
 		  FROM assets a
 		  JOIN asset_sources s ON s.asset_id = a.asset_id
 		 WHERE s.source_reference = ? AND a.status = 'READY'
-		 ORDER BY s.created_at DESC, s.source_id DESC
+		 ORDER BY `+assetSourceCreatedAtOrder+`
 		 LIMIT 1`, reference)
 	var a AssetRecord
 	err := row.Scan(&a.AssetID, &a.Kind, &a.Status, &a.SHA256, &a.MimeType,
@@ -141,7 +151,7 @@ func (r *SQLiteAssetRepository) GetBySourceReferences(ctx context.Context, refer
 			COALESCE(a.deleted_at,'')
 			FROM asset_sources s JOIN assets a ON a.asset_id=s.asset_id
 			WHERE s.source_reference IN (` + string(placeholders) + `) AND a.status='READY'
-			ORDER BY s.source_reference, s.created_at DESC, s.source_id DESC`
+			ORDER BY s.source_reference, ` + assetSourceCreatedAtOrder
 		rows, err := r.store.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, fmt.Errorf("get assets by source references: %w", err)

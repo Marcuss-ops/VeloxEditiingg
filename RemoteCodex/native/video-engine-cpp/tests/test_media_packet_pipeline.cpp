@@ -11,12 +11,16 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -54,6 +58,54 @@ bool makeVideo(const fs::path& output, const std::string& size) {
             << " -g 2 -keyint_min 2 -sc_threshold 0 "
             << velox::file::shellQuote(output.string());
     return velox::file::runCommand(command.str());
+}
+
+bool changeFirstH264IdrNalToNonIdr(const fs::path& source, const fs::path& output) {
+    AVFormatContext* context = nullptr;
+    if (avformat_open_input(&context, source.c_str(), nullptr, nullptr) < 0 ||
+        context == nullptr || avformat_find_stream_info(context, nullptr) < 0) {
+        if (context != nullptr) avformat_close_input(&context);
+        return false;
+    }
+    AVPacket* packet = av_packet_alloc();
+    int64_t mutation_offset = -1;
+    while (packet != nullptr && av_read_frame(context, packet) >= 0) {
+        const auto* stream = context->streams[packet->stream_index];
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+            (packet->flags & AV_PKT_FLAG_KEY) != 0 && packet->pos >= 0 &&
+            stream->codecpar->extradata_size >= 5 && stream->codecpar->extradata[0] == 1) {
+            const int length_size = (stream->codecpar->extradata[4] & 0x03) + 1;
+            int offset = 0;
+            while (length_size != 3 && offset + length_size <= packet->size) {
+                uint32_t nal_size = 0;
+                for (int i = 0; i < length_size; ++i) {
+                    nal_size = (nal_size << 8) | packet->data[offset + i];
+                }
+                offset += length_size;
+                if (nal_size == 0 || nal_size > static_cast<uint32_t>(packet->size - offset)) break;
+                if ((packet->data[offset] & 0x1f) == 5) {
+                    mutation_offset = packet->pos + offset;
+                    break;
+                }
+                offset += static_cast<int>(nal_size);
+            }
+        }
+        av_packet_unref(packet);
+        if (mutation_offset >= 0) break;
+    }
+    av_packet_free(&packet);
+    avformat_close_input(&context);
+    if (mutation_offset < 0) return false;
+
+    std::ifstream input(source, std::ios::binary);
+    std::vector<char> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    if (bytes.empty() || mutation_offset >= static_cast<int64_t>(bytes.size())) return false;
+    auto& nal_header = bytes[static_cast<std::size_t>(mutation_offset)];
+    if ((static_cast<unsigned char>(nal_header) & 0x1f) != 5) return false;
+    nal_header = static_cast<char>((static_cast<unsigned char>(nal_header) & 0xe0) | 1);
+    std::ofstream result(output, std::ios::binary | std::ios::trunc);
+    result.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    return result.good();
 }
 
 bool makeAudio(const fs::path& output) {
@@ -522,6 +574,21 @@ int main() {
            "non-keyframe rejection explains the correctness requirement");
     expect(!fs::exists(nonKeyframeOutput),
            "non-keyframe rejection does not publish an output");
+
+    const fs::path nonIdrVideo = root / "key-flag-non-idr.mp4";
+    expect(changeFirstH264IdrNalToNonIdr(video, nonIdrVideo),
+           "test fixture preserves MP4 key flag while replacing the IDR NAL type");
+    const fs::path nonIdrOutput = root / "non-idr-source-output.mp4";
+    velox::media::CopyOnlyMuxRequest nonIdrRequest;
+    nonIdrRequest.video_segments = {{nonIdrVideo, 0, 400'000}};
+    nonIdrRequest.output_path = nonIdrOutput;
+    velox::media::CopyOnlyMuxResult nonIdrResult;
+    expect(!velox::media::muxCopyOnly(nonIdrRequest, &nonIdrResult),
+           "copy-only rejects a container key flag that does not contain H.264 IDR");
+    expect(nonIdrResult.error.find("IDR") != std::string::npos,
+           "non-IDR rejection identifies the required access-unit type: " + nonIdrResult.error);
+    expect(!fs::exists(nonIdrOutput),
+           "non-IDR rejection does not publish an output");
 
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);

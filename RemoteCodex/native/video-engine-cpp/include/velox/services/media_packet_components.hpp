@@ -133,7 +133,7 @@ public:
 private:
     std::filesystem::path path_;
     Demuxer demuxer_;
-    std::map<std::pair<int, int64_t>, bool> keyframe_decisions_;
+    std::map<std::pair<int, int64_t>, std::string> keyframe_decisions_;
 };
 
 // Bounded by the number of distinct source paths used by one mux attempt.

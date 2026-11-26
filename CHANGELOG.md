@@ -1,5 +1,31 @@
 ## [Unreleased] - 2026-11-08
 
+### Performance — fetch authenticated source ranges for direct assembly
+
+- Full-source certificates may carry SHA-256 hashes for fixed 1 MiB blocks,
+  generated while confirming the complete source digest. The existing source
+  registry can upgrade a certificate that predates block evidence and rejects
+  conflicting source or block facts.
+- Cold allowlisted HTTPS video assets with this evidence and only certified direct source
+  windows are assembled from authenticated MP4 metadata and sample ranges.
+  Warm complete assets remain preferred; unsupported ranges fall back to the
+  full resolver and its complete SHA check.
+- Sparse assembly inputs stay private to dispatch, skip complete-asset cache
+  leases, require authenticated-range evidence, and are deleted after execution.
+  Sources larger than 1 GiB and sources without block evidence retain full fetch.
+- Probe results from sparse bindings bypass both probe caches; the probe-index
+  revision invalidates old entries that did not record byte completeness.
+- Native packet-copy assembly checks the H.264 NAL unit at the exact source
+  boundary and requires IDR, even when MP4 marks a packet as a generic keyframe.
+- Verification: worker media-range, worker resolver/executor, shared contract,
+  source-registry and SQLite ordering regressions pass. Production performance
+  measurement remains pending deployment.
+- First-use limitation: sources that already have immutable SHA/size bypass
+  preparation and go directly to full-SHA verification plus native stream/IDR
+  checks. A source with no SHA still needs identity discovery, whose current
+  task/result contract registers a packet-copy fragment before FINALIZE can
+  reuse its evidence in that same job.
+
 ### Added — reusable source certificates and certified stock cuts
 
 - Full verified worker sources can emit versioned source evidence tied to SHA,

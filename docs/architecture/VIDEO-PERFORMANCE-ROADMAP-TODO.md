@@ -1,6 +1,48 @@
 # Video performance roadmap — action list
 
-Status updated: 2026-11-25
+Status updated: 2026-11-26
+
+## 2026-11-26 — authenticated sparse inputs for certified direct assembly
+
+Full-source certificates now optionally carry SHA-256 evidence for fixed
+1 MiB source blocks. Workers produce the block list while rereading a complete
+source whose whole-file SHA and exact frame facts have already been verified;
+the evidence is stored in the existing certificate registry and may be
+upgraded from a prior certificate without block hashes. Conflicting source or
+block evidence is rejected. Sources above 1 GiB omit this optional evidence
+and continue through complete download.
+
+When a cold approved HTTPS video source has a complete block certificate and every
+referenced segment is directly packet-copy eligible, the assembly resolver
+fetches only MP4 metadata and required sample ranges. Every fetched 1 MiB block
+is authenticated before its bytes are parsed or written. Sparse files remain
+private to the task, do not enter the complete-asset cache or leases, and are
+removed at dispatch completion. A warm complete source is preferred; range
+failure or unsupported containers fall back to the regular whole-file resolver,
+which verifies the complete SHA. The prepared-window path remains for sources
+without applicable evidence and for non-HTTP locators.
+
+Regression coverage includes multi-window sparse extraction, altered block
+rejection, malformed proof rejection before network access, sparse-binding
+validation, proof upgrade/conflict handling, and nanosecond ordering of the
+existing SQLite source registry. Production cold/warm render measurements and
+deployment verification remain operator follow-ups.
+
+Probe caches now accept and persist facts only from complete bindings. Sparse
+preparation probes bypass both in-memory and disk caches, and the index schema
+revision invalidates older entries whose byte completeness was not recorded.
+The native packet mux also inspects the H.264 access unit at each requested
+boundary and requires an IDR NAL, not only the container's generic key flag.
+
+Known immutable SHA/size inputs now bypass window preparation even when the
+source certificate is missing: the worker verifies the complete asset, and the
+native mux checks canonical stream compatibility and each exact IDR boundary.
+Still open: a source with no immutable SHA requires identity discovery, which
+currently uses `video.prepare.window.v1` and produces a packet-copy fragment.
+That discovery result cannot yet be reused by the same first job as a
+source-only certificate because the persisted task/result contract requires a
+registered prepared asset. No second preparer or silent no-op completion is
+safe here.
 
 ## 2026-11-26 — remaining source-contract work
 
@@ -20,10 +62,10 @@ Source-contract state and remaining work:
   these proofs in a batch before stock selection/dependency planning; later
   renders can mux source windows directly. Missing counts, non-zero origins,
   sparse files and invalid proofs retain the existing window path.
-- Define authenticated range evidence before accepting partial sources in the
-  assembly resolver. The existing sparse preparation binding carries the declared
-  SHA, not a recomputed full-content digest; it cannot be promoted to an ordinary
-  verified assembly binding. Complete downloads remain the default.
+- Implemented: sparse assembly inputs require fixed-size block SHA evidence
+  bound to a complete source certificate. Only authenticated materialized bytes
+  enter the mux; sparse files never claim full-file SHA verification and never
+  enter the whole-asset cache. Complete downloads remain the fallback.
 - Implemented: deterministic stock selection prefers already certified compatible
   candidates. After a partial slot consumes a mid-GOP boundary, expansion selects
   the next certified keyframe, restarting only when the pool cycles. Exact source

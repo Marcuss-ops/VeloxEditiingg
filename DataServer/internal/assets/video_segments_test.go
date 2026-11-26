@@ -44,7 +44,8 @@ func (r *segmentTestRepository) InsertSource(_ context.Context, source AssetSour
 	return nil
 }
 func (r *segmentTestRepository) GetBySourceReference(_ context.Context, reference string) (*AssetRecord, error) {
-	for _, source := range r.sources {
+	for i := len(r.sources) - 1; i >= 0; i-- {
+		source := r.sources[i]
 		if source.SourceReference == reference {
 			record := r.bySHA[source.AssetID]
 			if record == nil {

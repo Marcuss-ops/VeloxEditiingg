@@ -35,11 +35,29 @@ func (s *AssetService) registerSourceCertificate(ctx context.Context, asset *Ass
 		if existing != nil && existing.Status == AssetStatusReady {
 			var previous contract.VideoSourceCertificateV1
 			if json.Unmarshal([]byte(existing.MetadataJSON), &previous) == nil && previous.Validate() == nil {
-				encoded, _ := json.Marshal(previous)
-				if string(encoded) != string(metadata) {
+				previousChunks := previous.Chunks
+				previous.Chunks = nil
+				current := *source
+				current.Chunks = nil
+				before, _ := json.Marshal(previous)
+				after, _ := json.Marshal(current)
+				if string(before) != string(after) {
 					return nil, fmt.Errorf("source certificate conflicts with existing immutable evidence")
 				}
-				return asset, nil
+				if previousChunks != nil {
+					if source.Chunks != nil {
+						before, _ = json.Marshal(previousChunks)
+						after, _ = json.Marshal(source.Chunks)
+						if string(before) != string(after) {
+							return nil, fmt.Errorf("source blocks conflict with existing immutable evidence")
+						}
+					}
+					return asset, nil
+				}
+				if source.Chunks == nil {
+					return asset, nil
+				}
+
 			}
 		}
 	}
@@ -47,7 +65,7 @@ func (s *AssetService) registerSourceCertificate(ctx context.Context, asset *Ass
 	if err != nil {
 		return nil, err
 	}
-	err = s.repo.InsertSource(ctx, AssetSourceRecord{SourceID: id, AssetID: asset.AssetID, SourceType: "video.source.certificate.v1", SourceReference: sourceCertificateReference(source.SHA256, source.PreparationRevision), MetadataJSON: string(metadata), CreatedAt: s.clock.Now().UTC().Format(time.RFC3339)})
+	err = s.repo.InsertSource(ctx, AssetSourceRecord{SourceID: id, AssetID: asset.AssetID, SourceType: "video.source.certificate.v1", SourceReference: sourceCertificateReference(source.SHA256, source.PreparationRevision), MetadataJSON: string(metadata), CreatedAt: s.clock.Now().UTC().Format(time.RFC3339Nano)})
 	if err != nil {
 		return nil, fmt.Errorf("register source certificate: %w", err)
 	}
@@ -94,6 +112,30 @@ func (s *AssetService) EnrichPlanWithSourceCertificates(ctx context.Context, pla
 			added["stockpool:"+drive] = true
 		}
 	}
+	changed := false
+	for i := range plan.Assets {
+		asset := &plan.Assets[i]
+		if asset.Kind != "video" {
+			continue
+		}
+		binding := stockRuntimeBindingForAsset(*asset, bindings)
+		runtimeSHA := bindingString(binding, "source_sha256", "sha256", "asset_sha256")
+		if validStockSourceSHA256(asset.SHA256) && validStockSourceSHA256(runtimeSHA) && asset.SHA256 != runtimeSHA {
+			return "", fmt.Errorf("runtime source digest conflicts with compiled asset %s", asset.AssetID)
+		}
+		if asset.SHA256 == "" && validStockSourceSHA256(runtimeSHA) {
+			asset.SHA256 = runtimeSHA
+			changed = true
+		}
+		runtimeSize := bindingInt64(binding, "size_bytes")
+		if asset.SizeBytes > 0 && runtimeSize > 0 && asset.SizeBytes != runtimeSize {
+			return "", fmt.Errorf("runtime source size conflicts with compiled asset %s", asset.AssetID)
+		}
+		if asset.SizeBytes <= 0 && runtimeSize > 0 {
+			asset.SizeBytes = runtimeSize
+			changed = true
+		}
+	}
 	var records map[string]*AssetRecord
 	batch, batchOK := s.repo.(assetSourceAssetsReader)
 	if batchOK {
@@ -124,7 +166,6 @@ func (s *AssetService) EnrichPlanWithSourceCertificates(ctx context.Context, pla
 			}
 		}
 	}
-	changed := false
 	retained := plan.Assets[:0]
 	for _, asset := range plan.Assets {
 		if asset.Kind != "video" {

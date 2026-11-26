@@ -38,8 +38,7 @@ bool prepareSegment(CursorSegment& segment, std::string& error) {
         error = "segment_execution_rejected: legacy renderer required for " + segment.path;
         return false;
     }
-    if (segment.media_type == AVMEDIA_TYPE_VIDEO && !segment.normalized &&
-        !segment.metadata_certified &&
+    if (segment.media_type == AVMEDIA_TYPE_VIDEO &&
         !segment.session->sourceWindowStartsOnKeyframe(
             segment.stream_index, segment.source_in_us, error)) {
         return false;

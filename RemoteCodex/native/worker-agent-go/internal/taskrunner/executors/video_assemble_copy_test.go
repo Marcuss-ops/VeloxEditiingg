@@ -23,6 +23,23 @@ import (
 	"velox-worker-agent/pkg/video/plan"
 )
 
+func TestValidateBindingRequiresAuthenticatedSparseRanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "source.mp4")
+	data := []byte("sparse-file-layout")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.Repeat("a", 64)
+	base := runtimeassets.Binding{AssetID: "source", Path: path, SHA256: sha, Size: int64(len(data)), Verified: true, Sparse: true}
+	if err := validateBinding("source", sha, int64(len(data)), runtimeassets.Bindings{"source": base}); err == nil {
+		t.Fatal("sparse binding without range proof was accepted")
+	}
+	base.VerifiedRanges = true
+	if err := validateBinding("source", sha, int64(len(data)), runtimeassets.Bindings{"source": base}); err != nil {
+		t.Fatalf("authenticated sparse binding rejected: %v", err)
+	}
+}
+
 type copyOnlyRenderClient struct {
 	planJSON []byte
 }

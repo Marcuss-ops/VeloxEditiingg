@@ -241,6 +241,9 @@ func TestVideoPrepareWindow_ProducesCertifiedPacketCopyForCanonicalKeyframeWindo
 	if certificate.SourceCertificate == nil || certificate.SourceCertificate.Validate() != nil || certificate.SourceCertificate.Evidence.FrameCount != 96 {
 		t.Fatalf("full verified source was not certified: %+v", certificate.SourceCertificate)
 	}
+	if certificate.SourceCertificate.Chunks == nil || certificate.SourceCertificate.Chunks.Validate(int64(len(source))) != nil {
+		t.Fatalf("full source certificate lacks valid authenticated blocks: %+v", certificate.SourceCertificate.Chunks)
+	}
 	certificate.SourceCertificate.SHA256 = strings.Repeat("f", 64)
 	if certificate.ValidateFor(request) == nil {
 		t.Fatal("source proof for different bytes was accepted")
@@ -252,7 +255,7 @@ func TestVideoPrepareWindow_ProducesCertifiedPacketCopyForCanonicalKeyframeWindo
 		t.Fatalf("warm reuse: %+v %v", warm, err)
 	}
 	var warmCert contract.VideoPrepareWindowCertificateV1
-	if json.Unmarshal([]byte(warm.Segments[0].MetadataJSON), &warmCert) != nil || warmCert.SourceCertificate == nil || warmCert.ValidateFor(request) != nil {
+	if json.Unmarshal([]byte(warm.Segments[0].MetadataJSON), &warmCert) != nil || warmCert.SourceCertificate == nil || warmCert.SourceCertificate.Chunks == nil || warmCert.ValidateFor(request) != nil {
 		t.Fatal("warm fragment lost source evidence")
 	}
 	prepare.outputRoot = filepath.Join(root, "sparse-prepared")
@@ -264,6 +267,63 @@ func TestVideoPrepareWindow_ProducesCertifiedPacketCopyForCanonicalKeyframeWindo
 	var sparseCert contract.VideoPrepareWindowCertificateV1
 	if json.Unmarshal([]byte(sparse.Segments[0].MetadataJSON), &sparseCert) != nil || sparseCert.SourceCertificate != nil {
 		t.Fatal("sparse input issued a full-source certificate")
+	}
+}
+
+func TestSparseSourceProbeNeverReadsOrWritesFullSourceCache(t *testing.T) {
+	if _, err := osexec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is not installed")
+	}
+	if _, err := osexec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is not installed")
+	}
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source.mp4")
+	command := osexec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=320x180:r=24:d=2", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", sourcePath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg cannot create probe fixture: %v: %s", err, output)
+	}
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	sha := hex.EncodeToString(sum[:])
+	executor := &videoPrepareWindowExecutor{outputRoot: root, sourceProbes: make(map[string]windowSourceProbe)}
+	legacy := windowSourceProbeIndex{Version: 2, SourceSHA: sha, Probe: windowSourceProbe{CodecName: "h264", Width: 320, Height: 180, FPSNum: 24, FPSDen: 1, TimeBaseNum: 1, TimeBaseDen: 12288, KeyframeTimes: []float64{0}}}
+	legacyJSON, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(executor.sourceProbeIndexPath(sha)), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executor.sourceProbeIndexPath(sha), legacyJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := executor.readPersistedSourceProbe(sha); ok {
+		t.Fatal("legacy probe index with unknown byte completeness was accepted")
+	}
+	if _, err := executor.probeSource(context.Background(), sourcePath, sha, false); err != nil {
+		t.Fatalf("probe sparse binding: %v", err)
+	}
+	if _, ok := executor.sourceProbes[sha]; ok {
+		t.Fatal("probe from sparse binding entered the in-memory complete-source cache")
+	}
+	if _, ok := executor.readPersistedSourceProbe(sha); ok {
+		t.Fatal("probe from sparse binding promoted the legacy index")
+	}
+	if _, err := executor.probeSource(context.Background(), sourcePath, sha, true); err != nil {
+		t.Fatalf("probe complete binding: %v", err)
+	}
+	if _, err := os.Stat(executor.sourceProbeIndexPath(sha)); err != nil {
+		t.Fatalf("complete-source probe was not persisted: %v", err)
+	}
+	if persisted, ok := executor.readPersistedSourceProbe(sha); !ok || persisted.FrameCount <= 0 {
+		t.Fatal("complete-source probe did not replace the invalid legacy index")
+	}
+	if _, err := executor.probeSource(context.Background(), filepath.Join(root, "missing-sparse.mp4"), sha, false); err == nil {
+		t.Fatal("sparse probe reused a complete-source cache entry instead of probing its own bytes")
 	}
 }
 

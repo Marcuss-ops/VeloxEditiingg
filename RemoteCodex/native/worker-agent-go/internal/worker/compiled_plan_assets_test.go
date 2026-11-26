@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -389,6 +390,33 @@ func TestResolveCompiledRenderPlanAssets_RejectsMalformedPlanBeforeResolver(t *t
 	}
 	if _, err := w.resolveCompiledRenderPlanAssets(context.Background(), "job-malformed", payload); err == nil {
 		t.Fatal("malformed V2 plan was accepted")
+	}
+}
+
+func TestResolveCertifiedSparseAssetRejectsUnapprovedHTTPSource(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	level, _ := strconv.Atoi(strings.ReplaceAll(profile.CodecLevel, ".", ""))
+	sha := strings.Repeat("a", 64)
+	size := contract.VideoSourceChunkSize*2 + 1
+	certificate := &contract.VideoSourceCertificateV1{
+		Version: 1, SHA256: sha, SizeBytes: size, ProfileID: profile.ProfileID,
+		PreparationRevision: revision, DurationUS: 4_000_000, KeyframesUS: []int64{0, 1_000_000, 2_000_000, 3_000_000},
+		Chunks:   &contract.VideoSourceChunksV1{ChunkSize: contract.VideoSourceChunkSize, SHA256: []string{strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)}},
+		Evidence: contract.VideoWindowOutputEvidenceV1{Codec: profile.Codec, Profile: strings.ToLower(profile.CodecProfile), Level: level, Width: profile.Width, Height: profile.Height, PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen, FrameCount: 96, FirstFrameKeyframe: true, ExtradataSHA256: contract.CanonicalVideoExtradataSHA256},
+	}
+	if err := certificate.Validate(); err != nil {
+		t.Fatalf("fixture certificate: %v", err)
+	}
+	asset := contract.AssetRefV2{AssetID: "source", Kind: "video", SHA256: sha, SizeBytes: size, ProfileID: profile.StreamProfile(), Width: profile.Width, Height: profile.Height, FrameCount: 96, DurationUS: 4_000_000, FirstFrameKeyframe: true, ClosedGOP: true, ExtradataSHA256: contract.CanonicalVideoExtradataSHA256, SourceCertificate: certificate}
+	segment := contract.VideoSegmentV2{AssetID: asset.AssetID, SHA256: sha, SourceInUS: 0, SourceDurationUS: 1_000_000, FrameCount: 24}
+	plan := &contract.CompiledRenderPlanV2{Output: contract.OutputContractV2{ProfileID: profile.ProfileID}, Assets: []contract.AssetRefV2{asset}, VideoTracks: []contract.VideoTrackV2{{Segments: []contract.VideoSegmentV2{segment}}}}
+	w := &Worker{config: &config.WorkerConfig{MasterURL: "https://master.example", WorkDir: t.TempDir()}}
+	if binding, hit, err := w.resolveCertifiedSparseAsset(context.Background(), plan, asset, "http://127.0.0.1:8080/video.mp4"); err != nil || hit || binding.Path != "" {
+		t.Fatalf("unapproved HTTP source produced sparse binding=%+v hit=%t err=%v", binding, hit, err)
 	}
 }
 
