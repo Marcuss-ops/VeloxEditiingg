@@ -121,3 +121,20 @@ func TestExpandStockPoolContinuesSourceAcrossSlots(t *testing.T) {
 		}
 	}
 }
+
+func TestStockPoolFramesUseCertifiedSourceIdentity(t *testing.T) {
+	profile, err := KnownCanonicalVideoProfileV1("VELOX_ASSEMBLY_READY_V1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := StockPoolCandidateV2{DriveFileID: "clip", SourceSHA256: strings.Repeat("b", 64), SizeBytes: 100, DurationMS: 1041}
+	asset := AssetRefV2{AssetID: "stockpool:clip", Kind: "video", SHA256: member.SourceSHA256, SizeBytes: 100, DurationUS: 1041667, FrameCount: 25, Width: profile.Width, Height: profile.Height, ProfileID: profile.StreamProfile(), FirstFrameKeyframe: true, ClosedGOP: true, ExtradataSHA256: CanonicalVideoExtradataSHA256}
+	plan := &CompiledRenderPlanV2{Output: OutputContractV2{ProfileID: profile.ProfileID, FPSNum: 24, FPSDen: 1}, Assets: []AssetRefV2{asset}}
+	if frames, bad := stockPoolMemberFrames(plan, member); bad || frames != 25 {
+		t.Fatalf("certified frames=%d invalid=%v", frames, bad)
+	}
+	plan.Assets[0].SHA256 = strings.Repeat("c", 64)
+	if frames, bad := stockPoolMemberFrames(plan, member); bad || frames != 24 {
+		t.Fatalf("changed content reused certificate: frames=%d invalid=%v", frames, bad)
+	}
+}

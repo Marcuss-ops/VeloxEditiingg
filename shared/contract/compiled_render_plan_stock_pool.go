@@ -73,7 +73,7 @@ func SelectCompiledStockPoolMembers(
 		if !candidate.StockPoolMember || candidate.DriveFileID == "" || candidate.DurationMS <= 0 || candidate.SizeBytes <= 0 {
 			continue
 		}
-		if _, overflow := checkedStockPoolFrames(candidate.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen); overflow {
+		if _, overflow := stockPoolMemberFrames(plan, candidate); overflow {
 			return nil, fmt.Errorf("compiled render plan v2: stock_pool member %q duration overflows frame count", candidate.DriveFileID)
 		}
 		if previous, exists := seen[candidate.DriveFileID]; exists {
@@ -104,7 +104,7 @@ func SelectCompiledStockPoolMembers(
 	var framesAvailable int64
 	for _, candidate := range pool {
 		selected = append(selected, candidate)
-		frames, _ := checkedStockPoolFrames(candidate.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen)
+		frames, _ := stockPoolMemberFrames(plan, candidate)
 		if frames > math.MaxInt64-framesAvailable {
 			framesAvailable = math.MaxInt64
 		} else {
@@ -159,7 +159,7 @@ func ValidateCompiledStockPoolMembers(plan *CompiledRenderPlanV2, members []Stoc
 			return fmt.Errorf("compiled render plan v2: persisted stock_pool member %q is duplicated", member.DriveFileID)
 		}
 		seen[member.DriveFileID] = struct{}{}
-		frames, overflow := checkedStockPoolFrames(member.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen)
+		frames, overflow := stockPoolMemberFrames(plan, member)
 		if overflow {
 			return fmt.Errorf("compiled render plan v2: stock_pool member %q duration overflows frame count", member.DriveFileID)
 		}
@@ -252,7 +252,7 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 		if member.DurationMS > math.MaxInt64/1000 {
 			return fmt.Errorf("compiled render plan v2: stock_pool member %q duration overflows microseconds", member.DriveFileID)
 		}
-		frames, overflow := checkedStockPoolFrames(member.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen)
+		frames, overflow := stockPoolMemberFrames(plan, member)
 		if overflow || frames <= 0 {
 			return fmt.Errorf("compiled render plan v2: stock_pool member %q has invalid frame duration", member.DriveFileID)
 		}
@@ -288,7 +288,7 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 				if cursor == len(ordered) {
 					cursor = 0
 					for i, member := range ordered {
-						framesLeft[i], _ = checkedStockPoolFrames(member.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen)
+						framesLeft[i], _ = stockPoolMemberFrames(plan, member)
 					}
 				}
 				member := ordered[cursor]
@@ -335,4 +335,19 @@ func checkedStockPoolFrames(durationMS int64, fpsNum, fpsDen int) (int64, bool) 
 		return 0, true
 	}
 	return durationMS * int64(fpsNum) / (1000 * int64(fpsDen)), false
+}
+
+// Prefer exact frame evidence only when it belongs to the same immutable
+// canonical source. Duration metadata remains the conservative legacy fallback.
+func stockPoolMemberFrames(plan *CompiledRenderPlanV2, member StockPoolCandidateV2) (int64, bool) {
+	for _, asset := range plan.Assets {
+		if asset.AssetID != "stockpool:"+member.DriveFileID || asset.SHA256 != stockPoolCandidateSHA(member) || asset.SizeBytes != member.SizeBytes {
+			continue
+		}
+		segment := VideoSegmentV2{AssetID: asset.AssetID, SHA256: asset.SHA256, SourceDurationUS: asset.DurationUS, FrameCount: asset.FrameCount}
+		if PacketCopySourceWindowCertified(plan, segment, asset) {
+			return asset.FrameCount, false
+		}
+	}
+	return checkedStockPoolFrames(member.DurationMS, plan.Output.FPSNum, plan.Output.FPSDen)
 }

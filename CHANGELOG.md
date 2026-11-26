@@ -2,6 +2,8 @@
 
 ### Fixed — stock cursor and legacy assembly scheduling
 
+- Stock selection and expansion prefer exact frame counts from matching
+  certified canonical source assets; legacy metadata retains its duration fallback.
 - Consecutive stock slots continue from the consumed source frame instead of
   repeating the beginning; a full pool cycle intentionally restarts sources.
 - The persisted slice executor shares the copy executor's IO resource class
