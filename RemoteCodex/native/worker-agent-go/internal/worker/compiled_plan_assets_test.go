@@ -464,3 +464,18 @@ func TestDiscoverLocalAssetSHA256RejectsSizeDrift(t *testing.T) {
 		t.Fatal("expected size drift to fail identity discovery")
 	}
 }
+
+func TestResolveCompiledRenderPlanAssets_CancelledContextDoesNotFetch(t *testing.T) {
+	assets := map[string][]byte{"v2-video": []byte("video"), "v2-audio": []byte("audio")}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("cancelled resolution started an HTTP request")
+		http.Error(w, "unexpected", 500)
+	}))
+	defer server.Close()
+	worker := &Worker{config: &config.WorkerConfig{WorkerID: "cancelled", MasterURL: server.URL, WorkDir: t.TempDir()}, apiClient: api.NewClient(server.URL)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := worker.resolveCompiledRenderPlanAssets(ctx, "cancelled", compiledPlanAssetPayload(t, assets)); err == nil {
+		t.Fatal("cancelled resolution succeeded")
+	}
+}

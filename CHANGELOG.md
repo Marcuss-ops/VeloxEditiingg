@@ -1,5 +1,12 @@
 ## [Unreleased] - 2026-11-08
 
+### Performance — avoid redundant assembly input work
+
+- Validate each declared assembly binding once, including unattested files;
+  repeated uses in the timeline do not trigger repeated SHA-256 scans.
+- Cancel sibling asset resolutions after the first error and stop queued
+  resolutions when their context is cancelled.
+
 ### Fixed — stock cursor and legacy assembly scheduling
 
 - Stock selection and expansion prefer exact frame counts from matching

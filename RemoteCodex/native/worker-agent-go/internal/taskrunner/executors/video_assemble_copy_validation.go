@@ -46,13 +46,12 @@ func validateBindings(plan *contract.CompiledRenderPlanV2, bindings runtimeasset
 	}
 	for _, track := range plan.VideoTracks {
 		for _, segment := range track.Segments {
-			asset, ok := assetByID[segment.AssetID]
+			_, ok := assetByID[segment.AssetID]
 			if !ok {
 				return fmt.Errorf("%w: segment asset_id=%q is not declared", errPreparedAssetIntegrity, segment.AssetID)
 			}
-			if err := validateBinding(segment.AssetID, asset.SHA256, asset.SizeBytes, bindings); err != nil {
-				return err
-			}
+			// Every declared asset was verified above. Repeated timeline uses
+			// must not hash the same file again when a binding is unattested.
 		}
 	}
 	return nil

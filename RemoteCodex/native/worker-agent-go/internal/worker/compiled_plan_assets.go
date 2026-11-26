@@ -123,6 +123,8 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 	// actually used for V2 plans. The manager still coalesces duplicate keys;
 	// the result slice remains ordered and every item keeps the same validation
 	// and integrity-verification path as before.
+	resolveCtx, cancelResolves := context.WithCancel(ctx)
+	defer cancelResolves()
 	resolvedAssets := make([]interface{}, len(assetEnvelopes))
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
@@ -134,15 +136,23 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-resolveCtx.Done():
+				return
+			}
 			defer func() { <-sem }()
-			resolvedPayload, resolveErr := w.resolveCommonAssetPayloadMutable(ctx, map[string]interface{}{
+			if resolveCtx.Err() != nil {
+				return
+			}
+			resolvedPayload, resolveErr := w.resolveCommonAssetPayloadMutable(resolveCtx, map[string]interface{}{
 				"assets": []interface{}{envelope},
 			})
 			if resolveErr != nil {
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("asset %d: %w", index, resolveErr)
+					cancelResolves()
 				}
 				errMu.Unlock()
 				return
@@ -152,6 +162,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("asset %d: resolver returned invalid result", index)
+					cancelResolves()
 				}
 				errMu.Unlock()
 				return
@@ -162,6 +173,9 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 	wg.Wait()
 	if firstErr != nil {
 		return nil, fmt.Errorf("compiled render plan v2: resolve assets: %w", firstErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	bindings := make(runtimeassets.Bindings, len(planAssets))
 	for index, asset := range planAssets {
