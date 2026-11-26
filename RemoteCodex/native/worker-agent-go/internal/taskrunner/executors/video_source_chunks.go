@@ -11,7 +11,7 @@ import (
 	"velox-shared/contract"
 )
 
-func (e *videoPrepareWindowExecutor) certifySourceChunks(ctx context.Context, path, sourceSHA string, size int64, probe windowSourceProbe, downloaded *contract.VideoSourceChunksV1) (*contract.VideoSourceChunksV1, error) {
+func (e *videoSourceInspector) certifySourceChunks(ctx context.Context, path, sourceSHA string, size int64, probe windowSourceProbe, downloaded *contract.VideoSourceChunksV1) (*contract.VideoSourceChunksV1, error) {
 	if size <= 0 || size > contract.VideoSourceChunkSize*contract.VideoSourceMaxChunks {
 		return nil, nil
 	}

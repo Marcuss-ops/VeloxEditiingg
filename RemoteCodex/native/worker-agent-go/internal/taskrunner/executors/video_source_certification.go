@@ -16,15 +16,15 @@ import (
 const VideoSourceCertificationID = contract.VideoSourceCertificationExecutorID
 
 // NewVideoSourceCertification creates the artifact-free worker executor for
-// complete-source evidence. It shares the existing probe and block-proof
-// caches with the legacy window preparer implementation.
+// complete-source evidence. It owns the complete-source probe and block-proof caches used only for
+// certification.
 func NewVideoSourceCertification(outputRoot string) executor.Executor {
-	preparer := NewVideoPrepareWindow(outputRoot).(*videoPrepareWindowExecutor)
-	return &videoSourceCertificationExecutor{preparer: preparer}
+	inspector := newVideoSourceInspector(outputRoot)
+	return &videoSourceCertificationExecutor{inspector: inspector}
 }
 
 type videoSourceCertificationExecutor struct {
-	preparer *videoPrepareWindowExecutor
+	inspector *videoSourceInspector
 }
 
 func (e *videoSourceCertificationExecutor) Descriptor() executor.Descriptor {
@@ -39,7 +39,7 @@ func (e *videoSourceCertificationExecutor) request(spec executor.TaskSpec) (cont
 	if spec.ExecutorID != VideoSourceCertificationID {
 		return contract.VideoSourceCertificationV1{}, fmt.Errorf("video.source.certify.v1: executor_id must be %q", VideoSourceCertificationID)
 	}
-	if e == nil || e.preparer == nil {
+	if e == nil || e.inspector == nil {
 		return contract.VideoSourceCertificationV1{}, errors.New("video.source.certify.v1: source inspector is unavailable")
 	}
 	raw, ok := spec.Payload[contract.VideoSourceCertificationPayloadKey]
@@ -57,7 +57,7 @@ func (e *videoSourceCertificationExecutor) request(spec executor.TaskSpec) (cont
 	if err := request.Validate(); err != nil {
 		return request, err
 	}
-	if request.OutputProfileID != e.preparer.profile.ProfileID || !contract.SupportsVideoWindowPreparationRevision(e.preparer.profile, e.preparer.quality, request.OutputProfileRevision) {
+	if request.OutputProfileID != e.inspector.profile.ProfileID || !contract.SupportsVideoWindowPreparationRevision(e.inspector.profile, e.inspector.quality, request.OutputProfileRevision) {
 		return request, errors.New("video.source.certify.v1: canonical profile revision is not enabled")
 	}
 	return request, nil
@@ -95,23 +95,20 @@ func (e *videoSourceCertificationExecutor) Execute(ctx context.Context, execCtx 
 		}
 		return fail(contract.VideoSourceCertificationSourceInvalidErrorCode, err)
 	}
-	probe, err := e.preparer.probeSource(ctx, source.Path, source.SHA256, true)
+	probe, err := e.inspector.probeSource(ctx, source.Path, source.SHA256)
 	if err != nil {
 		return fail(contract.VideoSourceCertificationProbeFailedErrorCode, err)
 	}
-	if err := e.preparer.ensureExactSourceFrameCount(ctx, source.Path, source.SHA256, &probe); err != nil {
+	if err := e.inspector.ensureExactSourceFrameCount(ctx, source.Path, source.SHA256, &probe); err != nil {
 		return fail(contract.VideoSourceCertificationProbeFailedErrorCode, err)
 	}
-	windowRequest := contract.VideoPrepareWindowV1{
-		Source: request.Source, OutputProfileID: request.OutputProfileID,
-		OutputProfileRevision: request.OutputProfileRevision,
-	}
-	windowRequest.Source.SHA256 = source.SHA256
-	certificate := sourceCertificateFromProbe(probe, windowRequest, e.preparer.profile)
+	asset := request.Source
+	asset.SHA256 = source.SHA256
+	certificate := sourceCertificateFromProbe(probe, asset, request.OutputProfileID, request.OutputProfileRevision, e.inspector.profile)
 	if certificate == nil {
 		return fail(contract.VideoSourceCertificationIncompatibleErrorCode, errors.New("complete source facts do not satisfy the canonical certification contract"))
 	}
-	chunks, err := e.preparer.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, probe, source.SourceChunks)
+	chunks, err := e.inspector.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, probe, source.SourceChunks)
 	if err != nil {
 		return fail(contract.VideoSourceCertificationHashFailedErrorCode, err)
 	}

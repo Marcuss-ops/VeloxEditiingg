@@ -54,7 +54,7 @@ func TestVideoSourceCertificationReturnsEvidenceWithoutMediaOutput(t *testing.T)
 		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
 	}
 	workerExecutor := NewVideoSourceCertification(filepath.Join(root, "prepared-windows"))
-	workerExecutor.(*videoSourceCertificationExecutor).preparer.sourceProbeFn = func(context.Context, string) (windowSourceProbe, error) {
+	workerExecutor.(*videoSourceCertificationExecutor).inspector.sourceProbeFn = func(context.Context, string) (windowSourceProbe, error) {
 		return windowSourceProbe{
 			FrameCount: 96, ExactFrameCount: 96, CodecName: profile.Codec,
 			Profile: "high", Level: canonicalLevelNumber(profile.CodecLevel),
