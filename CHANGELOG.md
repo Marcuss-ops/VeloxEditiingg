@@ -47,6 +47,9 @@
   invalidated. Media inspection still invokes FFprobe and remains a candidate
   for consolidation into the existing LibAV engine after equivalent packet,
   timestamp, IDR and stream-profile evidence is available there.
+- The cold source inspection now requests exact `nb_read_frames` and packet
+  keyframe timestamps in one FFprobe invocation; it no longer performs a
+  separate keyframe-only probe followed by a second full frame-count process.
 - Window planning now uses the reconciled SHA-256 and size from runtime source
   bindings, so a known immutable source never creates a redundant per-window
   fragment task while its source certificate is being established.

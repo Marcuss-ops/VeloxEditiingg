@@ -69,27 +69,29 @@ type ffprobeWindowOutputCertifier struct{}
 type windowFFprobeDocument struct {
 	Streams []windowFFprobeStream `json:"streams"`
 	Frames  []struct {
-		KeyFrame            int    `json:"key_frame"`
-		BestEffortTimestamp string `json:"best_effort_timestamp_time"`
+		KeyFrame int `json:"key_frame"`
 	} `json:"frames"`
+	Packets []struct {
+		PTS   string `json:"pts_time"`
+		Flags string `json:"flags"`
+	} `json:"packets"`
 }
 
 type windowFFprobeStream struct {
-	CodecType        string `json:"codec_type"`
-	CodecName        string `json:"codec_name"`
-	Profile          string `json:"profile"`
-	Level            int    `json:"level"`
-	Width            int    `json:"width"`
-	Height           int    `json:"height"`
-	PixelFormat      string `json:"pix_fmt"`
-	FrameRate        string `json:"r_frame_rate"`
-	TimeBase         string `json:"time_base"`
-	BFrames          int    `json:"has_b_frames"`
-	FrameCount       string `json:"nb_read_frames"`
-	SourceFrameCount string `json:"nb_frames"`
-	ExtradataHash    string `json:"extradata_hash"`
-	BitRate          string `json:"bit_rate"`
-	StartTime        string `json:"start_time"`
+	CodecType     string `json:"codec_type"`
+	CodecName     string `json:"codec_name"`
+	Profile       string `json:"profile"`
+	Level         int    `json:"level"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	PixelFormat   string `json:"pix_fmt"`
+	FrameRate     string `json:"r_frame_rate"`
+	TimeBase      string `json:"time_base"`
+	BFrames       int    `json:"has_b_frames"`
+	FrameCount    string `json:"nb_read_frames"`
+	ExtradataHash string `json:"extradata_hash"`
+	BitRate       string `json:"bit_rate"`
+	StartTime     string `json:"start_time"`
 }
 
 func (ffprobeWindowOutputCertifier) Certify(ctx context.Context, path string, profile contract.CanonicalVideoProfileV1, wantFrames int64) (windowOutputEvidence, error) {

@@ -53,8 +53,8 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 		}
 	}
 	args := []string{
-		"-v", "error", "-skip_frame", "nokey", "-select_streams", "v:0", "-show_streams", "-show_frames", "-show_data_hash", "sha256",
-		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,pix_fmt,r_frame_rate,time_base,has_b_frames,extradata_hash,bit_rate,start_time,nb_frames:frame=key_frame,best_effort_timestamp_time",
+		"-v", "error", "-count_frames", "-select_streams", "v:0", "-show_streams", "-show_packets", "-show_data_hash", "sha256",
+		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,pix_fmt,r_frame_rate,time_base,has_b_frames,extradata_hash,bit_rate,start_time,nb_read_frames:packet=pts_time,flags",
 		"-of", "json", path,
 	}
 	data, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
@@ -82,20 +82,23 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 			return windowSourceProbe{}, fmt.Errorf("source window has invalid start_time %q", stream.StartTime)
 		}
 	}
-	frameCount, _ := strconv.ParseInt(stream.SourceFrameCount, 10, 64)
+	frameCount, err := strconv.ParseInt(stream.FrameCount, 10, 64)
+	if err != nil || frameCount <= 0 {
+		return windowSourceProbe{}, fmt.Errorf("source window exact frame count is unavailable: %q", stream.FrameCount)
+	}
 	probe := windowSourceProbe{
-		FrameCount: frameCount,
-		CodecName:  stream.CodecName, Profile: strings.ToLower(stream.Profile), Level: stream.Level,
+		FrameCount: frameCount, ExactFrameCount: frameCount,
+		CodecName: stream.CodecName, Profile: strings.ToLower(stream.Profile), Level: stream.Level,
 		Width: stream.Width, Height: stream.Height, PixelFormat: stream.PixelFormat,
 		FPSNum: fpsNum, FPSDen: fpsDen, TimeBaseNum: tbNum, TimeBaseDen: tbDen,
 		BFrames: stream.BFrames, BitRateBPS: bitRate, StartTimeSec: startTime,
 		ExtradataSHA: strings.TrimPrefix(strings.TrimSpace(stream.ExtradataHash), "SHA256:"),
 	}
-	for _, frame := range doc.Frames {
-		if frame.KeyFrame != 1 || strings.TrimSpace(frame.BestEffortTimestamp) == "" {
+	for _, packet := range doc.Packets {
+		if !strings.Contains(packet.Flags, "K") || strings.TrimSpace(packet.PTS) == "" {
 			continue
 		}
-		timestamp, err := strconv.ParseFloat(frame.BestEffortTimestamp, 64)
+		timestamp, err := strconv.ParseFloat(packet.PTS, 64)
 		if err != nil {
 			continue
 		}
@@ -120,6 +123,10 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 func (e *videoPrepareWindowExecutor) ensureExactSourceFrameCount(ctx context.Context, path, sourceSHA string, probe *windowSourceProbe) error {
 	if probe == nil || !isLowerSHA256(sourceSHA) {
 		return fmt.Errorf("exact source frame count requires a verified source identity")
+	}
+	if probe.ExactFrameCount > 0 {
+		probe.FrameCount = probe.ExactFrameCount
+		return nil
 	}
 	unlock := e.lockWindow("source-frame-count:" + sourceSHA)
 	defer unlock()

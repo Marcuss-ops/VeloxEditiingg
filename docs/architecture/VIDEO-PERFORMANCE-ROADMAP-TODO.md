@@ -27,6 +27,8 @@ walk, not the container's optional `nb_frames` declaration. Probe cache revision
 4 invalidates entries that predate this evidence. The worker still invokes
 FFprobe for stream and keyframe inspection; moving equivalent codec, timestamp,
 frame-count and IDR evidence into the existing LibAV engine remains open.
+Cold inspection now obtains the complete frame count and packet keyframe
+timestamps in that same process, removing the former second full FFprobe pass.
 Window planning also honors reconciled runtime SHA-256 and size before those
 fields have been projected into the compiled plan, skipping redundant
 per-window fragment tasks while source certification remains required.
