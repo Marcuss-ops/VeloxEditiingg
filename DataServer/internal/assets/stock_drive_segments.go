@@ -22,7 +22,7 @@ func isDriveStock(asset contract.AssetRefV2) bool {
 func stockRuntimeBindings(assets []map[string]interface{}) map[string]map[string]interface{} {
 	out := make(map[string]map[string]interface{}, len(assets)*2)
 	for _, asset := range assets {
-		for _, key := range []string{"drive_file_id", "asset_id", "asset_key", "sha256", "asset_sha256"} {
+		for _, key := range []string{"drive_file_id", "asset_id", "asset_key", "source_sha256", "sha256", "asset_sha256"} {
 			id := strings.TrimSpace(fmt.Sprint(asset[key]))
 			if id != "" && id != "<nil>" {
 				out[id] = asset
@@ -106,7 +106,7 @@ func RetainPlanSourceBindings(planJSON string, assets []map[string]interface{}) 
 	filtered := make([]map[string]interface{}, 0, len(assets))
 	for _, asset := range assets {
 		keep := false
-		for _, key := range []string{"asset_id", "asset_key", "sha256", "asset_sha256", "drive_file_id"} {
+		for _, key := range []string{"asset_id", "asset_key", "source_sha256", "sha256", "asset_sha256", "drive_file_id"} {
 			if id := strings.TrimSpace(bindingString(asset, key)); id != "" {
 				if _, ok := ids[id]; ok {
 					keep = true

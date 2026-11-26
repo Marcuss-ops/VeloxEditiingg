@@ -127,7 +127,7 @@ func stockPoolBindingMember(binding map[string]interface{}) bool {
 }
 
 func stockPoolBindingSHA(binding map[string]interface{}) string {
-	for _, key := range []string{"sha256", "asset_sha256"} {
+	for _, key := range []string{"source_sha256", "sha256", "asset_sha256"} {
 		if value, ok := binding[key].(string); ok && strings.TrimSpace(value) != "" {
 			return strings.ToLower(strings.TrimSpace(value))
 		}

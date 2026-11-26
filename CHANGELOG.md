@@ -1,5 +1,14 @@
 ## [Unreleased] - 2026-11-08
 
+### Fixed — preserve stock source digests through FINALIZE
+
+- Stock snapshots, runtime binding indexes and preparation planning preserve
+  `source_sha256`, using the same precedence as the shared stock contract.
+  Known content no longer becomes a discovery request solely because the
+  binding used the source digest field.
+- Regression coverage pins snapshot preservation and planning without source
+  identity discovery.
+
 ### Performance — avoid redundant assembly input work
 
 - Validate each declared assembly binding once, including unattested files;

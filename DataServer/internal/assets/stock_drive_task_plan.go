@@ -70,7 +70,7 @@ func (s *AssetService) PlanDriveStockWindowTasks(planJSON string, runtimeAssets 
 			}
 			sha := strings.ToLower(strings.TrimSpace(asset.SHA256))
 			if sha == "" {
-				sha = strings.ToLower(bindingString(binding, "sha256", "asset_sha256"))
+				sha = strings.ToLower(bindingString(binding, "source_sha256", "sha256", "asset_sha256"))
 			}
 			size := asset.SizeBytes
 			if size <= 0 {

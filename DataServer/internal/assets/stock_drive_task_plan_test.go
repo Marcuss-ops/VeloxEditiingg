@@ -46,6 +46,24 @@ func TestPlanDriveStockWindowTasksDeduplicatesImmutableWindowsWithoutDownloading
 		t.Fatalf("preparation request = %+v; source identity/window or stable placement is wrong", got)
 	}
 
+	// The stock snapshot's canonical source digest must avoid identity discovery
+	// even when the plan has not yet copied the source metadata into its asset.
+	plan.Assets[0].SHA256 = ""
+	sourcePlan, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	known, err := service.PlanDriveStockWindowTasks(string(sourcePlan), []map[string]interface{}{{
+		"asset_id": "drive-source", "source_sha256": sha, "size_bytes": int64(1_000_000),
+	}})
+	if err != nil || len(known) != 1 {
+		t.Fatalf("known source planning: tasks=%v err=%v", known, err)
+	}
+	if known[0].Request.SourceIdentityDiscovery || known[0].Request.Source.SHA256 != sha {
+		t.Fatalf("known SHA lost: %+v", known[0].Request)
+	}
+	plan.Assets[0].SHA256 = sha
+
 	plan.Assets[0].DurationUS = 10_000_000
 	plan.Assets[0].Width, plan.Assets[0].Height = profile.Width, profile.Height
 	plan.Assets[0].ProfileID = profile.StreamProfile()
