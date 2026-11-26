@@ -27,6 +27,8 @@ func TestVideoSourceCertificateRejectsIncompleteAndIncompatibleEvidence(t *testi
 		{"duplicate keyframe", func(c *VideoSourceCertificateV1) { c.KeyframesUS = []int64{0, 0} }},
 		{"nonzero origin", func(c *VideoSourceCertificateV1) { c.KeyframesUS = []int64{1} }},
 		{"out of bounds", func(c *VideoSourceCertificateV1) { c.KeyframesUS = []int64{0, 2000000} }},
+		{"nonzero native timestamp origin", func(c *VideoSourceCertificateV1) { c.SourceTimestampOriginTicks = 1 }},
+		{"inconsistent average frame rate", func(c *VideoSourceCertificateV1) { c.AverageFPSNum = 25 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			copy := source
@@ -73,7 +75,7 @@ func sourceCertificateFixture(t *testing.T) VideoSourceCertificateV1 {
 		t.Fatal(err)
 	}
 	level, _ := strconv.Atoi(strings.ReplaceAll(p.CodecLevel, ".", ""))
-	source := VideoSourceCertificateV1{Version: 1, SHA256: strings.Repeat("a", 64), SizeBytes: 100, ProfileID: p.ProfileID, PreparationRevision: revision, DurationUS: 2000000, KeyframesUS: []int64{0, 1000000}, Evidence: VideoWindowOutputEvidenceV1{Codec: p.Codec, Profile: strings.ToLower(p.CodecProfile), Level: level, Width: p.Width, Height: p.Height, PixelFormat: p.PixelFormat, FPSNum: p.FPSNum, FPSDen: p.FPSDen, TimeBaseNum: 1, TimeBaseDen: 90000, FrameCount: 48, FirstFrameKeyframe: true, ExtradataSHA256: CanonicalVideoExtradataSHA256}}
+	source := VideoSourceCertificateV1{Version: 1, SHA256: strings.Repeat("a", 64), SizeBytes: 100, ProfileID: p.ProfileID, PreparationRevision: revision, SourceTimestampOriginVerified: true, AverageFPSNum: p.FPSNum, AverageFPSDen: p.FPSDen, DurationUS: 2000000, KeyframesUS: []int64{0, 1000000}, Evidence: VideoWindowOutputEvidenceV1{Codec: p.Codec, Profile: strings.ToLower(p.CodecProfile), Level: level, Width: p.Width, Height: p.Height, PixelFormat: p.PixelFormat, FPSNum: p.FPSNum, FPSDen: p.FPSDen, TimeBaseNum: 1, TimeBaseDen: 90000, FrameCount: 48, FirstFrameKeyframe: true, ExtradataSHA256: CanonicalVideoExtradataSHA256}}
 	return source
 }
 

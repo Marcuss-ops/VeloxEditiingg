@@ -101,7 +101,7 @@ COPY RemoteCodex/native/video-engine-cpp /app/native/video-engine-cpp
 RUN --mount=type=cache,id=velox-worker-cpp-ccache,target=/root/.ccache,sharing=locked \
     --mount=type=cache,id=velox-worker-cpp-build,target=/tmp/velox-video-engine-build,sharing=locked \
     ccache -z 2>/dev/null || true; \
-    /usr/local/bin/build-video-engine.sh && \
+    VELOX_VIDEO_ENGINE_LIBAV=ON /usr/local/bin/build-video-engine.sh && \
     test -x /usr/local/bin/velox_video_engine && \
     test -s /usr/local/share/velox/video-engine.sha256
 

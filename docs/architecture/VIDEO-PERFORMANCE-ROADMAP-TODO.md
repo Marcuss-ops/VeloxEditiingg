@@ -22,13 +22,15 @@ remain supported until their retry/recovery references can be retired safely.
 The M2M capabilities response advertises the source-certification executor
 only for connected workers that actually register it.
 
-Certificates now use an exact frame count from FFprobe's complete `nb_read_frames`
-walk, not the container's optional `nb_frames` declaration. Probe cache revision
-4 invalidates entries that predate this evidence. The worker still invokes
-FFprobe for stream and keyframe inspection; moving equivalent codec, timestamp,
-frame-count and IDR evidence into the existing LibAV engine remains open.
-Cold inspection now obtains the complete frame count and packet keyframe
-timestamps in that same process, removing the former second full FFprobe pass.
+Certificates now use an exact decoded-frame count from the existing LibAV engine,
+not the container's optional `nb_frames` declaration. The native probe returns
+stream identity, extradata hash, rational timebase and timestamp origin,
+consistent average/declared frame rates, and packet keyframe timestamps in one
+in-process complete source walk. The worker validates and retains origin/rate
+facts in newly issued certificates; probe cache revision 5 invalidates older
+entries. FFprobe remains for prepared-fragment output certification and persisted
+sparse-window compatibility. The native packet mux independently checks the
+requested H.264 IDR boundary.
 Window planning also honors reconciled runtime SHA-256 and size before those
 fields have been projected into the compiled plan, skipping redundant
 per-window fragment tasks while source certification remains required.
@@ -41,10 +43,17 @@ file read on cold downloads. Old cache entries without this metadata fall back
 to a complete verified read. Large sources omit range evidence and remain
 eligible for complete downloads.
 
-Verified locally: DataServer pipeline/assets/completion/gRPC affected suites;
-worker source resolver, certification, runtime binding, and cache suites.
-Still not verified: production rollout, live cold/warm timings, and PERFLIVE
-results. Those require an authorized remote measurement window.
+Verified locally: LibAV media-probe tests including exact decoded-frame count
+with `ffprobe` removed from PATH; Go source-probe-to-engine integration and
+artifact-free certification tests; complete worker Go suite. Still not
+verified: production rollout, persisted-task inventory, live cold/warm timings,
+and PERFLIVE results. Those require the production host's database access and
+an authorized remote measurement window.
+
+The persisted-task audit is implemented as the read-only
+`scripts/ops/audit-legacy-video-tasks.py`; it reports task and attempt states,
+task-spec dependency paths, and other task-ID references. Run it against the
+production Master database before retiring either legacy executor.
 
 ## 2026-11-26 — authenticated sparse inputs for certified direct assembly
 

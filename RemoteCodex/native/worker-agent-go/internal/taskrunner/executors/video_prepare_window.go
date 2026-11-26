@@ -149,27 +149,32 @@ type videoPrepareWindowExecutor struct {
 	windowLocks   map[string]*keyedWindowLock
 	sourceProbeMu sync.Mutex
 	sourceProbes  map[string]windowSourceProbe
+	sourceProbeFn func(context.Context, string) (windowSourceProbe, error)
 }
 
 type windowSourceProbe struct {
-	Chunks          *contract.VideoSourceChunksV1 `json:"chunks,omitempty"`
-	FrameCount      int64
-	ExactFrameCount int64 `json:"exact_frame_count,omitempty"`
-	CodecName       string
-	Profile         string
-	Level           int
-	Width           int
-	Height          int
-	PixelFormat     string
-	FPSNum          int
-	FPSDen          int
-	TimeBaseNum     int
-	TimeBaseDen     int
-	BFrames         int
-	BitRateBPS      int64
-	StartTimeSec    float64
-	ExtradataSHA    string
-	KeyframeTimes   []float64
+	Chunks            *contract.VideoSourceChunksV1 `json:"chunks,omitempty"`
+	FrameCount        int64
+	ExactFrameCount   int64 `json:"exact_frame_count,omitempty"`
+	CodecName         string
+	Profile           string
+	Level             int
+	Width             int
+	Height            int
+	PixelFormat       string
+	FPSNum            int
+	FPSDen            int
+	AverageFPSNum     int `json:"average_fps_num,omitempty"`
+	AverageFPSDen     int `json:"average_fps_den,omitempty"`
+	TimeBaseNum       int
+	TimeBaseDen       int
+	StartTimeTicks    int64 `json:"start_time_ticks,omitempty"`
+	StartTimeVerified bool  `json:"start_time_verified,omitempty"`
+	BFrames           int
+	BitRateBPS        int64
+	StartTimeSec      float64
+	ExtradataSHA      string
+	KeyframeTimes     []float64
 }
 
 // windowSourceProbeIndex binds a persisted keyframe index to the immutable
@@ -182,7 +187,7 @@ type windowSourceProbeIndex struct {
 	Probe     windowSourceProbe `json:"probe"`
 }
 
-const windowSourceProbeIndexVersion = 4
+const windowSourceProbeIndexVersion = 5
 
 type keyedWindowLock struct {
 	mu   sync.Mutex

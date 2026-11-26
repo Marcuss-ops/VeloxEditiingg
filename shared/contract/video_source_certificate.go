@@ -14,15 +14,19 @@ import (
 // Keyframes are microseconds from the source presentation origin, not timeline
 // placement. The native mux still checks the requested packet boundary.
 type VideoSourceCertificateV1 struct {
-	Chunks              *VideoSourceChunksV1        `json:"chunks,omitempty"`
-	Version             int                         `json:"version"`
-	SHA256              string                      `json:"sha256"`
-	SizeBytes           int64                       `json:"size_bytes"`
-	ProfileID           string                      `json:"profile_id"`
-	PreparationRevision string                      `json:"preparation_revision"`
-	Evidence            VideoWindowOutputEvidenceV1 `json:"evidence"`
-	DurationUS          int64                       `json:"duration_us"`
-	KeyframesUS         []int64                     `json:"keyframes_us"`
+	Chunks                        *VideoSourceChunksV1        `json:"chunks,omitempty"`
+	Version                       int                         `json:"version"`
+	SHA256                        string                      `json:"sha256"`
+	SizeBytes                     int64                       `json:"size_bytes"`
+	ProfileID                     string                      `json:"profile_id"`
+	PreparationRevision           string                      `json:"preparation_revision"`
+	Evidence                      VideoWindowOutputEvidenceV1 `json:"evidence"`
+	SourceTimestampOriginTicks    int64                       `json:"source_timestamp_origin_ticks,omitempty"`
+	SourceTimestampOriginVerified bool                        `json:"source_timestamp_origin_verified,omitempty"`
+	AverageFPSNum                 int                         `json:"average_fps_num,omitempty"`
+	AverageFPSDen                 int                         `json:"average_fps_den,omitempty"`
+	DurationUS                    int64                       `json:"duration_us"`
+	KeyframesUS                   []int64                     `json:"keyframes_us"`
 }
 
 func (c VideoSourceCertificateV1) Validate() error {
@@ -53,6 +57,13 @@ func (c VideoSourceCertificateV1) Validate() error {
 	want := e.FrameCount * int64(p.FPSDen) * 1_000_000 / int64(p.FPSNum)
 	if c.DurationUS != want || len(c.KeyframesUS) == 0 || len(c.KeyframesUS) > 8192 || c.KeyframesUS[0] != 0 {
 		return fmt.Errorf("video source certificate: invalid duration or keyframe index")
+	}
+	if c.SourceTimestampOriginTicks != 0 || c.SourceTimestampOriginVerified || c.AverageFPSNum != 0 || c.AverageFPSDen != 0 {
+		averageLeft := new(big.Int).Mul(big.NewInt(int64(c.AverageFPSNum)), big.NewInt(int64(e.FPSDen)))
+		averageRight := new(big.Int).Mul(big.NewInt(int64(e.FPSNum)), big.NewInt(int64(c.AverageFPSDen)))
+		if !c.SourceTimestampOriginVerified || c.SourceTimestampOriginTicks != 0 || c.AverageFPSNum <= 0 || c.AverageFPSDen <= 0 || averageLeft.Cmp(averageRight) != 0 {
+			return fmt.Errorf("video source certificate: invalid rational timestamp-origin or frame-rate evidence")
+		}
 	}
 	for i, v := range c.KeyframesUS {
 		if v < 0 || v >= c.DurationUS || (i > 0 && c.KeyframesUS[i-1] >= v) {

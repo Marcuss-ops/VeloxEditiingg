@@ -120,6 +120,29 @@ int main() {
         }
     }
 
+    const auto certificateProbe =
+        velox::media::probeSourceForCertificationInProcess(video);
+    expect(certificateProbe.has_value(),
+           "complete source certification facts are available without ffprobe");
+    if (certificateProbe.has_value()) {
+        expect(certificateProbe->codec_name == "h264",
+               "certification probe reports codec identity");
+        expect(certificateProbe->exact_frame_count == 6,
+               "certification probe counts decoded frames exactly");
+        expect(certificateProbe->frame_rate_num > 0 &&
+                   certificateProbe->average_frame_rate_num > 0,
+               "certification probe returns both declared frame rates");
+        expect(certificateProbe->time_base_num > 0 &&
+                   certificateProbe->time_base_den > 0 &&
+                   certificateProbe->start_time_verified,
+               "certification probe returns timestamp scale and origin");
+        expect(!certificateProbe->extradata_sha256.empty(),
+               "certification probe hashes stream extradata");
+        expect(!certificateProbe->packet_keyframe_times.empty() &&
+                   std::abs(certificateProbe->packet_keyframe_times.front()) < 1e-9,
+               "certification probe preserves packet keyframe timestamps");
+    }
+
     // Cache hits and misses must remain safe when probes for the same file
     // and independent files arrive concurrently. In particular, filesystem
     // metadata syscalls must not serialize under the cache mutex.

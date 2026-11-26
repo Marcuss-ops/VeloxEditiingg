@@ -41,14 +41,18 @@
   certification. Existing cache entries without the index use the verified
   full-file fallback. Sources over 1 GiB omit optional block evidence and use
   complete downloads.
-- Source certificates now use `nb_read_frames` from a complete frame-count
-  pass instead of trusting the container's optional `nb_frames` hint. The
-  exact count is persisted in source-probe cache revision 4; older entries are
-  invalidated. Media inspection still invokes FFprobe and remains a candidate
-  for consolidation into the existing LibAV engine after equivalent packet,
-  timestamp, IDR and stream-profile evidence is available there.
-- The cold source inspection now requests exact `nb_read_frames` and packet
-  keyframe timestamps in one FFprobe invocation; it no longer performs a
+- Source certificates now use the LibAV engine for a complete packet walk and
+  frame decode instead of trusting the container's optional `nb_frames` hint
+  or spawning FFprobe. The native probe returns codec/profile, extradata hash,
+  exact decoded frame count, rational timebase and origin, both frame-rate
+  rationals, and packet keyframe timestamps. The worker rejects incomplete
+  evidence and inconsistent frame rates; source certificates retain the
+  verified zero-origin and average-rate facts. Probe cache revision 5
+  invalidates older entries. Prepared-fragment output certification and the
+  persisted sparse-window compatibility path still use FFprobe; neither can
+  produce a full-source certificate from sparse bytes.
+- The cold source inspection now obtains exact decoded-frame counts and packet
+  keyframe timestamps in one in-process LibAV pass; it no longer performs a
   separate keyframe-only probe followed by a second full frame-count process.
 - Window planning now uses the reconciled SHA-256 and size from runtime source
   bindings, so a known immutable source never creates a redundant per-window

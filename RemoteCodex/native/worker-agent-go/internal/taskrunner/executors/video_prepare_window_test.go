@@ -217,6 +217,17 @@ func TestVideoPrepareWindow_ProducesCertifiedPacketCopyForCanonicalKeyframeWindo
 		outputRoot: filepath.Join(root, "prepared"), runner: ffmpegrunner.NewProcessRunner(),
 		certifier: ffprobeWindowOutputCertifier{}, profile: profile, quality: quality,
 	}
+	prepare.sourceProbeFn = func(context.Context, string) (windowSourceProbe, error) {
+		return windowSourceProbe{
+			FrameCount: 96, ExactFrameCount: 96, CodecName: profile.Codec, Profile: strings.ToLower(profile.CodecProfile),
+			Level: canonicalLevelNumber(profile.CodecLevel), Width: profile.Width, Height: profile.Height,
+			PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen,
+			AverageFPSNum: profile.FPSNum, AverageFPSDen: profile.FPSDen,
+			TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+			StartTimeVerified: true, ExtradataSHA: contract.CanonicalVideoExtradataSHA256,
+			KeyframeTimes: []float64{0, 2},
+		}, nil
+	}
 	spec := executor.TaskSpec{JobID: "job-certified-copy", ExecutorID: VideoPrepareWindowID,
 		Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
 	ctx := runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
@@ -290,6 +301,9 @@ func TestSparseSourceProbeNeverReadsOrWritesFullSourceCache(t *testing.T) {
 	sum := sha256.Sum256(data)
 	sha := hex.EncodeToString(sum[:])
 	executor := &videoPrepareWindowExecutor{outputRoot: root, sourceProbes: make(map[string]windowSourceProbe)}
+	executor.sourceProbeFn = func(context.Context, string) (windowSourceProbe, error) {
+		return windowSourceProbe{FrameCount: 48, ExactFrameCount: 48, CodecName: "h264", Profile: "high", Level: canonicalLevelNumber(contract.CanonicalVideoProfileV1Default.CodecLevel), Width: 320, Height: 180, PixelFormat: "yuv420p", FPSNum: 24, FPSDen: 1, AverageFPSNum: 24, AverageFPSDen: 1, TimeBaseNum: 1, TimeBaseDen: 12288, StartTimeVerified: true, StartTimeSec: 0, ExtradataSHA: contract.CanonicalVideoExtradataSHA256, KeyframeTimes: []float64{0}}, nil
+	}
 	legacy := windowSourceProbeIndex{Version: 2, SourceSHA: sha, Probe: windowSourceProbe{CodecName: "h264", Width: 320, Height: 180, FPSNum: 24, FPSDen: 1, TimeBaseNum: 1, TimeBaseDen: 12288, KeyframeTimes: []float64{0}}}
 	legacyJSON, err := json.Marshal(legacy)
 	if err != nil {

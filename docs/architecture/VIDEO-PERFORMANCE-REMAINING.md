@@ -14,21 +14,27 @@ Audit base: `main` at `8b6617af` (2026-11-26).
   blocks are staged directly in the private sparse file.
 - Runtime source SHA-256 and size are reconciled before deciding whether to
   plan per-window work.
-- Exact `nb_read_frames` and packet keyframe timestamps are collected in one
-  FFprobe invocation. The probe cache schema was revised to invalidate older
-  evidence.
+- Exact decoded frame count, packet keyframe timestamps, stream identity,
+  rational timestamp origin/timebase and frame-rate consistency are collected
+  in a complete in-process LibAV probe. The worker rejects incomplete evidence,
+  and the probe cache schema invalidates older entries. FFprobe remains only
+  for prepared-fragment output certification and persisted sparse-window
+  compatibility; sparse bytes cannot produce a full-source certificate.
 - A race in the sparse-fetch test counter was fixed in `8b6617af`; the full
   worker race suite passes locally. Its GitHub image workflow is running.
 
 ## Remaining
 
-### 1. Native source certification
+### 1. Native source certification — implemented locally
 
-Replace the remaining FFprobe source inspection with equivalent evidence from
-the existing LibAV engine. The evidence must cover stream identity, exact frame
-count, timestamp origin/timebase, frame-rate consistency and packet keyframe
-facts. The packet mux must continue to verify the requested H.264 IDR boundary;
-a generic container keyframe flag is not proof of IDR.
+The worker now calls `velox_video_engine --probe-source`, backed by a complete
+LibAV packet walk and decoded-frame count. It validates codec/profile/extradata,
+exact frame count, rational timebase and timestamp origin, matching average and
+declared frame rates, and packet keyframe timestamps. New source certificates
+retain the verified origin and average-rate facts. The packet mux continues to
+inspect the H.264 access unit and requires IDR at each requested boundary.
+The worker image build now requires LibAV, so this capability cannot silently
+ship in the FFprobe-only compatibility configuration.
 
 ### 2. Persisted legacy work
 
@@ -40,6 +46,10 @@ wrappers. Before any exported-symbol or cross-package removal commit, run:
 ```bash
 bash scripts/ci/pre-removal-verify.sh
 ```
+
+The read-only report is available as
+`scripts/ops/audit-legacy-video-tasks.py --db "$VELOX_DB_PATH" --json` and
+must run against the production Master database before any legacy removal.
 
 ### 3. Transfer and cache measurements
 

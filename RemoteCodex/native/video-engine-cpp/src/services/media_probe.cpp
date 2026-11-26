@@ -12,11 +12,18 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
+#include <libavutil/mem.h>
+#include <libavutil/pixdesc.h>
+#include <libavutil/sha.h>
 #include <libavutil/pixfmt.h>
+#include <libavutil/rational.h>
 #include <libavutil/version.h>
 }
 
 #include <cmath>
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <list>
 #include <limits>
 #include <memory>
@@ -127,6 +134,22 @@ struct FormatContextDeleter {
             avformat_close_input(&context);
         }
     }
+};
+
+struct CodecContextDeleter {
+    void operator()(AVCodecContext* context) const { avcodec_free_context(&context); }
+};
+
+struct PacketDeleter {
+    void operator()(AVPacket* packet) const { av_packet_free(&packet); }
+};
+
+struct FrameDeleter {
+    void operator()(AVFrame* frame) const { av_frame_free(&frame); }
+};
+
+struct SHADeleter {
+    void operator()(struct AVSHA* sha) const { av_free(sha); }
 };
 
 using UniqueFormatContext = std::unique_ptr<AVFormatContext, FormatContextDeleter>;
@@ -249,6 +272,33 @@ std::optional<MediaProbeResult> probeOpenContext(const fs::path& mediaPath) {
     return result;
 }
 
+bool drainDecodedFrames(AVCodecContext* decoder, AVFrame* frame, int64_t* count) {
+    for (;;) {
+        const int result = avcodec_receive_frame(decoder, frame);
+        if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) return true;
+        if (result < 0) return false;
+        if (*count == std::numeric_limits<int64_t>::max()) return false;
+        ++*count;
+        av_frame_unref(frame);
+    }
+}
+
+std::string sha256Hex(const uint8_t* data, std::size_t size) {
+    if (data == nullptr || size == 0) return {};
+    std::unique_ptr<AVSHA, SHADeleter> sha(av_sha_alloc());
+    if (!sha || av_sha_init(sha.get(), 256) < 0) return {};
+    av_sha_update(sha.get(), data, size);
+    uint8_t digest[32]{};
+    av_sha_final(sha.get(), digest);
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string result(64, '0');
+    for (std::size_t i = 0; i < sizeof(digest); ++i) {
+        result[i * 2] = digits[digest[i] >> 4];
+        result[i * 2 + 1] = digits[digest[i] & 0x0f];
+    }
+    return result;
+}
+
 } // namespace
 
 std::optional<MediaProbeResult> probeMediaInProcess(const fs::path& mediaPath) {
@@ -261,6 +311,128 @@ std::optional<MediaProbeResult> probeMediaInProcess(const fs::path& mediaPath) {
     auto result = probeOpenContext(mediaPath);
     if (result) probeCacheStore(mediaPath, *result);
     return result;
+}
+
+std::optional<MediaSourceCertificationProbe> probeSourceForCertificationInProcess(
+    const fs::path& mediaPath) {
+    if (mediaPath.empty()) return std::nullopt;
+
+    AVFormatContext* rawContext = nullptr;
+    if (avformat_open_input(&rawContext, mediaPath.c_str(), nullptr, nullptr) < 0 ||
+        rawContext == nullptr) {
+        if (rawContext != nullptr) avformat_close_input(&rawContext);
+        return std::nullopt;
+    }
+    services::recordInputOpen(mediaPath.string());
+    UniqueFormatContext format(rawContext);
+    if (avformat_find_stream_info(format.get(), nullptr) < 0) return std::nullopt;
+
+    AVStream* stream = nullptr;
+    for (unsigned int i = 0; i < format->nb_streams; ++i) {
+        if (format->streams[i] != nullptr && format->streams[i]->codecpar != nullptr &&
+            format->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            stream = format->streams[i];
+            break;
+        }
+    }
+    if (stream == nullptr || stream->codecpar == nullptr ||
+        stream->time_base.num <= 0 || stream->time_base.den <= 0 ||
+        !validTimestamp(stream->start_time)) {
+        return std::nullopt;
+    }
+
+    const AVCodecParameters* parameters = stream->codecpar;
+    if (parameters->extradata == nullptr || parameters->extradata_size <= 0) {
+        return std::nullopt;
+    }
+    const AVCodec* codec = avcodec_find_decoder(parameters->codec_id);
+    if (codec == nullptr) return std::nullopt;
+    std::unique_ptr<AVCodecContext, CodecContextDeleter> decoder(avcodec_alloc_context3(codec));
+    if (!decoder || avcodec_parameters_to_context(decoder.get(), parameters) < 0 ||
+        avcodec_open2(decoder.get(), codec, nullptr) < 0) {
+        return std::nullopt;
+    }
+    std::unique_ptr<AVPacket, PacketDeleter> packet(av_packet_alloc());
+    std::unique_ptr<AVFrame, FrameDeleter> frame(av_frame_alloc());
+    if (!packet || !frame) return std::nullopt;
+
+    MediaSourceCertificationProbe result;
+    result.codec_name = avcodec_get_name(parameters->codec_id);
+    if (const char* profile = av_get_profile_name(codec, parameters->profile); profile != nullptr) {
+        result.profile = profile;
+        std::transform(result.profile.begin(), result.profile.end(), result.profile.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    }
+    result.level = parameters->level;
+    result.width = parameters->width;
+    result.height = parameters->height;
+    if (const char* pixelFormat = av_get_pix_fmt_name(
+            static_cast<AVPixelFormat>(parameters->format)); pixelFormat != nullptr) {
+        result.pixel_format = pixelFormat;
+    }
+    const AVRational frameRate = stream->r_frame_rate;
+    const AVRational averageRate = stream->avg_frame_rate;
+    result.frame_rate_num = frameRate.num;
+    result.frame_rate_den = frameRate.den;
+    result.average_frame_rate_num = averageRate.num;
+    result.average_frame_rate_den = averageRate.den;
+    result.time_base_num = stream->time_base.num;
+    result.time_base_den = stream->time_base.den;
+    result.start_time = stream->start_time;
+    result.start_time_verified = true;
+    result.start_time_seconds = static_cast<double>(stream->start_time) * av_q2d(stream->time_base);
+    result.b_frames = decoder->has_b_frames;
+    result.bit_rate = parameters->bit_rate;
+    result.extradata_sha256 = sha256Hex(parameters->extradata,
+                                        static_cast<std::size_t>(parameters->extradata_size));
+
+    bool complete = true;
+    int readResult = 0;
+    while ((readResult = av_read_frame(format.get(), packet.get())) >= 0) {
+        if (packet->stream_index == stream->index) {
+            if ((packet->flags & AV_PKT_FLAG_KEY) != 0) {
+                const int64_t timestamp = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
+                if (timestamp != AV_NOPTS_VALUE) {
+                    result.packet_keyframe_times.push_back(
+                        static_cast<double>(timestamp) * av_q2d(stream->time_base));
+                }
+            }
+            const int sent = avcodec_send_packet(decoder.get(), packet.get());
+            if (sent < 0 || !drainDecodedFrames(decoder.get(), frame.get(), &result.exact_frame_count)) {
+                complete = false;
+                av_packet_unref(packet.get());
+                break;
+            }
+        }
+        av_packet_unref(packet.get());
+    }
+    if (readResult != AVERROR_EOF) complete = false;
+    if (complete) {
+        const int flush = avcodec_send_packet(decoder.get(), nullptr);
+        if (flush < 0 && flush != AVERROR_EOF) complete = false;
+        if (complete && !drainDecodedFrames(decoder.get(), frame.get(), &result.exact_frame_count)) {
+            complete = false;
+        }
+    }
+    if (!complete || result.exact_frame_count <= 0 || result.packet_keyframe_times.empty() ||
+        result.codec_name.empty() || result.profile.empty() || result.pixel_format.empty() ||
+        result.frame_rate_num <= 0 || result.frame_rate_den <= 0 ||
+        result.average_frame_rate_num <= 0 || result.average_frame_rate_den <= 0 ||
+        result.extradata_sha256.empty() || !std::isfinite(result.start_time_seconds)) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+} // namespace velox::media
+
+#else
+
+namespace velox::media {
+
+std::optional<MediaSourceCertificationProbe> probeSourceForCertificationInProcess(
+    const std::filesystem::path&) {
+    return std::nullopt;
 }
 
 } // namespace velox::media
