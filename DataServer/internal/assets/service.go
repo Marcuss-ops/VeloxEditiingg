@@ -102,6 +102,10 @@ type assetSourceAssetReader interface {
 	GetBySourceReference(ctx context.Context, reference string) (*AssetRecord, error)
 }
 
+type assetSourceAssetsReader interface {
+	GetBySourceReferences(ctx context.Context, references []string) (map[string]*AssetRecord, error)
+}
+
 // NewAssetService creates a new generic asset service.
 func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *ResolverRegistry, c clock.Clock) *AssetService {
 	if c == nil {

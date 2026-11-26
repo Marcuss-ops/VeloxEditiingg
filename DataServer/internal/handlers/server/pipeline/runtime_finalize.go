@@ -62,6 +62,10 @@ type RuntimePreparedWindowCache interface {
 	LookupPreparedWindowAsset(context.Context, string) (*voiceoverassets.PreparedWindowAssetBinding, error)
 }
 
+type RuntimePreparedWindowBatchCache interface {
+	LookupPreparedWindowAssets(context.Context, []string) (map[string]voiceoverassets.PreparedWindowAssetBinding, error)
+}
+
 type RuntimePreparedWindowPlanRewriter interface {
 	RewriteDriveStockPlanFromWorkerResults(string, []map[string]interface{}, map[string]voiceoverassets.PreparedWindowAssetBinding) (string, string, []map[string]interface{}, error)
 }
@@ -343,6 +347,35 @@ func runtimeFinalizeBindings(req FinalizeJobRequest, current map[string]interfac
 
 func (p *RuntimeFinalizationProcessor) reusablePreparations(ctx context.Context, preparations []contract.VideoPrepareWindowTaskV1) (map[string]voiceoverassets.PreparedWindowAssetBinding, []contract.VideoPrepareWindowTaskV1, error) {
 	reuse := make(map[string]voiceoverassets.PreparedWindowAssetBinding, len(preparations))
+	if cache, ok := p.assets.(RuntimePreparedWindowBatchCache); ok && !isNilInterface(cache) {
+		identities := make([]string, 0, len(preparations))
+		for _, preparation := range preparations {
+			if !preparation.Request.SourceIdentityDiscovery {
+				identities = append(identities, preparation.Identity)
+			}
+		}
+		cached, err := cache.LookupPreparedWindowAssets(ctx, identities)
+		if err != nil {
+			return nil, nil, fmt.Errorf("runtime finalizer: batch lookup certified fragments: %w", err)
+		}
+		misses := make([]contract.VideoPrepareWindowTaskV1, 0, len(preparations))
+		for _, preparation := range preparations {
+			if preparation.Request.SourceIdentityDiscovery {
+				misses = append(misses, preparation)
+				continue
+			}
+			binding, ok := cached[preparation.Identity]
+			if !ok {
+				misses = append(misses, preparation)
+				continue
+			}
+			if strings.TrimSpace(binding.AssetID) == "" || !validPreparedWindowBinding(binding) {
+				return nil, nil, fmt.Errorf("runtime finalizer: cached fragment %s has an invalid binding", preparation.Identity)
+			}
+			reuse[preparation.Identity] = binding
+		}
+		return reuse, misses, nil
+	}
 	cache, ok := p.assets.(RuntimePreparedWindowCache)
 	if !ok || isNilInterface(cache) {
 		return reuse, preparations, nil

@@ -110,6 +110,67 @@ func (r *SQLiteAssetRepository) GetBySourceReference(ctx context.Context, refere
 	return &a, nil
 }
 
+// GetBySourceReferences returns the newest READY asset for each exact source
+// reference in one indexed read. It avoids one SQLite round trip per cache key
+// when FINALIZE checks a large prepared-window set.
+func (r *SQLiteAssetRepository) GetBySourceReferences(ctx context.Context, references []string) (map[string]*AssetRecord, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("asset repository: store not initialized")
+	}
+	out := make(map[string]*AssetRecord, len(references))
+	const maxParameters = 900
+	for offset := 0; offset < len(references); offset += maxParameters {
+		end := offset + maxParameters
+		if end > len(references) {
+			end = len(references)
+		}
+		chunk := references[offset:end]
+		placeholders := make([]byte, 0, len(chunk)*2)
+		args := make([]interface{}, len(chunk))
+		for i, reference := range chunk {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = reference
+		}
+		query := `SELECT s.source_reference, a.asset_id, a.kind, a.status,
+			COALESCE(a.sha256,''), COALESCE(a.mime_type,''), a.size_bytes,
+			COALESCE(a.storage_provider,''), COALESCE(a.storage_key,''),
+			COALESCE(a.metadata_json,''), a.created_at, COALESCE(a.verified_at,''),
+			COALESCE(a.deleted_at,'')
+			FROM asset_sources s JOIN assets a ON a.asset_id=s.asset_id
+			WHERE s.source_reference IN (` + string(placeholders) + `) AND a.status='READY'
+			ORDER BY s.source_reference, s.created_at DESC, s.source_id DESC`
+		rows, err := r.store.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("get assets by source references: %w", err)
+		}
+		for rows.Next() {
+			var reference string
+			a := new(AssetRecord)
+			if err := rows.Scan(&reference, &a.AssetID, &a.Kind, &a.Status,
+				&a.SHA256, &a.MimeType, &a.SizeBytes, &a.StorageProvider,
+				&a.StorageKey, &a.MetadataJSON, &a.CreatedAt, &a.VerifiedAt,
+				&a.DeletedAt); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan assets by source references: %w", err)
+			}
+			if _, exists := out[reference]; !exists {
+				out[reference] = a
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate assets by source references: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("close assets by source references: %w", err)
+		}
+	}
+	return out, nil
+}
+
 // GetMediaMetadata returns the verified media metadata row for an asset, or
 // (nil, nil) when no row exists (metadata_verified=false).
 func (r *SQLiteAssetRepository) GetMediaMetadata(ctx context.Context, assetID string) (*MediaMetadataRecord, error) {
