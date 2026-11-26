@@ -243,6 +243,7 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 	}
 	ordered := append([]StockPoolCandidateV2(nil), members...)
 	framesLeft := make([]int64, len(ordered))
+	framesTotal := make([]int64, len(ordered))
 	assetByID := make(map[string]AssetRefV2, len(plan.Assets)+len(ordered))
 	for _, asset := range plan.Assets {
 		assetByID[asset.AssetID] = asset
@@ -256,6 +257,7 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 			return fmt.Errorf("compiled render plan v2: stock_pool member %q has invalid frame duration", member.DriveFileID)
 		}
 		framesLeft[i] = frames
+		framesTotal[i] = frames
 		assetID := "stockpool:" + member.DriveFileID
 		if existing, ok := assetByID[assetID]; ok && (existing.SHA256 != stockPoolCandidateSHA(member) || existing.SizeBytes != member.SizeBytes) {
 			return fmt.Errorf("compiled render plan v2: stock_pool asset %q conflicts with its immutable identity", member.DriveFileID)
@@ -297,13 +299,14 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 				if count <= 0 {
 					return fmt.Errorf("compiled render plan v2: stock_pool member cycle made no progress")
 				}
-				if count > math.MaxInt64/int64(plan.Output.FPSDen)/1_000_000 {
+				sourceStartFrame := framesTotal[cursor] - framesLeft[cursor]
+				if count > math.MaxInt64/int64(plan.Output.FPSDen)/1_000_000 || sourceStartFrame > math.MaxInt64/int64(plan.Output.FPSDen)/1_000_000 {
 					return fmt.Errorf("compiled render plan v2: stock_pool segment duration overflows microseconds")
 				}
 				part++
 				durationUS := count * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
 				assetID := "stockpool:" + member.DriveFileID
-				segments = append(segments, VideoSegmentV2{SegmentID: fmt.Sprintf("%s-pool-%03d", slot.SegmentID, part), AssetID: assetID, SHA256: assetByID[assetID].SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceInUS: 0, SourceDurationUS: durationUS})
+				segments = append(segments, VideoSegmentV2{SegmentID: fmt.Sprintf("%s-pool-%03d", slot.SegmentID, part), AssetID: assetID, SHA256: assetByID[assetID].SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceInUS: sourceStartFrame * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum), SourceDurationUS: durationUS})
 				framesLeft[cursor] -= count
 				remaining -= count
 				timelineFrame += count

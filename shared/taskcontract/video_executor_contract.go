@@ -65,8 +65,8 @@ func (videoPrepareWindowContract) CompletionKind() CompletionKind {
 }
 
 // videoAssemblyContract declares the final assembly inputs. Packet-copy
-// assembly can fetch its content-addressed inputs on demand; slice assembly
-// still requires the strict prefetch gate. Both remain fenced by FINALIZE via
+// assembly and its legacy slice adapter fetch verified inputs on demand.
+// Both remain fenced by FINALIZE via
 // runtime_assets_pending in the Master preparation gate.
 type videoAssemblyContract struct {
 	executorID string
@@ -137,7 +137,7 @@ func (c videoAssemblyContract) RequiredAssets(spec TaskInput) ([]RequiredAsset, 
 }
 
 func (c videoAssemblyContract) RequiresPrefetch(TaskInput) bool {
-	return c.executorID != VideoAssemblyCopyExecutorID
+	return false
 }
 
 func (videoAssemblyContract) CompletionKind() CompletionKind {

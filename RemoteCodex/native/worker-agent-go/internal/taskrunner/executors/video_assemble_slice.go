@@ -35,7 +35,7 @@ func (e *videoAssembleSliceExecutor) Descriptor() executor.Descriptor {
 	return executor.Descriptor{
 		ID: VideoAssembleSliceID, Version: VideoAssembleSliceVersion,
 		InputTypes: []string{"render.compiled.v2.drive"}, OutputTypes: []string{"video/mp4"},
-		ResourceClass: executor.ResourceCPU, Deterministic: true, Cacheable: true,
+		ResourceClass: executor.ResourceIO, Deterministic: true, Cacheable: true,
 		TemporalMode: executor.TemporalGlobal,
 	}
 }

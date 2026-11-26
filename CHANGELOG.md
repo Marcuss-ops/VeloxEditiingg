@@ -1,5 +1,13 @@
 ## [Unreleased] - 2026-11-08
 
+### Fixed — stock cursor and legacy assembly scheduling
+
+- Consecutive stock slots continue from the consumed source frame instead of
+  repeating the beginning; a full pool cycle intentionally restarts sources.
+- The persisted slice executor shares the copy executor's IO resource class
+  and on-demand input contract; FINALIZE still fences incomplete plans.
+- Updated architecture ownership to reflect worker preparation and direct mux.
+
 ### Removed — unused Master-side video materialization
 
 - Removed the unreferenced Master source rewrite/trim implementation and its

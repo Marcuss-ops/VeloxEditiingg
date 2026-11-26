@@ -104,7 +104,7 @@ The V2 Drive stock path has these additional owners:
 | Responsibility | Canonical owner | Forbidden |
 | --- | --- | --- |
 | Copy-versus-slice routing for a compiled V2 plan | `shared/contract.RequiredVideoAssemblyExecutor` | Reimplementing executor choice independently in the enqueue or handler packages |
-| Drive source classification, window preparation, source verification, prepared-fragment registration, and removal of materialized Drive bindings | `DataServer/internal/assets.AssetService.PrepareDriveStockWindows` plus the helpers in `internal/assets/stock_drive_segments.go` | Pipeline handlers owning Drive classification, ffmpeg preparation, or a second binding cleanup policy |
+| Drive source classification, window preparation, source verification, prepared-fragment registration, and removal of materialized Drive bindings | `DataServer/internal/assets.AssetService.PlanDriveStockWindowTasks` (planning/reuse), worker `video.prepare.window.v1` (materialization), `AssetService.RegisterPreparedWindow` (independent registration) | Pipeline handlers owning Drive classification, ffmpeg preparation, or a second binding cleanup policy |
 | Runtime binding and packet-copy eligibility | `RemoteCodex/native/worker-agent-go/internal/taskrunner/executors` (`video.assemble.copy.v1` / `video.assemble.slice.v1`) | Rewriting the producer plan or trusting unverified runtime asset paths |
 | Packet demux/mux execution | `RemoteCodex/native/video-engine-cpp` media packet pipeline | Choosing Drive sources, trimming source windows, or deciding the Master-side asset identity |
 

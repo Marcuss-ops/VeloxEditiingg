@@ -131,8 +131,8 @@ func TestAssemblyDeclaresPlanAndRuntimeInputs(t *testing.T) {
 	}
 	sliceSpec := spec
 	sliceSpec.ExecutorID = contract.VideoAssemblySliceExecutorID
-	if !Default().RequiresPrefetch(sliceSpec) {
-		t.Fatal("slice assembly must keep the strict prefetch gate")
+	if Default().RequiresPrefetch(sliceSpec) {
+		t.Fatal("legacy slice adapter must share copy assembly on-demand fetching")
 	}
 	sliceContract, ok := Default().Lookup(sliceSpec.ExecutorID, sliceSpec.ExecutorVersion)
 	if !ok {

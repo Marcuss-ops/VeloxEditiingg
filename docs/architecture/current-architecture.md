@@ -306,37 +306,26 @@ Il worker deve:
 
 Cache e blob locali sono ottimizzazioni ricostruibili, non autorità business.
 
-### 9.1 Drive stock: preparazione Master e assembly worker
+### 9.1 Drive stock: preparazione worker e assembly diretto
 
-Il percorso Drive-backed per piani V2 attraversa questi owner:
+FINALIZE espande lo snapshot deterministico della stock pool in finestre esplicite.
+`AssetService.PlanDriveStockWindowTasks` evita la preparazione se il sorgente
+porta le evidenze canoniche richieste; altrimenti riusa un frammento READY o
+pianifica `video.prepare.window.v1`. Download, certificazione e packet-copy sono
+responsabilità del worker. Il Master verifica e registra i nuovi frammenti;
+non materializza le sorgenti né ricostruisce frammenti nel download handler.
 
-```text
-shared/contract.RequiredVideoAssemblyExecutor
-    → seleziona video.assemble.slice.v1 per stock/Drive o runtime asset pending
-DataServer/internal/assets.AssetService.PrepareDriveStockWindows
-    → scarica le sole sorgenti referenziate, verifica SHA-256/size e probe media
-    → materializza ogni finestra come frammento certificato e registrato
-    → sostituisce i riferimenti Drive nel piano e ne ricalcola il digest
-RemoteCodex/.../executors.videoAssembleSliceExecutor
-    → verifica piano, binding e certificazione prima dell'esecuzione
-C++ packet muxer
-    → assembla i pacchetti video/audio e produce l'artifact
-```
+I nuovi piani usano `video.assemble.copy.v1`. L'ID persistito
+`video.assemble.slice.v1` resta un adapter del copy executor e condivide classe
+IO e recupero degli input senza attesa del prefetch. Il vincolo
+`runtime_assets_pending` continua a impedire l'esecuzione prima di FINALIZE.
+Il mux C++ verifica i tagli ai keyframe e assembla direttamente le finestre dei
+sorgenti certificati, anche con offset non nullo.
 
-La preparazione Master viene invocata sia nell'intake immediato sia nella fase
-FINALIZE quando sono presenti binding Drive; entrambi usano lo stesso metodo
-di `AssetService`. Il metodo deduplica file e finestre, limita i worker di
-materializzazione, interrompe le operazioni sorelle al primo errore, rimuove i
-temporanei e restituisce il piano solo dopo la validazione del piano riscritto.
-Il worker non decide come tagliare o certificare sorgenti Drive: riceve
-frammenti già preparati e applica i controlli d'esecuzione e di integrità.
-
-Il contratto condiviso possiede la scelta copy/slice; `internal/assets` possiede
-il riconoscimento dei binding Drive usato per preparazione e rimozione dei
-binding già materializzati; il worker executor possiede binding e ammissibilità
-di esecuzione; il motore C++ esegue il mux. I controlli di sicurezza
-dell'executor e del motore restano difese runtime, non una seconda fonte per
-compilare o riscrivere il piano.
+Il resolver dell'assembly richiede file locali verificati. Il recupero sparse
+è attualmente limitato alla preparazione opt-in; non costituisce una verifica
+SHA-256 completa del sorgente. I controlli indipendenti sui nuovi frammenti
+rimangono parte del confine di fiducia Master/worker.
 
 ---
 

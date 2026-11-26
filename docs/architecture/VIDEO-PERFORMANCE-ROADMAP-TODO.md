@@ -187,8 +187,8 @@ benchmark evidence and digest promotion — remain open below.
   Register `video.prepare.window.v1` as one-source/no-prefetch with
   `prepared_segment` completion, `video.assemble.copy.v1` as
   compiled-plan/runtime-asset with on-demand fetch after FINALIZE, and
-  `video.assemble.slice.v1` as compiled-plan/runtime-asset with the strict
-  prep gate; both have `artifact_commit` completion. Unknown executors keep
+  `video.assemble.slice.v1` as a legacy copy adapter with the same
+  on-demand input path; both have `artifact_commit` completion. Unknown executors keep
   the legacy payload scan and require prefetch.
 - [x] Resolve placement `RequiredAssetKeys` from the executor contract.
   Window preparation no longer inherits every sibling asset in the job; the
@@ -198,7 +198,7 @@ benchmark evidence and digest promotion — remain open below.
   `RequiresPrefetch == false` bypasses the asset reservation/evidence wait,
   but never the `runtime_assets_pending` PREPARE/FINALIZE fence. Packet-copy
   assembly opts into this because its worker fetches content-addressed inputs
-  on demand; slice assembly and unregistered executors remain strict.
+  on demand; the legacy slice adapter shares this behavior; unregistered executors remain strict.
 - [x] Add `velox-admin doctor --db --job [--json] [--output] [--stall-after]`.
   It opens SQLite read-only via `invariants.OpenReadOnly`, reports
   `ADVANCING`/`STALLED`/`BLOCKED`/`COMPLETE`/`UNKNOWN`, and uses closed cause

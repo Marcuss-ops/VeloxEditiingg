@@ -103,3 +103,21 @@ func TestExpandCompiledStockPoolSlotsCyclesAndDoesNotFabricateCertification(t *t
 		t.Fatalf("expansion fabricated source certification: %+v", plan.Assets)
 	}
 }
+
+func TestExpandStockPoolContinuesSourceAcrossSlots(t *testing.T) {
+	plan := &CompiledRenderPlanV2{StockPool: &StockPoolV2{DriveFolderID: "folder", Selection: "shuffle"}, Output: OutputContractV2{FPSNum: 24, FPSDen: 1}, VideoTracks: []VideoTrackV2{{TrackID: "main", Segments: []VideoSegmentV2{
+		{SegmentID: "first", StockPoolSlot: true, FrameCount: 24},
+		{SegmentID: "second", StockPoolSlot: true, TimelineStartFrame: 24, FrameCount: 24},
+		{SegmentID: "cycle", StockPoolSlot: true, TimelineStartFrame: 48, FrameCount: 24},
+	}}}}
+	members := []StockPoolCandidateV2{{AssetID: "clip", DriveFileID: "clip", SizeBytes: 100, DurationMS: 2000, StockPoolMember: true}}
+	if err := ExpandCompiledStockPoolSlots(plan, members); err != nil {
+		t.Fatal(err)
+	}
+	segments := plan.VideoTracks[0].Segments
+	for i, want := range []int64{0, 1000000, 0} {
+		if segments[i].SourceInUS != want {
+			t.Fatalf("slot %d offset=%d, want %d", i, segments[i].SourceInUS, want)
+		}
+	}
+}
