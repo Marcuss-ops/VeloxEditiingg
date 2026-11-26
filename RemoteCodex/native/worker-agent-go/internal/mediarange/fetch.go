@@ -339,6 +339,41 @@ func writeSparseFile(reader *rangeReader, ranges []byteRange, dest string) (Stat
 			return Stats{}, err
 		}
 	}
+	if reader.integrity != nil {
+		// readAt already wrote each authenticated 1 MiB block directly into
+		// this sparse staging file. Walk the output ranges to fetch every
+		// required block; readAt writes the verified full block at its source
+		// offset, so a second range-copy file is unnecessary.
+		file := reader.chunkFile
+		if file == nil {
+			return Stats{}, fmt.Errorf("mediarange: authenticated sparse staging file is missing")
+		}
+		buffer := make([]byte, rangeChunkBytes)
+		for _, current := range ranges {
+			for offset := current.start; offset < current.end; {
+				length := int64(len(buffer))
+				if offset+length > current.end {
+					length = current.end - offset
+				}
+				n, err := reader.readAt(offset, buffer[:length])
+				if err != nil {
+					return Stats{}, err
+				}
+				offset += int64(n)
+			}
+		}
+		tmpPath := file.Name()
+		if err := file.Sync(); err != nil {
+			return Stats{}, err
+		}
+		if err := file.Close(); err != nil {
+			return Stats{}, err
+		}
+		if err := os.Rename(tmpPath, dest); err != nil {
+			return Stats{}, err
+		}
+		return Stats{DownloadedBytes: reader.downloaded, RangeCount: len(ranges)}, nil
+	}
 	// Write to a unique sibling and rename at the end: concurrent workers can
 	// materialize the same window without ever exposing a half-written file.
 	file, err := os.CreateTemp(filepath.Dir(dest), ".velox-sparse-*.tmp")

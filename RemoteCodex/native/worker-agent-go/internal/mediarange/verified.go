@@ -70,8 +70,16 @@ func (r *rangeReader) enableIntegrity(proof *contract.VideoSourceChunksV1, direc
 	if err := os.MkdirAll(directory, 0750); err != nil {
 		return nil, err
 	}
-	cache, err := os.CreateTemp(directory, ".verified-source-blocks-*")
+	// Authenticated blocks are written directly to the final sparse staging
+	// file. The file remains private until every requested range has passed
+	// block verification and the atomic rename succeeds.
+	cache, err := os.CreateTemp(directory, ".velox-sparse-verified-*")
 	if err != nil {
+		return nil, err
+	}
+	if err := cache.Truncate(r.size); err != nil {
+		_ = cache.Close()
+		_ = os.Remove(cache.Name())
 		return nil, err
 	}
 	r.integrity = proof

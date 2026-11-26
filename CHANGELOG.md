@@ -55,6 +55,11 @@
 - Sparse assembly inputs stay private to dispatch, skip complete-asset cache
   leases, require authenticated-range evidence, and are deleted after execution.
   Sources larger than 1 GiB and sources without block evidence retain full fetch.
+- Authenticated 1 MiB range blocks are now verified and written directly into
+  the private sparse staging file destined for the muxer. This removes the
+  separate temporary verified-block cache and the later copy into a second
+  sparse file. Only authenticated blocks are materialized; bytes elsewhere
+  remain holes, and a failed block never publishes the staging file.
 - Probe results from sparse bindings bypass both probe caches; the probe-index
   revision invalidates old entries that did not record byte completeness.
 - Native packet-copy assembly checks the H.264 NAL unit at the exact source

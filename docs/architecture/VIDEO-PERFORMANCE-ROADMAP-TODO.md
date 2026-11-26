@@ -49,12 +49,16 @@ complete download.
 When a cold approved HTTPS video source has a complete block certificate and every
 referenced segment is directly packet-copy eligible, the assembly resolver
 fetches only MP4 metadata and required sample ranges. Every fetched 1 MiB block
-is authenticated before its bytes are parsed or written. Sparse files remain
-private to the task, do not enter the complete-asset cache or leases, and are
-removed at dispatch completion. A warm complete source is preferred; range
-failure or unsupported containers fall back to the regular whole-file resolver,
-which verifies the complete SHA. The prepared-window path remains for sources
-without applicable evidence and for non-HTTP locators.
+is authenticated before its bytes are parsed or written. Authenticated blocks
+are written directly into the private sparse staging file destined for the
+muxer, eliminating the separate block-cache file and its second copy pass.
+Sparse files do not enter the complete-asset cache or leases and are removed at
+dispatch completion. A warm complete source is preferred; range failure or
+unsupported containers fall back to the regular whole-file resolver, which
+verifies the complete SHA. The muxer sees only authenticated block bytes;
+materialization is block-granular, so bytes outside the exact sample spans but
+inside a needed 1 MiB block can also be present. Production first-use
+certification now happens before direct assembly as described below.
 
 Regression coverage includes multi-window sparse extraction, altered block
 rejection, malformed proof rejection before network access, sparse-binding

@@ -261,12 +261,16 @@ func TestFetchWindowAuthenticatesBlocksBeforeMaterializingMultipleWindows(t *tes
 			t.Fatalf("window sample %d differs from source", frame)
 		}
 	}
-	if !bytes.Equal(got[int(sampleOffset)+100*syntheticSampleSize:int(sampleOffset)+101*syntheticSampleSize], make([]byte, syntheticSampleSize)) {
-		t.Fatal("sample outside requested windows was materialized")
+	// Authenticated reads materialize complete 1 MiB blocks, not only the
+	// selected sample bytes. A block outside all requested ranges must remain
+	// a sparse hole.
+	outsideBlock := int(contract.VideoSourceChunkSize) + 100
+	if !bytes.Equal(got[outsideBlock:outsideBlock+syntheticSampleSize], make([]byte, syntheticSampleSize)) {
+		t.Fatal("block outside requested windows was materialized")
 	}
-	entries, err := filepath.Glob(filepath.Join(filepath.Dir(dest), ".verified-source-blocks-*"))
+	entries, err := filepath.Glob(filepath.Join(filepath.Dir(dest), ".velox-sparse-verified-*"))
 	if err != nil || len(entries) != 0 {
-		t.Fatalf("verified block cache leaked: %v err=%v", entries, err)
+		t.Fatalf("verified sparse staging file leaked after publication: %v err=%v", entries, err)
 	}
 }
 
@@ -296,6 +300,10 @@ func TestFetchWindowRejectsAlteredAuthenticatedBlock(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
 		t.Fatalf("altered sparse input was published at %s", dest)
+	}
+	staging, globErr := filepath.Glob(filepath.Join(filepath.Dir(dest), ".velox-sparse-verified-*"))
+	if globErr != nil || len(staging) != 0 {
+		t.Fatalf("failed authenticated staging file leaked: %v err=%v", staging, globErr)
 	}
 }
 
