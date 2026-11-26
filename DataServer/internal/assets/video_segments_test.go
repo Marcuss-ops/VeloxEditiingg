@@ -46,7 +46,13 @@ func (r *segmentTestRepository) InsertSource(_ context.Context, source AssetSour
 func (r *segmentTestRepository) GetBySourceReference(_ context.Context, reference string) (*AssetRecord, error) {
 	for _, source := range r.sources {
 		if source.SourceReference == reference {
-			return r.bySHA[source.AssetID], nil
+			record := r.bySHA[source.AssetID]
+			if record == nil {
+				return nil, nil
+			}
+			copy := *record
+			copy.MetadataJSON = source.MetadataJSON
+			return &copy, nil
 		}
 	}
 	return nil, nil
@@ -194,6 +200,23 @@ func TestRegisterPreparedWindowRejectsNonCanonicalAVCCAndDeduplicatesCanonical(t
 	}
 	if second.AssetID != asset.AssetID || len(repo.inserted) != 1 || countFFProbeCommands(cacheProbeRunner) != 0 {
 		t.Fatalf("second registration=%+v inserts=%d probes=%d, want certified reuse without another probe", second, len(repo.inserted), countFFProbeCommands(cacheProbeRunner))
+	}
+
+	// Another window can map to the same bytes. Its source record stores the
+	// certificate directly, unlike the envelope used by the first registration.
+	service.videoWindowVerifier = newVideoWindowVerifier()
+	request.SourceStartFrame = 24
+	certificate.SourceStartFrame = 24
+	if _, err := service.RegisterPreparedWindow(context.Background(), preparedPath, request, certificate); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := videoContract.VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := service.LookupPreparedWindowAsset(context.Background(), identity)
+	if err != nil || binding == nil || binding.AssetID != asset.AssetID {
+		t.Fatalf("deduplicated source evidence was not reusable: binding=%+v err=%v", binding, err)
 	}
 }
 

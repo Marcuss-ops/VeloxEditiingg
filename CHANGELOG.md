@@ -1,5 +1,14 @@
 ## [Unreleased] - 2026-11-08
 
+### Fixed — read both persisted window certificate representations
+
+- Cache lookup and repeated registration accept both the first-registration
+  metadata envelope and the direct certificate saved on deduplicated source
+  rows, with identical identity/revision validation.
+- The real-media registry regression now covers two windows mapping to the
+  same bytes and reuses the second window through its source-specific proof.
+- Verification: full assets suite and assets vet pass.
+
 ### Fixed — validate prepared-window evidence before reuse
 
 - FINALIZE and the worker reuse endpoint require a complete certificate tied

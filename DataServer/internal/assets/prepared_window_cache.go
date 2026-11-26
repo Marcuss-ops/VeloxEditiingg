@@ -2,7 +2,6 @@ package assets
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -107,13 +106,10 @@ func preparedWindowBindingFromAsset(identity string, asset *Asset) (*PreparedWin
 	if asset.Status != AssetStatusReady || !validStockSourceSHA256(asset.SHA256) || asset.SizeBytes <= 0 {
 		return nil, fmt.Errorf("prepared-window cache asset %q is not a certified READY fragment", identity)
 	}
-	var metadata struct {
-		Certificate contract.VideoPrepareWindowCertificateV1 `json:"window_certificate"`
-	}
-	if err := json.Unmarshal([]byte(asset.MetadataJSON), &metadata); err != nil {
+	certificate, ok := storedWindowCertificate(asset.MetadataJSON)
+	if !ok {
 		return nil, nil
 	}
-	certificate := metadata.Certificate
 	profile, err := contract.KnownCanonicalVideoProfileV1(certificate.OutputProfileID)
 	if err != nil {
 		return nil, nil

@@ -84,15 +84,22 @@ func TestPreparedWindowLookupValidatesEntireCertificate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := certificate
 			tc.mutate(&c)
-			data, err := json.Marshal(map[string]interface{}{"window_certificate": c})
-			if err != nil {
-				t.Fatal(err)
+			for _, wrapped := range []bool{true, false} {
+				var value interface{} = c
+				if wrapped {
+					value = map[string]interface{}{"window_certificate": c}
+				}
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				asset := &Asset{AssetID: "fragment", Status: AssetStatusReady, MimeType: "video/mp4", SHA256: certificate.OutputSHA256, SizeBytes: 200, MetadataJSON: string(data)}
+				hit, err := preparedWindowBindingFromAsset(identity, asset)
+				if err != nil || (hit != nil) != tc.hit {
+					t.Fatalf("wrapped=%v hit=%+v err=%v, want hit=%v", wrapped, hit, err, tc.hit)
+				}
 			}
-			asset := &Asset{AssetID: "fragment", Status: AssetStatusReady, MimeType: "video/mp4", SHA256: certificate.OutputSHA256, SizeBytes: 200, MetadataJSON: string(data)}
-			hit, err := preparedWindowBindingFromAsset(identity, asset)
-			if err != nil || (hit != nil) != tc.hit {
-				t.Fatalf("hit=%+v err=%v, want hit=%v", hit, err, tc.hit)
-			}
+
 		})
 	}
 }

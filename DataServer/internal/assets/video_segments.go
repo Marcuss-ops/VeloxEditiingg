@@ -338,13 +338,10 @@ func cachedPreparedWindowEvidenceMatches(asset *Asset, request contract.VideoPre
 	if asset == nil || asset.Status != AssetStatusReady || asset.MimeType != "video/mp4" {
 		return false
 	}
-	var metadata struct {
-		Certificate contract.VideoPrepareWindowCertificateV1 `json:"window_certificate"`
-	}
-	if json.Unmarshal([]byte(asset.MetadataJSON), &metadata) != nil {
+	certificate, ok := storedWindowCertificate(asset.MetadataJSON)
+	if !ok {
 		return false
 	}
-	certificate := metadata.Certificate
 	originalRequest := contract.VideoPrepareWindowV1{
 		Version: contract.VideoPrepareWindowVersion,
 		Source: contract.AssetRefV2{
@@ -378,4 +375,25 @@ func syncPreparedSegment(path string) error {
 	}
 	defer file.Close()
 	return file.Sync()
+}
+
+// Source records created by byte deduplication contain the certificate directly;
+// first registrations wrap it in the asset metadata envelope. Both representations
+// carry the same evidence and undergo the same validation by callers.
+func storedWindowCertificate(metadata string) (contract.VideoPrepareWindowCertificateV1, bool) {
+	var envelope struct {
+		Certificate json.RawMessage `json:"window_certificate"`
+	}
+	var certificate contract.VideoPrepareWindowCertificateV1
+	if json.Unmarshal([]byte(metadata), &envelope) != nil {
+		return certificate, false
+	}
+	raw := []byte(metadata)
+	if len(envelope.Certificate) > 0 {
+		raw = envelope.Certificate
+	}
+	if json.Unmarshal(raw, &certificate) != nil {
+		return certificate, false
+	}
+	return certificate, true
 }
