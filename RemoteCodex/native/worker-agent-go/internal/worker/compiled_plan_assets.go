@@ -9,14 +9,11 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 
 	"velox-shared/assetref"
 	"velox-shared/contract"
-	"velox-worker-agent/internal/mediarange"
 	"velox-worker-agent/internal/runtimeassets"
 )
 
@@ -295,7 +292,6 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 		return nil, fmt.Errorf("video.prepare.window.v1: source cache identity is required")
 	}
 	uri := compiledAssetReference(asset)
-	sourceURI := ""
 	if asset.SourceKind == "drive" || strings.TrimSpace(asset.DriveFileID) != "" {
 		driveID := strings.TrimSpace(asset.DriveFileID)
 		if driveID == "" {
@@ -304,38 +300,12 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 		if driveID == "" {
 			return nil, fmt.Errorf("video.prepare.window.v1: Drive source %q has no drive_file_id", asset.AssetID)
 		}
-		sourceURI = compiledRuntimeDriveSourceURIs(payload["runtime_assets"])[driveID]
+		sourceURI := compiledRuntimeDriveSourceURIs(payload["runtime_assets"])[driveID]
 		if sourceURI == "" {
 			sourceURI = "https://drive.google.com/uc?export=download&id=" + url.QueryEscape(driveID)
 		}
 		w.rememberSourceLocator(identity, sourceURI)
 		uri = "velox-drive://" + identity
-	}
-	// Media-aware sparse fetch: when the source identity is already certified
-	// and the source is served over HTTP(S), materialize only the container
-	// index plus the sample ranges needed by this window. Any error falls
-	// through to the canonical full download, which re-verifies everything.
-	if sparseSourceFetchEnabled() && !request.SourceIdentityDiscovery && asset.SizeBytes > 0 {
-		fetchURL := sourceURI
-		if fetchURL == "" && (strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://")) {
-			fetchURL = uri
-		}
-		if fetchURL != "" {
-			windowKey := strconv.FormatInt(request.SourceStartFrame, 10) + "-" + strconv.FormatInt(request.SourceStartUS, 10) + "-" + strconv.FormatInt(request.SourceDurationUS, 10) + "-" + strconv.FormatInt(request.OutputFrameCount, 10)
-			dest := filepath.Join(os.TempDir(), "velox", "sparse-source", identity+"-"+windowKey+".mp4")
-			_, fetchErr := mediarange.FetchWindow(ctx, nil, fetchURL, mediarange.Options{
-				Size: asset.SizeBytes, StartFrame: request.SourceStartFrame, FrameCount: request.SourceFrameCount,
-				StartUS: request.SourceStartUS, DurationUS: request.SourceDurationUS,
-				FPSNum: request.SourceFPSNum, FPSDen: request.SourceFPSDen, Dest: dest,
-			})
-			if fetchErr == nil {
-				return runtimeassets.Bindings{asset.AssetID: {
-					AssetID: asset.AssetID, CacheKey: identity, Path: dest,
-					SHA256: asset.SHA256, Size: asset.SizeBytes, Verified: true, Sparse: true,
-				}}, nil
-			}
-			_ = os.Remove(dest)
-		}
 	}
 	resolvedPayload, err := w.resolveCommonAssetPayloadMutable(ctx, map[string]interface{}{
 		"assets": []interface{}{map[string]interface{}{
@@ -389,15 +359,6 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 		AssetID: asset.AssetID, CacheKey: identity, Path: path,
 		SHA256: sha, Size: info.Size(), Verified: true,
 	}}, nil
-}
-
-func sparseSourceFetchEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_SPARSE_SOURCE_FETCH"))) {
-	case "1", "true", "enabled":
-		return true
-	default:
-		return false
-	}
 }
 
 func isLowerHexSHA256(value string) bool {

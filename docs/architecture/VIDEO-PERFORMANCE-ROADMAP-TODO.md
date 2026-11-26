@@ -457,10 +457,12 @@ benchmark evidence and digest promotion — remain open below.
   offset, includes decoder pre-roll from the preceding sync sample and decodes
   through the next sync sample. Only container metadata and those sample
   ranges are written to an atomically renamed sparse file; ranges are merged
-  within 128 KiB. The opt-in `VELOX_SPARSE_SOURCE_FETCH` flag wires it into
-  `video.prepare.window.v1`; unsupported containers, fragmented MP4, servers
-  without Range support and any parse error fall back to the canonical full
-  download. Tests cover synthetic hole/requested-sample/fallback cases and a
+  within 128 KiB. The former unauthenticated opt-in path through
+  `video.prepare.window.v1` has been removed; partial fetch is permitted only
+  by the certified direct-assembly resolver with per-block SHA-256 evidence.
+  Unsupported containers, fragmented MP4, servers without Range support and
+  any parse error fall back to the canonical full download. Tests cover
+  synthetic hole/requested-sample/fallback cases and a
   real FFmpeg B-frame fixture whose sparse decode is compared to the full
   source with `framemd5`.
 - [~] Progressive upload plumbing exists: the worker negotiates early upload

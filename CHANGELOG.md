@@ -1,5 +1,13 @@
 ## [Unreleased] - 2026-11-08
 
+### Security — remove unauthenticated sparse source preparation
+
+- Removed the `VELOX_SPARSE_SOURCE_FETCH` path from `video.prepare.window.v1`.
+  That path could label a sparse file verified using only the declared full
+  source digest. Partial source reads are now available only through direct
+  assembly with certificate-backed block SHA-256 verification; legacy window
+  preparation uses the complete resolver and its full-content verification.
+
 ### Performance — fetch authenticated source ranges for direct assembly
 
 - Full-source certificates may carry SHA-256 hashes for fixed 1 MiB blocks,
