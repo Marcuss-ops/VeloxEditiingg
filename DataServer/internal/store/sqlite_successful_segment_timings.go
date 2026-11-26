@@ -45,7 +45,7 @@ func (r *SQLiteTaskAttemptRepository) ListSuccessfulSegmentTimings(ctx context.C
 			FROM task_attempts a
 			JOIN tasks t ON t.task_id = a.task_id
 			WHERE a.status = 'SUCCEEDED'
-			  AND t.executor_id = 'video.prepare.window.v1'
+			  AND t.executor_id IN ('video.prepare.window.v1', 'video.source.certify.v1')
 			  AND a.task_id IN (` + placeholders + `)
 		)
 		SELECT s.task_id, st.attempt_id, st.segment_index,
