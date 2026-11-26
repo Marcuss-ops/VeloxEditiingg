@@ -75,29 +75,29 @@ func (e *videoSourceCertificationExecutor) Execute(ctx context.Context, execCtx 
 	}
 	request, err := e.request(spec)
 	if err != nil {
-		return fail("SOURCE_CERTIFICATION_INVALID", err)
+		return fail(contract.VideoSourceCertificationInvalidErrorCode, err)
 	}
 	bindings, ok := runtimeassets.FromContext(ctx)
 	if !ok {
-		return fail("SOURCE_CERTIFICATION_INPUT_MISSING", errors.New("verified complete source binding is required"))
+		return fail(contract.VideoSourceCertificationInputMissingErrorCode, errors.New("verified complete source binding is required"))
 	}
 	source, ok := bindings[request.Source.AssetID]
 	if !ok || !source.Verified || source.Sparse || source.Size != request.Source.SizeBytes || !isLowerSHA256(source.SHA256) {
-		return fail("SOURCE_CERTIFICATION_INPUT_INVALID", errors.New("source must be complete, verified and match its declared size"))
+		return fail(contract.VideoSourceCertificationInputInvalidErrorCode, errors.New("source must be complete, verified and match its declared size"))
 	}
 	if request.Source.SHA256 != "" && source.SHA256 != request.Source.SHA256 {
-		return fail("SOURCE_CERTIFICATION_IDENTITY_MISMATCH", errors.New("resolved source SHA-256 differs from request"))
+		return fail(contract.VideoSourceCertificationIdentityMismatchErrorCode, errors.New("resolved source SHA-256 differs from request"))
 	}
 	info, err := os.Stat(source.Path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() != request.Source.SizeBytes {
 		if err == nil {
 			err = errors.New("source file size changed after resolution")
 		}
-		return fail("SOURCE_CERTIFICATION_SOURCE_INVALID", err)
+		return fail(contract.VideoSourceCertificationSourceInvalidErrorCode, err)
 	}
 	probe, err := e.preparer.probeSource(ctx, source.Path, source.SHA256, true)
 	if err != nil {
-		return fail("SOURCE_CERTIFICATION_PROBE_FAILED", err)
+		return fail(contract.VideoSourceCertificationProbeFailedErrorCode, err)
 	}
 	windowRequest := contract.VideoPrepareWindowV1{
 		Source: request.Source, OutputProfileID: request.OutputProfileID,
@@ -106,19 +106,19 @@ func (e *videoSourceCertificationExecutor) Execute(ctx context.Context, execCtx 
 	windowRequest.Source.SHA256 = source.SHA256
 	certificate := sourceCertificateFromProbe(probe, windowRequest, e.preparer.profile)
 	if certificate == nil {
-		return fail("SOURCE_CERTIFICATION_INCOMPATIBLE", errors.New("complete source facts do not satisfy the canonical certification contract"))
+		return fail(contract.VideoSourceCertificationIncompatibleErrorCode, errors.New("complete source facts do not satisfy the canonical certification contract"))
 	}
 	chunks, err := e.preparer.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, probe, source.SourceChunks)
 	if err != nil {
-		return fail("SOURCE_CERTIFICATION_HASH_FAILED", err)
+		return fail(contract.VideoSourceCertificationHashFailedErrorCode, err)
 	}
 	certificate.Chunks = chunks
 	if err := certificate.Validate(); err != nil {
-		return fail("SOURCE_CERTIFICATION_INVALID", err)
+		return fail(contract.VideoSourceCertificationInvalidErrorCode, err)
 	}
 	metadata, err := json.Marshal(certificate)
 	if err != nil {
-		return fail("SOURCE_CERTIFICATION_ENCODE_FAILED", err)
+		return fail(contract.VideoSourceCertificationEncodeFailedErrorCode, err)
 	}
 	completed := time.Now().UTC()
 	return executor.ExecutionResult{

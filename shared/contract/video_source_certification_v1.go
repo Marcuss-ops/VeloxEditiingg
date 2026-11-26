@@ -9,9 +9,18 @@ import (
 )
 
 const (
-	VideoSourceCertificationPayloadKey = "video_source_certification"
-	VideoSourceCertificationVersion    = 1
-	VideoSourceCertificationExecutorID = "video.source.certify.v1"
+	VideoSourceCertificationPayloadKey                = "video_source_certification"
+	VideoSourceCertificationVersion                   = 1
+	VideoSourceCertificationExecutorID                = "video.source.certify.v1"
+	VideoSourceCertificationInvalidErrorCode          = "SOURCE_CERTIFICATION_INVALID"
+	VideoSourceCertificationInputMissingErrorCode     = "SOURCE_CERTIFICATION_INPUT_MISSING"
+	VideoSourceCertificationInputInvalidErrorCode     = "SOURCE_CERTIFICATION_INPUT_INVALID"
+	VideoSourceCertificationSourceInvalidErrorCode    = "SOURCE_CERTIFICATION_SOURCE_INVALID"
+	VideoSourceCertificationIdentityMismatchErrorCode = "SOURCE_CERTIFICATION_IDENTITY_MISMATCH"
+	VideoSourceCertificationProbeFailedErrorCode      = "SOURCE_CERTIFICATION_PROBE_FAILED"
+	VideoSourceCertificationIncompatibleErrorCode     = "SOURCE_CERTIFICATION_INCOMPATIBLE"
+	VideoSourceCertificationHashFailedErrorCode       = "SOURCE_CERTIFICATION_HASH_FAILED"
+	VideoSourceCertificationEncodeFailedErrorCode     = "SOURCE_CERTIFICATION_ENCODE_FAILED"
 )
 
 // VideoSourceCertificationV1 asks a worker to verify and inspect one complete

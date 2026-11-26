@@ -147,7 +147,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	if err := persistRawReport(ctx, tx, cmd, now); err != nil {
 		return err
 	}
-	retrying, err := schedulePreparedWindowRetry(ctx, tx, cmd, ingestStartedAt)
+	retrying, err := scheduleRuntimePreparationRetry(ctx, tx, cmd, ingestStartedAt)
 	if err != nil {
 		return err
 	}

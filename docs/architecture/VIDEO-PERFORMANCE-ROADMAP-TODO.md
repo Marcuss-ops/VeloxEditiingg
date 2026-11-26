@@ -2,6 +2,39 @@
 
 Status updated: 2026-11-26
 
+## 2026-11-26 — first-use source certification and same-job assembly
+
+FINALIZE now plans one `video.source.certify.v1` task for each missing
+immutable video identity, independent of window count and timeline position.
+The task requires a complete, SHA-verified source, returns structured source
+evidence without a media output, and commits that evidence atomically under the
+task attempt/lease/revision fence. FINALIZE then enriches and rehashes the
+current plan from the newly persisted certificate before dispatching assembly.
+Transient source download, probe, and block-hash failures use the existing
+bounded retry mechanism; permanent identity, profile, and compatibility
+failures remain terminal.
+
+Production FINALIZE refuses to schedule new window-fragment tasks once the
+source-certification planner is wired. It may reuse a previously registered
+fragment when every needed cache entry is already present, but a missing or
+incompatible source window fails explicitly. Persisted legacy preparation DAGs
+remain supported until their retry/recovery references can be retired safely.
+The M2M capabilities response advertises the source-certification executor
+only for connected workers that actually register it.
+
+The complete-file cache verification pass now computes the full SHA-256 and,
+for video files up to 1 GiB, the optional fixed 1 MiB block digests together.
+The block index is stored as atomic metadata beside the immutable CAS blob and
+is passed into the certification executor, avoiding the prior additional full
+file read on cold downloads. Old cache entries without this metadata fall back
+to a complete verified read. Large sources omit range evidence and remain
+eligible for complete downloads.
+
+Verified locally: DataServer pipeline/assets/completion/gRPC affected suites;
+worker source resolver, certification, runtime binding, and cache suites.
+Still not verified: production rollout, live cold/warm timings, and PERFLIVE
+results. Those require an authorized remote measurement window.
+
 ## 2026-11-26 — authenticated sparse inputs for certified direct assembly
 
 Full-source certificates now optionally carry SHA-256 evidence for fixed
@@ -35,20 +68,15 @@ revision invalidates older entries whose byte completeness was not recorded.
 The native packet mux also inspects the H.264 access unit at each requested
 boundary and requires an IDR NAL, not only the container's generic key flag.
 
-Known immutable SHA/size inputs now bypass window preparation even when the
-source certificate is missing: the worker verifies the complete asset, and the
-native mux checks canonical stream compatibility and each exact IDR boundary.
-Still open: a source with no immutable SHA requires identity discovery, which
-currently uses `video.prepare.window.v1` and produces a packet-copy fragment.
-That discovery result cannot yet be reused by the same first job as a
-source-only certificate because the persisted task/result contract requires a
-registered prepared asset. FINALIZE now does reuse the certificate immediately
-after that result and can dispatch direct assembly for the same job; the window
-fragment is still produced first. The certificate registry is blob-independent,
-and `video.source.certify.v1` now has an artifact-free, fenced and idempotent
-completion protocol. The executor is not yet scheduled by FINALIZE, so ordinary
-first-use rendering still produces a window fragment. No silent no-op completion
-is safe here.
+Known immutable SHA/size inputs and newly discovered identities now use the
+same source-level certification task. The task result contains no MP4 and is
+committed independently of asset/blob rows. FINALIZE enriches the current plan
+from the newly registered certificate and retains the exact source offsets.
+Direct packet assembly still performs native stream and IDR checks. If a
+requested window cannot be proven compatible, FINALIZE fails instead of
+materializing a new fragment. Legacy persisted preparation tasks remain for
+recovery; their removal depends on auditing task/retry state and applying the
+full-module pre-removal verification gate.
 
 ## 2026-11-26 — remaining source-contract work
 

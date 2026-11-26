@@ -26,7 +26,21 @@
   It requires a complete verified source and returns certificate evidence with
   no media outputs. The Master accepts that evidence only through an
   attempt/lease/revision-fenced idempotent completion transaction. FINALIZE
-  does not schedule this executor yet; source-level fan-out is the next step.
+  now deduplicates certification by immutable source identity, schedules one
+  artifact-free task per missing source, and reuses the committed evidence in
+  that same job before publishing the canonical assembly plan. New FINALIZE
+  requests refuse to create intermediate window MP4s when direct certification
+  cannot prove the requested cut; already persisted legacy task graphs remain
+  recoverable. Transient source download/probe/hash failures use the existing
+  bounded, fenced retry path.
+- The M2M capabilities response now advertises
+  `video_source_certification.v1` only when a connected worker registers that
+  executor. New cold video downloads compute full SHA-256 and optional 1 MiB
+  block digests in the same complete-file verification pass; the authenticated
+  block index is stored beside the immutable cache blob and reused by source
+  certification. Existing cache entries without the index use the verified
+  full-file fallback. Sources over 1 GiB omit optional block evidence and use
+  complete downloads.
 
 ### Performance — fetch authenticated source ranges for direct assembly
 
@@ -48,11 +62,10 @@
 - Verification: worker media-range, worker resolver/executor, shared contract,
   source-registry and SQLite ordering regressions pass. Production performance
   measurement remains pending deployment.
-- First-use limitation: sources that already have immutable SHA/size bypass
-  preparation and go directly to full-SHA verification plus native stream/IDR
-  checks. A source with no SHA still needs identity discovery, whose current
-  task/result contract registers a packet-copy fragment before FINALIZE can
-  reuse its evidence in that same job.
+- Verification: DataServer pipeline/assets/completion/gRPC affected suites and
+  worker resolver/executor/cache suites pass locally. Live cold/warm render
+  measurements and deployment verification remain pending an authorized
+  production window.
 
 ### Added — reusable source certificates and certified stock cuts
 

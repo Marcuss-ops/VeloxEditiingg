@@ -11,10 +11,10 @@ import (
 	"velox-shared/contract"
 )
 
-// schedulePreparedWindowRetry runs before the failed attempt transaction is
-// committed. Thus the parent never sees a transient FAILED child between
-// attempt completion and requeue, and a crash cannot split those operations.
-func schedulePreparedWindowRetry(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, now time.Time) (bool, error) {
+// scheduleRuntimePreparationRetry runs before the failed attempt transaction
+// is committed. Thus FINALIZE never observes a transient FAILED dependency
+// between attempt completion and requeue, and a crash cannot split the two.
+func scheduleRuntimePreparationRetry(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, now time.Time) (bool, error) {
 	if cmd.TaskStatus != taskgraph.StatusFailed {
 		return false, nil
 	}
@@ -23,7 +23,7 @@ func schedulePreparedWindowRetry(ctx context.Context, tx *sql.Tx, cmd taskgraph.
 	err := tx.QueryRowContext(ctx, `SELECT t.attempt_number, COALESCE(j.max_retries,0),
 		COALESCE((SELECT a.completed_at FROM task_attempts a WHERE a.task_id=t.task_id ORDER BY a.attempt_number DESC,a.created_at DESC LIMIT 1),'')
 		FROM tasks t JOIN jobs j ON j.job_id=t.job_id
-		WHERE t.task_id=? AND t.job_id=? AND t.executor_id=? AND t.status='FAILED'
+		WHERE t.task_id=? AND t.job_id=? AND t.executor_id IN (?,?) AND t.status='FAILED'
 		  AND t.attempt_id=? AND t.worker_id=? AND t.lease_id=?
 		  AND UPPER(j.status) NOT IN ('FAILED','SUCCEEDED','CANCELLED','CANCELED')
 		  AND EXISTS (SELECT 1 FROM tasks p JOIN task_specs s ON s.task_id=p.task_id,
@@ -31,14 +31,14 @@ func schedulePreparedWindowRetry(ctx context.Context, tx *sql.Tx, cmd taskgraph.
 		    WHERE p.job_id=t.job_id AND dep.value=t.task_id
 		      AND p.status IN ('PENDING','READY')
 		      AND json_extract(s.payload_json,'$.runtime_finalize_status')='WAITING_PREPARATION')`,
-		cmd.TaskID, cmd.JobID, contract.VideoPrepareWindowExecutorID, cmd.AttemptID, cmd.WorkerID, cmd.LeaseID).Scan(&attempt, &maxRetries, &failedAt)
+		cmd.TaskID, cmd.JobID, contract.VideoPrepareWindowExecutorID, contract.VideoSourceCertificationExecutorID, cmd.AttemptID, cmd.WorkerID, cmd.LeaseID).Scan(&attempt, &maxRetries, &failedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("prepared-window retry inspect: %w", err)
 	}
-	retryable := retryablePreparedWindowFailure(cmd.ErrorCode, cmd.ErrorMsg)
+	retryable := retryableRuntimeDependencyFailure(cmd.ErrorCode, cmd.ErrorMsg)
 	if !retryable && cmd.ErrorCode == "WINDOW_EXTRADATA_IDENTITY_MISMATCH" && failedAt != "" {
 		retryable = successfulWorkerUpdateAfterFailure(ctx, tx, cmd.WorkerID, failedAt)
 	}

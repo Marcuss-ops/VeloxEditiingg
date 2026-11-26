@@ -134,6 +134,18 @@ func retryablePreparedWindowFailure(code, message string) bool {
 	return code == contract.VideoPrepareWindowRetryableErrorCode || retryablePreparedWindowUpload(message)
 }
 
+func retryableRuntimeDependencyFailure(code, message string) bool {
+	if retryablePreparedWindowFailure(code, message) {
+		return true
+	}
+	switch code {
+	case contract.VideoSourceCertificationInputMissingErrorCode, contract.VideoSourceCertificationProbeFailedErrorCode, contract.VideoSourceCertificationHashFailedErrorCode:
+		return true
+	default:
+		return false
+	}
+}
+
 type queryRower interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
