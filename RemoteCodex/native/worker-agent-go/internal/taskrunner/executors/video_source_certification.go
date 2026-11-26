@@ -99,6 +99,9 @@ func (e *videoSourceCertificationExecutor) Execute(ctx context.Context, execCtx 
 	if err != nil {
 		return fail(contract.VideoSourceCertificationProbeFailedErrorCode, err)
 	}
+	if err := e.preparer.ensureExactSourceFrameCount(ctx, source.Path, source.SHA256, &probe); err != nil {
+		return fail(contract.VideoSourceCertificationProbeFailedErrorCode, err)
+	}
 	windowRequest := contract.VideoPrepareWindowV1{
 		Source: request.Source, OutputProfileID: request.OutputProfileID,
 		OutputProfileRevision: request.OutputProfileRevision,

@@ -22,6 +22,12 @@ remain supported until their retry/recovery references can be retired safely.
 The M2M capabilities response advertises the source-certification executor
 only for connected workers that actually register it.
 
+Certificates now use an exact frame count from FFprobe's complete `nb_read_frames`
+walk, not the container's optional `nb_frames` declaration. Probe cache revision
+4 invalidates entries that predate this evidence. The worker still invokes
+FFprobe for stream and keyframe inspection; moving equivalent codec, timestamp,
+frame-count and IDR evidence into the existing LibAV engine remains open.
+
 The complete-file cache verification pass now computes the full SHA-256 and,
 for video files up to 1 GiB, the optional fixed 1 MiB block digests together.
 The block index is stored as atomic metadata beside the immutable CAS blob and

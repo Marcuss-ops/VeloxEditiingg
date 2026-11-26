@@ -113,6 +113,57 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 	return probe, nil
 }
 
+// ensureExactSourceFrameCount replaces container-declared nb_frames with the
+// count observed by ffprobe's complete frame walk. Source certificates must
+// not turn an optional container hint into exact evidence. The verified count
+// is cached under the full source SHA and probe schema revision.
+func (e *videoPrepareWindowExecutor) ensureExactSourceFrameCount(ctx context.Context, path, sourceSHA string, probe *windowSourceProbe) error {
+	if probe == nil || !isLowerSHA256(sourceSHA) {
+		return fmt.Errorf("exact source frame count requires a verified source identity")
+	}
+	unlock := e.lockWindow("source-frame-count:" + sourceSHA)
+	defer unlock()
+	e.sourceProbeMu.Lock()
+	if cached, ok := e.sourceProbes[sourceSHA]; ok && cached.ExactFrameCount > 0 {
+		*probe = cached
+		e.sourceProbeMu.Unlock()
+		return nil
+	}
+	e.sourceProbeMu.Unlock()
+	if persisted, ok := e.readPersistedSourceProbe(sourceSHA); ok && persisted.ExactFrameCount > 0 {
+		*probe = persisted
+		e.sourceProbeMu.Lock()
+		if e.sourceProbes == nil {
+			e.sourceProbes = make(map[string]windowSourceProbe)
+		}
+		e.sourceProbes[sourceSHA] = persisted
+		e.sourceProbeMu.Unlock()
+		return nil
+	}
+	args := []string{
+		"-v", "error", "-count_frames", "-select_streams", "v:0",
+		"-show_entries", "stream=nb_read_frames", "-of", "default=nokey=1:noprint_wrappers=1", path,
+	}
+	data, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
+	if err != nil {
+		return fmt.Errorf("count exact source frames: %w", err)
+	}
+	count, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || count <= 0 {
+		return fmt.Errorf("ffprobe returned an invalid exact frame count %q", strings.TrimSpace(string(data)))
+	}
+	probe.ExactFrameCount = count
+	probe.FrameCount = count
+	e.sourceProbeMu.Lock()
+	if e.sourceProbes == nil {
+		e.sourceProbes = make(map[string]windowSourceProbe)
+	}
+	e.sourceProbes[sourceSHA] = *probe
+	e.sourceProbeMu.Unlock()
+	e.writePersistedSourceProbe(sourceSHA, *probe)
+	return nil
+}
+
 func (e *videoPrepareWindowExecutor) sourceProbeIndexPath(sourceSHA string) string {
 	if e == nil || !isLowerSHA256(sourceSHA) {
 		return ""
@@ -370,15 +421,15 @@ func absFloat(value float64) float64 {
 // Missing container frame counts or a non-zero presentation origin keep the
 // existing window-only path. Never fabricate full-source evidence from a slice.
 func sourceCertificateFromProbe(source windowSourceProbe, request contract.VideoPrepareWindowV1, profile contract.CanonicalVideoProfileV1) *contract.VideoSourceCertificateV1 {
-	if source.FrameCount <= 0 || source.StartTimeSec != 0 {
+	if source.ExactFrameCount <= 0 || source.StartTimeSec != 0 {
 		return nil
 	}
 	certificate := &contract.VideoSourceCertificateV1{Version: 1, SHA256: request.Source.SHA256, SizeBytes: request.Source.SizeBytes, ProfileID: request.OutputProfileID, PreparationRevision: request.OutputProfileRevision,
-		Evidence: contract.VideoWindowOutputEvidenceV1{Codec: source.CodecName, Profile: source.Profile, Level: source.Level, Width: source.Width, Height: source.Height, PixelFormat: source.PixelFormat, FPSNum: source.FPSNum, FPSDen: source.FPSDen, TimeBaseNum: source.TimeBaseNum, TimeBaseDen: source.TimeBaseDen, BFrames: source.BFrames, FrameCount: source.FrameCount, FirstFrameKeyframe: true, ExtradataSHA256: source.ExtradataSHA}}
-	if source.FrameCount > math.MaxInt64/int64(profile.FPSDen)/1_000_000 {
+		Evidence: contract.VideoWindowOutputEvidenceV1{Codec: source.CodecName, Profile: source.Profile, Level: source.Level, Width: source.Width, Height: source.Height, PixelFormat: source.PixelFormat, FPSNum: source.FPSNum, FPSDen: source.FPSDen, TimeBaseNum: source.TimeBaseNum, TimeBaseDen: source.TimeBaseDen, BFrames: source.BFrames, FrameCount: source.ExactFrameCount, FirstFrameKeyframe: true, ExtradataSHA256: source.ExtradataSHA}}
+	if source.ExactFrameCount > math.MaxInt64/int64(profile.FPSDen)/1_000_000 {
 		return nil
 	}
-	certificate.DurationUS = source.FrameCount * int64(profile.FPSDen) * 1_000_000 / int64(profile.FPSNum)
+	certificate.DurationUS = source.ExactFrameCount * int64(profile.FPSDen) * 1_000_000 / int64(profile.FPSNum)
 	for _, seconds := range source.KeyframeTimes {
 		if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 || seconds > float64(certificate.DurationUS)/1e6 {
 			return nil

@@ -150,23 +150,24 @@ type videoPrepareWindowExecutor struct {
 }
 
 type windowSourceProbe struct {
-	Chunks        *contract.VideoSourceChunksV1 `json:"chunks,omitempty"`
-	FrameCount    int64
-	CodecName     string
-	Profile       string
-	Level         int
-	Width         int
-	Height        int
-	PixelFormat   string
-	FPSNum        int
-	FPSDen        int
-	TimeBaseNum   int
-	TimeBaseDen   int
-	BFrames       int
-	BitRateBPS    int64
-	StartTimeSec  float64
-	ExtradataSHA  string
-	KeyframeTimes []float64
+	Chunks          *contract.VideoSourceChunksV1 `json:"chunks,omitempty"`
+	FrameCount      int64
+	ExactFrameCount int64 `json:"exact_frame_count,omitempty"`
+	CodecName       string
+	Profile         string
+	Level           int
+	Width           int
+	Height          int
+	PixelFormat     string
+	FPSNum          int
+	FPSDen          int
+	TimeBaseNum     int
+	TimeBaseDen     int
+	BFrames         int
+	BitRateBPS      int64
+	StartTimeSec    float64
+	ExtradataSHA    string
+	KeyframeTimes   []float64
 }
 
 // windowSourceProbeIndex binds a persisted keyframe index to the immutable
@@ -179,7 +180,7 @@ type windowSourceProbeIndex struct {
 	Probe     windowSourceProbe `json:"probe"`
 }
 
-const windowSourceProbeIndexVersion = 3
+const windowSourceProbeIndexVersion = 4
 
 type keyedWindowLock struct {
 	mu   sync.Mutex
@@ -430,6 +431,9 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		OutputEvidence: evidence, ClosedGOPAttested: true, PacketCopyUsed: true,
 	}
 	if !source.Sparse {
+		if err := e.ensureExactSourceFrameCount(ctx, source.Path, source.SHA256, &sourceProbe); err != nil {
+			return fail("WINDOW_SOURCE_FRAME_COUNT_FAILED", err)
+		}
 		attestation.SourceCertificate = sourceCertificateFromProbe(sourceProbe, resolvedRequest, e.profile)
 		if attestation.SourceCertificate != nil {
 			chunks, chunkErr := e.certifySourceChunks(ctx, source.Path, source.SHA256, source.Size, sourceProbe, source.SourceChunks)

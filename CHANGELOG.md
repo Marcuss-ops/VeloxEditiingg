@@ -41,6 +41,12 @@
   certification. Existing cache entries without the index use the verified
   full-file fallback. Sources over 1 GiB omit optional block evidence and use
   complete downloads.
+- Source certificates now use `nb_read_frames` from a complete frame-count
+  pass instead of trusting the container's optional `nb_frames` hint. The
+  exact count is persisted in source-probe cache revision 4; older entries are
+  invalidated. Media inspection still invokes FFprobe and remains a candidate
+  for consolidation into the existing LibAV engine after equivalent packet,
+  timestamp, IDR and stream-profile evidence is available there.
 
 ### Performance — fetch authenticated source ranges for direct assembly
 
