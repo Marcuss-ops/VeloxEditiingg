@@ -2,6 +2,31 @@
 
 Status updated: 2026-11-25
 
+## 2026-11-26 — remaining source-contract work
+
+Stock slots now continue from the consumed source frame between slots and
+restart only when the pool cycles. Exact canonical source frame counts take
+precedence over rounded duration metadata when SHA and size match. Legacy slice
+assembly shares copy assembly's IO classification and on-demand input gate.
+Binding integrity is checked once per declared asset; failed resolution batches
+cancel sibling work.
+
+The following source work remains open; local performance fixes do not close it:
+
+- Persist source certification separately from prepared-fragment certificates
+  and propagate it into future stock snapshots. Worker probe indexes already
+  persist by SHA; introducing a second worker probe cache is unnecessary.
+- Define authenticated range evidence before accepting partial sources in the
+  assembly resolver. The existing sparse preparation binding carries the declared
+  SHA, not a recomputed full-content digest; it cannot be promoted to an ordinary
+  verified assembly binding. Complete downloads remain the default.
+- Select compatible stock windows from certified keyframe evidence. Advancing a
+  source cursor does not make an arbitrary boundary a keyframe; incompatible
+  cuts must continue to fail closed.
+- Retain independent verification for newly registered fragments. Reused READY
+  fragments already skip repeated probes; removing the initial verification
+  requires an explicit trust/evidence contract, not another cache toggle.
+
 ## 2026-11-25 — remove the unused Master trimmer and duplicate probe index
 
 The last production code for Master-side source-window rewriting and trimming
