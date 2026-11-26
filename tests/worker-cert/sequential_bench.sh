@@ -256,7 +256,7 @@ validate_benchmark_payload() {
               and (.clip.url | startswith("velox-asset://"))
               and (.voiceover.url | startswith("velox-asset://"))
               and (.stock_links | all(.[]; startswith("velox-asset://")))
-              and (.subtitles.url | startswith("velox-asset://"))))] | all)
+              and (.subtitles.url | startswith("velox-asset://")))] | all)
      and ($root.audio_tracks | length == 1)
      and ($root.audio_tracks[0].source_url | startswith("velox-asset://"))
      and ([.. | strings | select(startswith("file://") or startswith("http://") or startswith("https://"))] | length == 0))
