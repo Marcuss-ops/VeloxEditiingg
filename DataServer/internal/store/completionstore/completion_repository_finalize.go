@@ -142,10 +142,10 @@ func (r *sqliteCompletionTx) persistVideoSourceCertificate(ctx context.Context, 
 	reference := "certified-video-source:" + source.SHA256 + ":" + source.PreparationRevision
 	var existing string
 	err := r.tx.QueryRowContext(ctx, `SELECT certificate_json FROM video_source_certificates WHERE source_reference=?`, reference).Scan(&existing)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("store: read source certificate in completion transaction: %w", err)
 	}
-	notFound := err == sql.ErrNoRows
+	notFound := errors.Is(err, sql.ErrNoRows)
 	encoded, err := json.Marshal(source)
 	if err != nil {
 		return err
