@@ -338,6 +338,9 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 				}
 				return p.commitFinalization(ctx, candidate, patch)
 			}
+			if _, sourceCertificationEnabled := p.assets.(RuntimeSourceCertificationTaskPlanner); sourceCertificationEnabled {
+				return p.fail(ctx, candidate, fmt.Errorf("runtime finalizer: %d source windows are not directly certifiable; refusing to create intermediate MP4 fragments", len(misses)))
+			}
 			planHash := contract.HashCompiledPlanV2([]byte(planJSON))
 			if err := p.publishWorkerPreparations(ctx, candidate, bindings, misses, reuse, planJSON, planHash, stockPoolSnapshot); err != nil {
 				return p.fail(ctx, candidate, err)
