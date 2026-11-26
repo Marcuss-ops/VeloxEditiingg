@@ -175,6 +175,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 
 	_, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]
 	_, isWindowPreparation := spec.Payload[contract.VideoPrepareWindowPayloadKey]
+	_, isSourceCertification := spec.Payload[contract.VideoSourceCertificationPayloadKey]
 	// Cache-first preparation: when the requested fragment is already in the
 	// worker-local cache, skip source resolution entirely. The probe validates
 	// the same identity, encoder build and canonical avcC as the executor, so
@@ -237,7 +238,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			}
 		}
 	}
-	usesVerifiedRuntimeBindings := (isCompiledPlan || isWindowPreparation) && !preparedWindowCacheHit
+	usesVerifiedRuntimeBindings := (isCompiledPlan || isWindowPreparation || isSourceCertification) && !preparedWindowCacheHit
 	if usesVerifiedRuntimeBindings {
 		// Operational lifecycle: materializing runtime assets.
 		w.UpdateOperationalPhase(pte.TaskID, PhaseMaterializing)
