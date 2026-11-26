@@ -1,4 +1,4 @@
-## [Unreleased] - 2026-11-08
+## [Unreleased] - 2026-11-26
 
 ### Changed — retire legacy video preparation and slice executors
 
@@ -9,31 +9,35 @@
 - The worker no longer registers or advertises `video.prepare.window.v1` or
   `video.assemble.slice.v1`, and rejects offers for those IDs. Historical task
   and attempt records and their read/inspection contracts remain intact.
-- Production Master audit on 2026-11-26 found no nonterminal legacy tasks.
+- Post-rollout Master audit found no active legacy tasks after terminalizing
+  the two abandoned pre-cutover slice jobs.
   The two successful jobs after the Master cutover used copy assembly only.
+- Final worker runtime removal landed on `main` as `87bde607` after producer
+  cutover. The signed worker digest
+  `ghcr.io/marcuss-ops/velox-worker@sha256:3f6f4ed7cb7bd4d319101a6b453f85fad5d3600e80696da6b773953a3804c854`
+  was deployed to `host_57_129_132_133`; readiness and Level-D smoke passed.
+  It advertises only `video.assemble.copy.v1` and `video.source.certify.v1`.
+  Two abandoned pre-cutover slice jobs were cancelled transactionally with
+  their task and attempt history retained; no active retired tasks remain.
 
 ### Security — remove unauthenticated sparse source preparation
 
-- Removed the `VELOX_SPARSE_SOURCE_FETCH` path from `video.prepare.window.v1`.
-  That path could label a sparse file verified using only the declared full
-  source digest. Partial source reads are now available only through direct
-  assembly with certificate-backed block SHA-256 verification; legacy window
-  preparation uses the complete resolver and its full-content verification.
+- Removed the `VELOX_SPARSE_SOURCE_FETCH` path from the retired
+  `video.prepare.window.v1` executor. Partial source reads are available only
+  through direct assembly with certificate-backed block SHA-256 verification;
+  no window-preparation runtime remains.
 
 ### Architecture — store source certificates independently of media blobs
 
 - Added the `video_source_certificates` registry keyed by source SHA-256 and
   preparation revision. Source evidence no longer needs an asset/blob foreign
   key; registration checks immutable facts and allows a compare-and-swap upgrade
-  for authenticated block hashes. The existing prepared-window result now
-  commits source evidence inside its fenced completion transaction, after the
-  Master verifies the registered window. The certificate-only task/result path
-  remains to be implemented.
-- FINALIZE now reuses source certificates emitted by a preparation result in
-  the same job, binds discovered SHA/size into the canonical plan, and hashes
-  that plan before dispatch. It chooses direct assembly when all windows are
-  certified; the current completion contract still requires the preparation
-  fragment to be produced and registered first.
+  for authenticated block hashes. The certificate-only task/result path commits
+  source evidence through the fenced completion transaction.
+- FINALIZE reuses source certificates in the same job, binds discovered
+  SHA/size into the canonical plan, and hashes that plan before dispatch.
+  Compatible windows go directly to packet-copy assembly; no preparation
+  fragment is produced or registered.
 - Added the explicit `video.source.certify.v1` task contract and worker executor.
   It requires a complete verified source and returns certificate evidence with
   no media outputs. The Master accepts that evidence only through an
@@ -42,9 +46,9 @@
   artifact-free task per missing source, and reuses the committed evidence in
   that same job before publishing the canonical assembly plan. New FINALIZE
   requests refuse to create intermediate window MP4s when direct certification
-  cannot prove the requested cut; already persisted legacy task graphs remain
-  recoverable. Transient source download/probe/hash failures use the existing
-  bounded, fenced retry path.
+  cannot prove the requested cut; persisted legacy payloads remain readable for
+  audit, but are not requeued or dispatched. Transient source download, probe,
+  and hash failures use the existing bounded, fenced retry path.
 - The M2M capabilities response now advertises
   `video_source_certification.v1` only when a connected worker registers that
   executor. New cold video downloads compute full SHA-256 and optional 1 MiB
@@ -60,15 +64,13 @@
   rationals, and packet keyframe timestamps. The worker rejects incomplete
   evidence and inconsistent frame rates; source certificates retain the
   verified zero-origin and average-rate facts. Probe cache revision 5
-  invalidates older entries. Prepared-fragment output certification and the
-  persisted sparse-window compatibility path still use FFprobe; neither can
-  produce a full-source certificate from sparse bytes.
+  invalidates older entries.
 - The cold source inspection now obtains exact decoded-frame counts and packet
   keyframe timestamps in one in-process LibAV pass; it no longer performs a
   separate keyframe-only probe followed by a second full frame-count process.
-- Window planning now uses the reconciled SHA-256 and size from runtime source
-  bindings, so a known immutable source never creates a redundant per-window
-  fragment task while its source certificate is being established.
+- Window planning uses the reconciled SHA-256 and size from runtime source
+  bindings. New V2 work creates certification and copy-assembly tasks only;
+  retired window-fragment tasks are not generated or requeued.
 
 ### Performance — fetch authenticated source ranges for direct assembly
 

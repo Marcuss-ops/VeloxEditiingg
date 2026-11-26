@@ -116,14 +116,14 @@ Il contratto canonico attualmente attivo per `POST /api/v1/jobs` è
 Il producer deve inviare il `CompiledRenderPlanV2` completo nei due campi top-level
 `compiled_render_plan_json` e `compiled_render_plan_sha256`. Il Master conserva
 quei byte e li valida. I piani con `stock_pool` (folder Drive, selezione
-`shuffle` e segmenti `stock_pool_slot`) vengono instradati automaticamente a
-`video.assemble.slice.v1`. Il Master enumera il folder e passa al worker i
-riferimenti e i metadati. Il Master seleziona il materiale e richiede, se manca,
-la certificazione completa della sorgente. Il worker assembly usa
-`video.assemble.copy.v1`, risolve le sorgenti nella propria cache e assembla in
-packet-copy; non vengono creati task di preparazione o frammenti MP4 intermedi.
-Se i file del pool hanno profili o parametri H.264 incompatibili, il job fallisce
-senza ricodifica.
+`shuffle` e segmenti `stock_pool_slot`) vengono espansi dal Master e instradati
+al percorso copy-only `video.assemble.copy.v1`. Il Master seleziona il materiale
+e richiede, se manca, la certificazione completa della sorgente tramite
+`video.source.certify.v1`. Il worker risolve le sorgenti nella propria cache e
+assembla in packet-copy; non vengono creati task di preparazione o frammenti
+MP4 intermedi. I vecchi ID prepare/slice sono solo leggibili nello storico e
+non sono più pubblicizzati dal worker. Se i file del pool hanno profili o
+parametri H.264 incompatibili, il job fallisce senza ricodifica.
 
 Per usare il pool con stream copy, il folder deve essere omogeneo rispetto al
 profilo del piano, inclusi livello H.264, timebase e codec extradata (SPS/PPS).

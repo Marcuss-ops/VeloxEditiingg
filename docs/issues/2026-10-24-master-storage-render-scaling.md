@@ -31,12 +31,28 @@ Do not assume GPU workers accelerate the existing copy-only path: the
 repository has measured 333 ms p50 for a 300-second copy-only assembly with
 zero decoded or encoded video frames. Benchmark compositing/encoding separately.
 
+## Current status — 2026-11-26
+
+The Master remains on OVH. The worker producer now routes compiled V2 video
+plans through source certification and copy-only assembly; GPU capacity is not
+assumed to improve that path. Storage-only estimates were verified and posted
+to [#37](https://github.com/Marcuss-ops/VeloxEditiingg/issues/37): approximately
+$0.73/$7.32/$14.63 per month for 50/500/1,000 GB on OVH Standard Multi-Zone,
+and $3.50/$35/$70 on RunPod Network Volume at published rates. These figures
+exclude compute, local cache, taxes, and operational costs.
+
+Still open: select the storage region/tier against the fleet network path and
+measure cache hit rate, cold transfer throughput, and cost per completed video.
+The copy-only release does not provide evidence for RunPod GPU acceleration;
+evaluate that only against an actual supported decode/encode workload.
+
 ## Acceptance criteria
 
 - Routine jobs and library updates require no manual VPS-to-VPS copying.
 - The Master does not store the complete source library on its local disk.
-- Object storage cost is estimated at 50 GB, 500 GB, and 1 TB, including
-  expected monthly reads and transfer conditions.
+- [x] Storage-only cost and example monthly read/transfer scenarios are
+  estimated at 50 GB, 500 GB, and 1 TB. Throughput and total cost per completed
+  video remain open.
 - Asset identities are hash-bound and verified; warm caches are reused.
 - Placement can favor workers with the required assets cached, with a safe
   cold-cache path for new workers.

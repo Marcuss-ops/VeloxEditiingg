@@ -2,11 +2,13 @@
 
 Production evidence: [2026-11-26 live report](VIDEO-PERFORMANCE-LIVE-2026-11-26.md).
 
-Open follow-ups:
-[#40 — full production `gervais-final-v1` PERFLIVE matrix](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40)
-and [#41 — retire legacy preparation/slice executors after producer cutover](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41).
+Open follow-up:
+[#40 — production copy-only assembly measurements on media prepared by remote 77](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40).
 
-Audit base: `main` at `e8a0d0f9` (2026-11-26).
+Executor retirement [#41](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41)
+was completed on 2026-11-26 and verified in production.
+
+Audit base: `main` at `87bde607` (2026-11-26).
 
 ## Already implemented
 
@@ -21,9 +23,8 @@ Audit base: `main` at `e8a0d0f9` (2026-11-26).
 - Exact decoded frame count, packet keyframe timestamps, stream identity,
   rational timestamp origin/timebase and frame-rate consistency are collected
   in a complete in-process LibAV probe. The worker rejects incomplete evidence,
-  and the probe cache schema invalidates older entries. FFprobe remains only
-  for prepared-fragment output certification and persisted sparse-window
-  compatibility; sparse bytes cannot produce a full-source certificate.
+  and the probe cache schema invalidates older entries. Sparse bytes cannot
+  produce a full-source certificate.
 - A race in the sparse-fetch test counter was fixed in `8b6617af`; the full
   worker race suite passes locally. Commit `e8a0d0f9` adds complete native
   source inspection and was pushed to `main`.
@@ -54,10 +55,11 @@ rows or touch non-legacy dead letters.
 
 The 5,108 task-spec references and 783,337 task-ID references are historical
 records retained for audit and forensic recovery; their presence is not active
-retry work. `video.assemble.slice.v1` remains a supported current assembly
-adapter, so this work does not remove its executor or contract. Any later
-retirement is tracked in [#41](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41)
-and gated on current producer/worker compatibility.
+retry work. The producer now emits `video.assemble.copy.v1` for compiled V2
+plans. The worker no longer registers the prepare or slice executors; their
+historical payloads remain readable. Two abandoned pre-cutover slice jobs were
+terminalized through the transactional job repository, preserving task,
+attempt, spec, event, and history rows. No active retired tasks remain.
 Before any exported-symbol or cross-package removal commit, run:
 
 ```bash
@@ -66,43 +68,37 @@ bash scripts/ci/pre-removal-verify.sh
 
 The read-only report is available as
 `scripts/ops/audit-legacy-video-tasks.py --db "$VELOX_DB_PATH" --json`.
-Legacy executor retirement remains open in
-[#41](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41); no destructive
-migration was attempted.
+Legacy executor retirement is complete in
+[#41](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41); task and attempt
+history was retained.
 
 ### 3. Transfer and cache measurements
 
-Focused production cold/warm cache behavior, transfer bytes, source-certificate
-time and task counts are recorded in the live report. The exact
-`gervais-final-v1` stock/voiceover/music/ASS comparison, authenticated-range
-versus full-download matrix, and local disk-I/O measurements remain open in
-[#40](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40).
+The already-prepared media and finalized plans come from remote 77. Our open
+measurement is the copy-only assembly path: consolidate a comparable cold/warm
+pair plus cache/transfer and local disk-I/O measurements in
+[#40](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40). Upstream audio,
+subtitle, and media preparation are owned by remote 77 and are not worker
+implementation work here.
 Keep cryptographic verification; optimize the read/hash path only when
 measurements show a material gain.
 
 ### 4. Image release and production proof
 
-- [x] Local worker image build succeeds from commit `e8a0d0f9`; native LibAV
-  is enabled and the complete C++ test suite passes in the build.
-- [x] GitHub built, signed, verified and certified worker digest
-  `ghcr.io/marcuss-ops/velox-worker@sha256:2a05e76c13d47a1aa9cc3e79217a93a456419de6656bacaba405f0be27aa87c0`
-  in [run 45824073441](https://github.com/Marcuss-ops/VeloxEditiingg/actions/runs/45824073441).
-- [x] FleetController deployed the signed worker digest to
-  `host_57_129_132_133`; update operation
-  `fed9b40b-1344-4281-842e-9195ce7721b6` SUCCEEDED.
-- [x] Master image digest
-  `ghcr.io/marcuss-ops/velox-server@sha256:869c1ff9cf7e36ed77770c0dd6ac6c1cce99ec272ddb474d747cc30e71a07840`
-  was signed/verified, deployed locally, and reports commit `a5dc8323` ready.
-- [x] Correct the Master smoke pickup URL and pass the canonical resume gate;
-  worker is CONNECTED/HEALTHY.
-- [x] Run a production cold/warm synthetic source-certification and direct-copy
-  render pair; record job IDs, task counts, cache transfer, duration, output
-  hashes, and deployed digests in the live report. This is not the full
-  `gervais-final-v1` PERFLIVE matrix; OS process-launch counts are unavailable.
+- [x] Worker commit `87bde607` passed race-image build, signing and
+  certification in [release run 45876322519](https://github.com/Marcuss-ops/VeloxEditiingg/actions/runs/45876322519).
+- [x] FleetController deployed digest
+  `ghcr.io/marcuss-ops/velox-worker@sha256:3f6f4ed7cb7bd4d319101a6b453f85fad5d3600e80696da6b773953a3804c854`;
+  readiness and Level-D smoke passed.
+- [x] Master runs v1.4.55 at
+  `ghcr.io/marcuss-ops/velox-server@sha256:ef1c6833c58570955781cf2f584e3c6da3b1e2da3312326dc980fb721f113445`.
+- [x] Production cold/warm source-certification and direct-copy evidence is
+  recorded in the live report. It remains distinct from the copy-only
+  measurements outstanding in #40.
 
-The production legacy queue drain is complete. The original historical task
-and reference rows remain intentionally retained; no active retry/recovery
-references remain. Supported executor compatibility remains in place.
+The production legacy queue drain and executor retirement are complete. Original
+task, attempt, spec and reference rows remain retained; retired payloads remain
+readable for audit, but their executors are not registered or dispatched.
 
 Do not claim production performance improvements based on source inspection,
 local tests or an image build alone.

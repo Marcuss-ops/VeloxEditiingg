@@ -60,7 +60,7 @@ I gap principali sono:
 4. chiudere failure window di forwarding, upload e completion;
 5. dimostrare il percorso reale master→worker→artifact→Job con E2E obbligatorio;
 6. completare recovery, mTLS, certificazione e soak;
-7. trasformare il percorso video da `1 Job → 1 Task di assembly` a `1 Job → RenderPlan → Task DAG`; il piano V2 e gli executor copy/slice sono già presenti, ma il video non è ancora scomposto in più Task indipendenti.
+7. trasformare il percorso video da `1 Job → 1 Task di assembly` a `1 Job → RenderPlan → Task DAG`; il producer V2, la certificazione sorgente e l'assembly copy sono attivi. La scomposizione in più task indipendenti per segmenti non fa parte del percorso copy-only corrente.
 
 La priorità non è aggiungere nuovi layer. La priorità è rendere affidabili, osservabili e recuperabili quelli esistenti.
 
@@ -311,8 +311,9 @@ Fixture minima:
 
 Questa fixture verifica l'assembly V2 copy-only e il protocollo di
 finalizzazione; non prova compositing, transcodifica o un Task DAG. Il percorso
-Drive-backed `video.assemble.slice.v1@1` richiede inoltre la preparazione e la
-certificazione Master descritte in `current-architecture.md §9.1`.
+Drive stock attivo espande il piano V2 sul Master, certifica le
+sorgenti quando serve e usa `video.assemble.copy.v1`; i vecchi executor prepare
+e slice sono ritirati. I dettagli sono in `current-architecture.md §9.1`.
 
 Sequenza:
 

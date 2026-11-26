@@ -103,9 +103,9 @@ The V2 Drive stock path has these additional owners:
 
 | Responsibility | Canonical owner | Forbidden |
 | --- | --- | --- |
-| Copy-versus-slice routing for a compiled V2 plan | `shared/contract.RequiredVideoAssemblyExecutor` | Reimplementing executor choice independently in the enqueue or handler packages |
-| Drive source classification, window preparation, source verification, prepared-fragment registration, and removal of materialized Drive bindings | `DataServer/internal/assets.AssetService.PlanDriveStockWindowTasks` (planning/reuse), worker `video.prepare.window.v1` (materialization), `AssetService.RegisterPreparedWindow` (independent registration) | Pipeline handlers owning Drive classification, ffmpeg preparation, or a second binding cleanup policy |
-| Runtime binding and packet-copy eligibility | `RemoteCodex/native/worker-agent-go/internal/taskrunner/executors` (`video.assemble.copy.v1` / `video.assemble.slice.v1`) | Rewriting the producer plan or trusting unverified runtime asset paths |
+| Packet-copy routing for a compiled V2 plan | `shared/contract.RequiredVideoAssemblyExecutor` | Reimplementing executor choice independently in enqueue or handler packages |
+| Drive source classification, source certification, and stock-pool expansion | `DataServer/internal/assets.AssetService` and Master FINALIZE; worker `video.source.certify.v1` supplies complete-source evidence | Pipeline handlers duplicating source selection or treating a READY row as proof that media bytes exist |
+| Runtime asset binding and packet-copy eligibility | `RemoteCodex/native/worker-agent-go/internal/taskrunner/executors` (`video.assemble.copy.v1`) | Rewriting the producer plan or trusting unverified runtime asset paths |
 | Packet demux/mux execution | `RemoteCodex/native/video-engine-cpp` media packet pipeline | Choosing Drive sources, trimming source windows, or deciding the Master-side asset identity |
 
 The worker and C++ layers may reject a plan or media stream that violates

@@ -318,12 +318,13 @@ fallire il job in modo esplicito.
 
 I task storici `video.prepare.window.v1` e `video.assemble.slice.v1` restano
 decodificabili per audit; non sono producer, retry path o executor pubblicizzati
-dal worker.
+dal worker. Il cutover e la rimozione sono stati verificati in produzione il
+2026-11-26; i dettagli sono in `VIDEO-PERFORMANCE-LIVE-2026-11-26.md`.
 
-Il resolver dell'assembly richiede file locali verificati. Il recupero sparse
-è attualmente limitato alla preparazione opt-in; non costituisce una verifica
-SHA-256 completa del sorgente. I controlli indipendenti sui nuovi frammenti
-rimangono parte del confine di fiducia Master/worker.
+Il resolver dell'assembly richiede binding locali verificati. Gli input sparse
+sono ammessi soltanto con evidenza SHA-256 a blocchi dal certificato sorgente;
+la preparazione di finestre e i relativi frammenti MP4 non sono più percorsi
+runtime.
 
 ---
 
