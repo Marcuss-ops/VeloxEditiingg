@@ -37,7 +37,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 		if payload[contract.VideoSourceCertificationPayloadKey] != nil {
 			return w.resolveVideoSourceCertificationSource(ctx, payload)
 		}
-		return w.resolveVideoPrepareWindowSource(ctx, payload)
+		return nil, fmt.Errorf("compiled render plan v2: plan is required")
 	}
 
 	// This structure is an adapter input, not a replacement plan. The
@@ -267,29 +267,6 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 	}
 	keepSparse = true
 	return bindings, nil
-}
-
-// resolveVideoPrepareWindowSource materializes only the one source declared
-// by video.prepare.window.v1. It deliberately shares the verified downloader,
-// cache and integrity path used by compiled render plans, without resolving
-// unrelated assets from the parent edit.
-func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload map[string]interface{}) (runtimeassets.Bindings, error) {
-	raw, ok := payload[contract.VideoPrepareWindowPayloadKey]
-	if !ok || raw == nil {
-		return nil, fmt.Errorf("compiled render plan v2: %q is required", contract.PayloadKeyCompiledRenderPlanJSON)
-	}
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("video.prepare.window.v1: encode request: %w", err)
-	}
-	var request contract.VideoPrepareWindowV1
-	if err := json.Unmarshal(encoded, &request); err != nil {
-		return nil, fmt.Errorf("video.prepare.window.v1: decode request: %w", err)
-	}
-	if err := request.Validate(); err != nil {
-		return nil, err
-	}
-	return w.resolveSingleVideoSource(ctx, payload, request.Source, request.SourceIdentityDiscovery, "video.prepare.window.v1")
 }
 
 func (w *Worker) resolveVideoSourceCertificationSource(ctx context.Context, payload map[string]interface{}) (runtimeassets.Bindings, error) {

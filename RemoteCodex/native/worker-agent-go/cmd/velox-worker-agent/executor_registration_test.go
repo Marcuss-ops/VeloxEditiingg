@@ -8,32 +8,27 @@ import (
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
-func TestRegisterCanonicalRenderExecutorsRegistersCopyAndDriveSliceExecutors(t *testing.T) {
+func TestRegisterCanonicalRenderExecutorsRegistersOnlySourceCertificationAndCopy(t *testing.T) {
 	reg := executor.NewRegistry()
 	if err := registerCanonicalRenderExecutors(reg, t.TempDir(), []*pipeline.Runner{pipeline.NewRunner(nil, nil, nil)}); err != nil {
 		t.Fatalf("register canonical render executors: %v", err)
 	}
 
 	for _, id := range []string{
-		executors.VideoPrepareWindowID,
 		executors.VideoSourceCertificationID,
 		executors.VideoAssembleCopyID,
-		executors.VideoAssembleSliceID,
 	} {
 		if !reg.Has(id, 1) {
 			t.Errorf("registry missing %s@1", id)
 		}
 	}
-	if got := reg.Len(); got != 4 {
-		t.Fatalf("registry length = %d, want 4", got)
+	if got := reg.Len(); got != 2 {
+		t.Fatalf("registry length = %d, want 2", got)
 	}
 	descs := reg.Descriptors()
 	for _, desc := range descs {
 		if desc.ID == executors.VideoSourceCertificationID && len(desc.OutputTypes) != 0 {
 			t.Fatalf("source certification must not declare media outputs: %#v", desc.OutputTypes)
-		}
-		if desc.ID == executors.VideoPrepareWindowID && (len(desc.InputTypes) != 1 || desc.InputTypes[0] != "video.prepare.window.v1") {
-			t.Fatalf("video.prepare.window input types = %#v", desc.InputTypes)
 		}
 		if desc.ID != executors.VideoAssembleCopyID {
 			continue

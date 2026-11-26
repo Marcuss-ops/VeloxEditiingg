@@ -479,9 +479,7 @@ func compiledV2Payload(payload map[string]interface{}) (string, string, bool) {
 
 func isCompiledPlanExecutor(executorID string) bool {
 	return executorID == "video.assemble.copy.v1" ||
-		strings.HasPrefix(executorID, "video.assemble.copy.v1@") ||
-		executorID == "video.assemble.slice.v1" ||
-		strings.HasPrefix(executorID, "video.assemble.slice.v1@")
+		strings.HasPrefix(executorID, "video.assemble.copy.v1@")
 }
 
 // recordPlacementRejections logs the rejection reasons produced by the

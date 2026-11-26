@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
@@ -59,22 +57,6 @@ type RuntimeStockWindowTaskPlanner interface {
 
 type RuntimeSourceCertificationTaskPlanner interface {
 	PlanVideoSourceCertificationTasks(string, []map[string]interface{}) ([]contract.VideoSourceCertificationTaskV1, error)
-}
-
-// RuntimePreparedWindowCache exposes fragments already registered on this
-// Master. FINALIZE consults it before publishing new preparation tasks so a
-// window prepared for another job or another worker is reused instead of
-// re-encoded.
-type RuntimePreparedWindowCache interface {
-	LookupPreparedWindowAsset(context.Context, string) (*voiceoverassets.PreparedWindowAssetBinding, error)
-}
-
-type RuntimePreparedWindowBatchCache interface {
-	LookupPreparedWindowAssets(context.Context, []string) (map[string]voiceoverassets.PreparedWindowAssetBinding, error)
-}
-
-type RuntimePreparedWindowPlanRewriter interface {
-	RewriteDriveStockPlanFromWorkerResults(string, []map[string]interface{}, map[string]voiceoverassets.PreparedWindowAssetBinding) (string, string, []map[string]interface{}, error)
 }
 
 type RuntimeSourceCertificateEnricher interface {
@@ -261,13 +243,6 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 	if err != nil {
 		return p.fail(ctx, candidate, fmt.Errorf("invalid runtime assets: %w", err))
 	}
-	if rawTasks, waiting := current[runtimePrepareTasksKey]; waiting {
-		patch, err := p.completeWorkerPreparations(ctx, candidate, planJSON, req, current, bindings, rawTasks)
-		if err != nil {
-			return p.fail(ctx, candidate, err)
-		}
-		return p.commitFinalization(ctx, candidate, patch)
-	}
 	if rawTasks, waiting := current[runtimeSourceCertTasksKey]; waiting {
 		patch, err := p.completeWorkerSourceCertifications(ctx, candidate, planJSON, req, current, bindings, rawTasks)
 		if err != nil {
@@ -321,35 +296,13 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 			return nil
 		}
 	}
-	if planner, ok := p.assets.(RuntimeStockWindowTaskPlanner); ok && strings.TrimSpace(planJSON) != "" {
-		preparations, planErr := planner.PlanDriveStockWindowTasks(planJSON, bindings)
-		if planErr != nil {
-			return p.fail(ctx, candidate, fmt.Errorf("plan worker stock-window preparation: %w", planErr))
-		}
-		if len(preparations) > 0 {
-			reuse, misses, reuseErr := p.reusablePreparations(ctx, preparations)
-			if reuseErr != nil {
-				return p.fail(ctx, candidate, reuseErr)
-			}
-			if len(misses) == 0 {
-				patch, err := p.rewritePreparedWindowPlan(ctx, candidate, planJSON, req, current, bindings, reuse)
-				if err != nil {
-					return p.fail(ctx, candidate, err)
-				}
-				return p.commitFinalization(ctx, candidate, patch)
-			}
-			if _, sourceCertificationEnabled := p.assets.(RuntimeSourceCertificationTaskPlanner); sourceCertificationEnabled {
-				return p.fail(ctx, candidate, fmt.Errorf("runtime finalizer: %d source windows are not directly certifiable; refusing to create intermediate MP4 fragments", len(misses)))
-			}
-			planHash := contract.HashCompiledPlanV2([]byte(planJSON))
-			if err := p.publishWorkerPreparations(ctx, candidate, bindings, misses, reuse, planJSON, planHash, stockPoolSnapshot); err != nil {
-				return p.fail(ctx, candidate, err)
-			}
-			return nil
-		}
-	}
-	// Drive source bytes are worker-owned. FINALIZE may publish only plans
-	// whose stock windows have already been certified by worker preparation.
+	// New jobs never publish intermediate window-MP4 tasks. Source certification
+	// must resolve immutable source identity before FINALIZE reaches the direct
+	// packet-copy assembly route. Persisted preparation task metadata is filtered
+	// from the final task payload and remains available in the immutable DB
+	// history for audit.
+	// Drive source bytes are worker-owned. FINALIZE publishes only plans whose
+	// stock sources satisfy the source-certificate and packet-copy contract.
 	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, planJSON, req, current, p.assets)
 	if err != nil {
 		return p.fail(ctx, candidate, err)
@@ -398,65 +351,6 @@ func runtimeFinalizeBindings(req FinalizeJobRequest, current map[string]interfac
 	return bindings, err
 }
 
-func (p *RuntimeFinalizationProcessor) reusablePreparations(ctx context.Context, preparations []contract.VideoPrepareWindowTaskV1) (map[string]voiceoverassets.PreparedWindowAssetBinding, []contract.VideoPrepareWindowTaskV1, error) {
-	reuse := make(map[string]voiceoverassets.PreparedWindowAssetBinding, len(preparations))
-	if cache, ok := p.assets.(RuntimePreparedWindowBatchCache); ok && !isNilInterface(cache) {
-		identities := make([]string, 0, len(preparations))
-		for _, preparation := range preparations {
-			if !preparation.Request.SourceIdentityDiscovery {
-				identities = append(identities, preparation.Identity)
-			}
-		}
-		cached, err := cache.LookupPreparedWindowAssets(ctx, identities)
-		if err != nil {
-			return nil, nil, fmt.Errorf("runtime finalizer: batch lookup certified fragments: %w", err)
-		}
-		misses := make([]contract.VideoPrepareWindowTaskV1, 0, len(preparations))
-		for _, preparation := range preparations {
-			if preparation.Request.SourceIdentityDiscovery {
-				misses = append(misses, preparation)
-				continue
-			}
-			binding, ok := cached[preparation.Identity]
-			if !ok {
-				misses = append(misses, preparation)
-				continue
-			}
-			if strings.TrimSpace(binding.AssetID) == "" || !validPreparedWindowBinding(binding) {
-				return nil, nil, fmt.Errorf("runtime finalizer: cached fragment %s has an invalid binding", preparation.Identity)
-			}
-			reuse[preparation.Identity] = binding
-		}
-		return reuse, misses, nil
-	}
-	cache, ok := p.assets.(RuntimePreparedWindowCache)
-	if !ok || isNilInterface(cache) {
-		return reuse, preparations, nil
-	}
-	misses := make([]contract.VideoPrepareWindowTaskV1, 0, len(preparations))
-	for _, preparation := range preparations {
-		// A source whose SHA is not yet certified cannot be looked up by
-		// content identity; it must go through worker identity discovery.
-		if preparation.Request.SourceIdentityDiscovery {
-			misses = append(misses, preparation)
-			continue
-		}
-		binding, err := cache.LookupPreparedWindowAsset(ctx, preparation.Identity)
-		if err != nil {
-			return nil, nil, fmt.Errorf("runtime finalizer: lookup certified fragment %s: %w", preparation.Identity, err)
-		}
-		if binding == nil {
-			misses = append(misses, preparation)
-			continue
-		}
-		if strings.TrimSpace(binding.AssetID) == "" || !validPreparedWindowBinding(*binding) {
-			return nil, nil, fmt.Errorf("runtime finalizer: cached fragment %s has an invalid binding", preparation.Identity)
-		}
-		reuse[preparation.Identity] = *binding
-	}
-	return reuse, misses, nil
-}
-
 func (p *RuntimeFinalizationProcessor) publishSourceCertifications(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, bindings []map[string]interface{}, tasks []contract.VideoSourceCertificationTaskV1, planJSON, planHash string, stockPoolSnapshot interface{}) error {
 	if p.expander == nil {
 		return errors.New("runtime finalizer: atomic task graph extension is unavailable")
@@ -492,7 +386,6 @@ func (p *RuntimeFinalizationProcessor) publishSourceCertifications(ctx context.C
 	}
 	patch := map[string]interface{}{
 		runtimeFinalizeStatusKey:    runtimeFinalizeWaitingPreparation,
-		runtimePrepareTaskIDsKey:    dependencies,
 		runtimeSourceCertTaskIDsKey: dependencies,
 		runtimeSourceCertTasksKey:   identityToTask,
 		"runtime_assets":            bindings,
@@ -512,6 +405,19 @@ func (p *RuntimeFinalizationProcessor) publishSourceCertifications(ctx context.C
 	}
 	p.notifier.NotifyTaskUpdated(ctx, candidate.JobID)
 	log.Printf("[PIPELINE] runtime FINALIZE published source certification DAG job_id=%s task_id=%s sources=%d", candidate.JobID, candidate.TaskID, len(additions))
+	return nil
+}
+
+func runtimeBindingsForSource(bindings []map[string]interface{}, source contract.AssetRefV2) []map[string]interface{} {
+	for _, binding := range bindings {
+		id, _ := binding["asset_id"].(string)
+		if id == "" {
+			id, _ = binding["drive_file_id"].(string)
+		}
+		if id == source.AssetID || (source.DriveFileID != "" && id == source.DriveFileID) {
+			return []map[string]interface{}{binding}
+		}
+	}
 	return nil
 }
 
@@ -607,8 +513,6 @@ func (p *RuntimeFinalizationProcessor) completeWorkerSourceCertifications(ctx co
 	patch[contract.PayloadKeyCompiledRenderPlanJSON] = enriched
 	patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
 	patch["runtime_assets"] = certifiedBindings
-	patch[runtimePrepareTaskIDsKey] = nil
-	patch[runtimePrepareTasksKey] = nil
 	patch[runtimeSourceCertTaskIDsKey] = nil
 	patch[runtimeSourceCertTasksKey] = nil
 	return patch, nil
@@ -649,246 +553,6 @@ func bindSourceCertificateIdentities(bindings []map[string]interface{}, tasks ma
 	return out, nil
 }
 
-func validPreparedWindowBinding(binding voiceoverassets.PreparedWindowAssetBinding) bool {
-	if binding.SizeBytes <= 0 || len(binding.SHA256) != 64 || strings.ToLower(binding.SHA256) != binding.SHA256 || len(binding.ExtradataSHA256) != 64 || strings.ToLower(binding.ExtradataSHA256) != binding.ExtradataSHA256 {
-		return false
-	}
-	_, err := hex.DecodeString(binding.SHA256)
-	if err != nil {
-		return false
-	}
-	_, err = hex.DecodeString(binding.ExtradataSHA256)
-	return err == nil
-}
-
-func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, bindings []map[string]interface{}, preparations []contract.VideoPrepareWindowTaskV1, reuse map[string]voiceoverassets.PreparedWindowAssetBinding, planJSON, planHash string, stockPoolSnapshot interface{}) error {
-	if p.expander == nil {
-		return errors.New("runtime finalizer: atomic task graph extension is unavailable")
-	}
-	additions := make([]taskgraph.ExpandedTask, 0, len(preparations))
-	dependencies := make([]string, 0, len(preparations))
-	identityToTask := make(map[string]string, len(preparations))
-	for _, preparation := range preparations {
-		if preparation.Identity == "" || len(preparation.Identity) < 24 {
-			return errors.New("runtime finalizer: worker preparation identity is invalid")
-		}
-		taskID := candidate.TaskID + "-prep-" + preparation.Identity[:24]
-		identityToTask[preparation.Identity] = taskID
-		dependencies = append(dependencies, taskID)
-		additions = append(additions, taskgraph.ExpandedTask{
-			TaskID: taskID, ExecutorID: contract.VideoPrepareWindowExecutorID, ExecutorVer: contract.VideoPrepareWindowVersion,
-			Payload: map[string]interface{}{
-				contract.VideoPrepareWindowPayloadKey: preparation.Request,
-				"runtime_assets":                      runtimeBindingsForSource(bindings, preparation.Request.Source),
-				"runtime_prepare_identity":            preparation.Identity,
-			},
-		})
-	}
-	patch := map[string]interface{}{
-		runtimeFinalizeStatusKey: runtimeFinalizeWaitingPreparation,
-		runtimePrepareTaskIDsKey: dependencies,
-		runtimePrepareTasksKey:   identityToTask,
-		"runtime_assets":         bindings,
-		"runtime_assets_pending": true,
-	}
-	if planJSON != "" {
-		patch[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
-	}
-	if planHash != "" {
-		patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
-	}
-	if stockPoolSnapshot != nil {
-		patch["runtime_stock_pool_snapshot"] = stockPoolSnapshot
-	}
-	if len(reuse) > 0 {
-		patch[runtimePrepareWindowReuseKey] = reuse
-	}
-	if _, err := p.expander.Extend(ctx, candidate.TaskID, additions, dependencies, patch); err != nil {
-		return fmt.Errorf("runtime finalizer: publish worker preparation DAG: %w", err)
-	}
-	p.notifier.NotifyTaskUpdated(ctx, candidate.JobID)
-	log.Printf("[PIPELINE] runtime FINALIZE published preparation DAG job_id=%s task_id=%s tasks=%d", candidate.JobID, candidate.TaskID, len(additions))
-	return nil
-}
-
-// runtimeBindingsForSource keeps preparation tasks self-contained and avoids
-// making each window task prefetch every asset in the final assembly plan.
-func runtimeBindingsForSource(bindings []map[string]interface{}, source contract.AssetRefV2) []map[string]interface{} {
-	for _, binding := range bindings {
-		id, _ := binding["asset_id"].(string)
-		if id == "" {
-			id, _ = binding["drive_file_id"].(string)
-		}
-		if id == source.AssetID || (source.DriveFileID != "" && id == source.DriveFileID) {
-			return []map[string]interface{}{binding}
-		}
-	}
-	return nil
-}
-
-func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, planJSON string, req FinalizeJobRequest, current map[string]interface{}, bindings []map[string]interface{}, rawTasks interface{}) (map[string]interface{}, error) {
-	planner, planOK := p.assets.(RuntimeStockWindowTaskPlanner)
-	_, rewriteOK := p.assets.(RuntimePreparedWindowPlanRewriter)
-	if !planOK || !rewriteOK || isNilInterface(p.evidence) {
-		return nil, errors.New("runtime finalizer: worker preparation result recovery is not configured")
-	}
-	encoded, err := json.Marshal(rawTasks)
-	if err != nil {
-		return nil, fmt.Errorf("decode worker preparation task map: %w", err)
-	}
-	var identityToTask map[string]string
-	if err := json.Unmarshal(encoded, &identityToTask); err != nil || len(identityToTask) == 0 {
-		return nil, errors.New("runtime finalizer: worker preparation task map is invalid")
-	}
-	preparations, err := planner.PlanDriveStockWindowTasks(planJSON, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("rebuild worker preparation plan: %w", err)
-	}
-	byIdentity := make(map[string]contract.VideoPrepareWindowTaskV1, len(preparations))
-	taskIDs := make([]string, 0, len(identityToTask))
-	taskToIdentity := make(map[string]string, len(identityToTask))
-	for _, preparation := range preparations {
-		byIdentity[preparation.Identity] = preparation
-	}
-	for identity, taskID := range identityToTask {
-		if _, ok := byIdentity[identity]; !ok || taskID == "" {
-			return nil, fmt.Errorf("runtime finalizer: preparation %q no longer matches immutable plan", identity)
-		}
-		taskIDs = append(taskIDs, taskID)
-		taskToIdentity[taskID] = identity
-	}
-	segmentEvidence, err := p.evidence.ListSuccessfulSegmentTimings(ctx, taskIDs)
-	if err != nil {
-		return nil, fmt.Errorf("runtime finalizer: read preparation evidence: %w", err)
-	}
-	results := make(map[string]voiceoverassets.PreparedWindowAssetBinding, len(identityToTask))
-	sourceCertificates := make(map[string]contract.VideoSourceCertificateV1, len(identityToTask))
-	for _, segment := range segmentEvidence {
-		identity := taskToIdentity[segment.TaskID]
-		preparation, known := byIdentity[identity]
-		if !known || segment.SourceType != contract.VideoPrepareWindowExecutorID || segment.Status != "succeeded" {
-			continue
-		}
-		var response struct {
-			contract.VideoPrepareWindowCertificateV1
-			RegisteredAssetID string `json:"registered_asset_id"`
-		}
-		if err := json.Unmarshal([]byte(segment.MetadataJSON), &response); err != nil {
-			return nil, fmt.Errorf("runtime finalizer: decode certificate for %s: %w", segment.TaskID, err)
-		}
-		certificate := response.VideoPrepareWindowCertificateV1
-		if err := certificate.ValidateFor(preparation.Request); err != nil {
-			return nil, fmt.Errorf("runtime finalizer: invalid certificate for %s: %w", segment.TaskID, err)
-		}
-		if response.RegisteredAssetID == "" {
-			return nil, fmt.Errorf("runtime finalizer: prepared window %s was not registered on Master", identity)
-		}
-		if certificate.SourceCertificate != nil {
-			sourceCertificate := *certificate.SourceCertificate
-			if err := sourceCertificate.Validate(); err != nil || sourceCertificate.SHA256 != certificate.SourceSHA256 || sourceCertificate.SizeBytes != certificate.SourceSizeBytes {
-				return nil, fmt.Errorf("runtime finalizer: invalid source certificate for %s", segment.TaskID)
-			}
-			sourceCertificates[identity] = sourceCertificate
-		}
-		results[identity] = voiceoverassets.PreparedWindowAssetBinding{
-			AssetID: response.RegisteredAssetID, SHA256: certificate.OutputSHA256, SizeBytes: certificate.OutputSizeBytes, ExtradataSHA256: certificate.OutputEvidence.ExtradataSHA256,
-		}
-	}
-	reuse, err := decodePreparedWindowReuse(current[runtimePrepareWindowReuseKey])
-	if err != nil {
-		return nil, err
-	}
-	for identity, binding := range reuse {
-		if _, planned := byIdentity[identity]; !planned {
-			return nil, fmt.Errorf("runtime finalizer: reused preparation %q is no longer part of the immutable plan", identity)
-		}
-		if strings.TrimSpace(binding.AssetID) == "" || !validPreparedWindowBinding(binding) {
-			return nil, fmt.Errorf("runtime finalizer: reused preparation %q has an invalid binding", identity)
-		}
-		results[identity] = binding
-	}
-	if len(results) != len(byIdentity) {
-		return nil, fmt.Errorf("runtime finalizer: recovered %d of %d prepared windows", len(results), len(byIdentity))
-	}
-	// A preparation result may also carry a complete source certificate. Bind
-	// the discovered immutable identity into this FINALIZE request and prefer
-	// direct source assembly when every source window is now certified. The
-	// legacy fragment binding remains the recovery path for non-certifiable input.
-	if len(sourceCertificates) > 0 {
-		if enricher, ok := p.assets.(RuntimeSourceCertificateEnricher); ok && !isNilInterface(enricher) {
-			certifiedBindings := bindPreparedSourceIdentities(bindings, byIdentity, sourceCertificates)
-			enriched, enrichErr := enricher.EnrichPlanWithSourceCertificates(ctx, planJSON, certifiedBindings)
-			if enrichErr != nil {
-				return nil, fmt.Errorf("runtime finalizer: reuse newly certified source: %w", enrichErr)
-			}
-			pending, planErr := planner.PlanDriveStockWindowTasks(enriched, certifiedBindings)
-			if planErr != nil {
-				return nil, fmt.Errorf("runtime finalizer: validate direct certified plan: %w", planErr)
-			}
-			if len(pending) == 0 {
-				if req.RuntimePayload == nil {
-					req.RuntimePayload = make(map[string]interface{})
-				}
-				planHash := contract.HashCompiledPlanV2([]byte(enriched))
-				req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = enriched
-				req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
-				req.RuntimePayload["runtime_assets"] = certifiedBindings
-				req.RuntimeAssets = certifiedBindings
-				patch, patchErr := buildRuntimeFinalizePatch(ctx, candidate.JobID, enriched, req, current, p.assets)
-				if patchErr != nil {
-					return nil, patchErr
-				}
-				patch[contract.PayloadKeyCompiledRenderPlanJSON] = enriched
-				patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
-				patch["runtime_assets"] = certifiedBindings
-				patch[runtimePrepareTaskIDsKey] = nil
-				patch[runtimePrepareTasksKey] = nil
-				patch[runtimePrepareWindowReuseKey] = nil
-				return patch, nil
-			}
-		}
-	}
-	return p.rewritePreparedWindowPlan(ctx, candidate, planJSON, req, current, bindings, results)
-}
-
-func bindPreparedSourceIdentities(
-	bindings []map[string]interface{},
-	preparations map[string]contract.VideoPrepareWindowTaskV1,
-	certificates map[string]contract.VideoSourceCertificateV1,
-) []map[string]interface{} {
-	out := make([]map[string]interface{}, len(bindings))
-	for i, binding := range bindings {
-		copyBinding := make(map[string]interface{}, len(binding)+2)
-		for key, value := range binding {
-			copyBinding[key] = value
-		}
-		for identity, sourceCertificate := range certificates {
-			preparation, ok := preparations[identity]
-			if !ok {
-				continue
-			}
-			source := preparation.Request.Source
-			assetID := runtimeBindingString(copyBinding, "asset_id", "id")
-			driveID := runtimeBindingString(copyBinding, "drive_file_id")
-			if assetID != source.AssetID && (source.DriveFileID == "" || driveID != source.DriveFileID) {
-				continue
-			}
-			declaredSHA := runtimeBindingString(copyBinding, "source_sha256", "sha256", "asset_sha256")
-			declaredSize := runtimeBindingInt64(copyBinding, "size_bytes")
-			if declaredSHA != "" && !strings.EqualFold(declaredSHA, sourceCertificate.SHA256) {
-				continue
-			}
-			if declaredSize > 0 && declaredSize != sourceCertificate.SizeBytes {
-				continue
-			}
-			copyBinding["source_sha256"] = sourceCertificate.SHA256
-			copyBinding["size_bytes"] = sourceCertificate.SizeBytes
-		}
-		out[i] = copyBinding
-	}
-	return out
-}
-
 func runtimeBindingString(binding map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := binding[key].(string); ok && strings.TrimSpace(value) != "" {
@@ -918,56 +582,6 @@ func runtimeBindingInt64(binding map[string]interface{}, key string) int64 {
 		return parsed
 	}
 	return 0
-}
-
-func decodePreparedWindowReuse(raw interface{}) (map[string]voiceoverassets.PreparedWindowAssetBinding, error) {
-	out := make(map[string]voiceoverassets.PreparedWindowAssetBinding)
-	if raw == nil {
-		return out, nil
-	}
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("runtime finalizer: encode reused preparation bindings: %w", err)
-	}
-	if err := json.Unmarshal(encoded, &out); err != nil {
-		return nil, fmt.Errorf("runtime finalizer: decode reused preparation bindings: %w", err)
-	}
-	return out, nil
-}
-
-func (p *RuntimeFinalizationProcessor) rewritePreparedWindowPlan(
-	ctx context.Context,
-	candidate taskgraph.RuntimeFinalizationCandidate,
-	planJSON string,
-	req FinalizeJobRequest,
-	current map[string]interface{},
-	bindings []map[string]interface{},
-	results map[string]voiceoverassets.PreparedWindowAssetBinding,
-) (map[string]interface{}, error) {
-	rewriter, ok := p.assets.(RuntimePreparedWindowPlanRewriter)
-	if !ok || isNilInterface(rewriter) {
-		return nil, errors.New("runtime finalizer: prepared-window plan rewriter is not configured")
-	}
-	plan, planHash, retainedBindings, err := rewriter.RewriteDriveStockPlanFromWorkerResults(planJSON, bindings, results)
-	if err != nil {
-		return nil, fmt.Errorf("runtime finalizer: bind prepared windows into assembly plan: %w", err)
-	}
-	if req.RuntimePayload == nil {
-		req.RuntimePayload = make(map[string]interface{})
-	}
-	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = plan
-	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
-	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, plan, req, current, p.assets)
-	if err != nil {
-		return nil, err
-	}
-	patch[contract.PayloadKeyCompiledRenderPlanJSON] = plan
-	patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
-	patch["runtime_assets"] = retainedBindings
-	patch[runtimePrepareTaskIDsKey] = nil
-	patch[runtimePrepareTasksKey] = nil
-	patch[runtimePrepareWindowReuseKey] = nil
-	return patch, nil
 }
 
 func (p *RuntimeFinalizationProcessor) fail(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, err error) error {
@@ -1027,7 +641,7 @@ func buildRuntimeFinalizePatch(
 	}
 	finalRuntimeAssets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 	if compiledPlan.StockPool != nil {
-		return nil, errors.New("runtime finalizer: unresolved stock_pool reached dispatch; worker stock preparation was not planned")
+		return nil, errors.New("runtime finalizer: unresolved stock_pool reached dispatch; source certification and copy routing were not completed")
 	}
 	preparedStockPlan := compiledPlanHasDriveStock(planJSON, finalRuntimeAssets)
 	if preparedStockPlan {
@@ -1045,7 +659,7 @@ func buildRuntimeFinalizePatch(
 	}
 	patch := make(map[string]interface{}, len(req.RuntimePayload)+8)
 	for key, value := range req.RuntimePayload {
-		if key == "runtime_assets_pending" || key == runtimeFinalizeStatusKey || key == runtimeFinalizeRequestKey || key == runtimeFinalizeErrorKey || key == "runtime_finalize_error_code" || key == "runtime_finalize_retry_at" || key == "runtime_finalize_retry_count" {
+		if key == "runtime_assets_pending" || key == runtimeFinalizeStatusKey || key == runtimeFinalizeRequestKey || key == runtimeFinalizeErrorKey || key == "runtime_finalize_error_code" || key == "runtime_finalize_retry_at" || key == "runtime_finalize_retry_count" || key == runtimePrepareTaskIDsKey || key == runtimePrepareTasksKey || key == runtimePrepareWindowReuseKey {
 			continue
 		}
 		patch[key] = value

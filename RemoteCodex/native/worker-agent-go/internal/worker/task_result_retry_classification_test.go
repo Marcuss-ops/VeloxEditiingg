@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"testing"
 
@@ -16,7 +15,7 @@ func TestClassifyPreparationTransientFailure(t *testing.T) {
 		err            error
 		status, code   string
 	}{
-		{"retryable HTTP", contract.VideoPrepareWindowExecutorID, fmt.Errorf("upload: %w", downloader.NewHTTPStatusError(http.StatusServiceUnavailable, "unavailable", 0)), "failed", contract.VideoPrepareWindowRetryableErrorCode},
+		{"retired preparation retryable HTTP", contract.VideoPrepareWindowExecutorID, downloader.NewHTTPStatusError(http.StatusServiceUnavailable, "unavailable", 0), "failed", ""},
 		{"permanent HTTP", contract.VideoPrepareWindowExecutorID, downloader.NewHTTPStatusError(http.StatusUnprocessableEntity, "invalid", 0), "failed", ""},
 		{"other executor", "video.assemble.copy.v1", downloader.NewHTTPStatusError(http.StatusServiceUnavailable, "unavailable", 0), "failed", ""},
 		{"cancelled", contract.VideoPrepareWindowExecutorID, context.Canceled, "cancelled", ""},

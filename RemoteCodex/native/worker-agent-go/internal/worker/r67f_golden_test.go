@@ -16,7 +16,7 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
-func TestR67FGoldenTaskOfferAcceptsVideoWindowPreparation(t *testing.T) {
+func TestR67FGoldenTaskOfferPreservesPlanButRejectsRetiredPreparationExecutor(t *testing.T) {
 	data, err := os.ReadFile("testdata/golden/r67f_master_job.json")
 	if err != nil {
 		t.Fatal(err)
@@ -46,11 +46,6 @@ func TestR67FGoldenTaskOfferAcceptsVideoWindowPreparation(t *testing.T) {
 		t.Fatalf("captured r67f final plan is invalid: %v", err)
 	}
 
-	reg := executor.NewRegistry()
-	reg.MustRegister(&regStubExecutor{descriptor: executor.Descriptor{
-		ID: contract.VideoPrepareWindowExecutorID, Version: 1,
-		ResourceClass: executor.ResourceCPU, TemporalMode: executor.TemporalWindowed,
-	}})
 	rt := &recordingTransport{}
 	cfg := newInsecureDevCfg(t)
 	cfg.WorkerID = "golden-r67f-worker"
@@ -58,7 +53,7 @@ func TestR67FGoldenTaskOfferAcceptsVideoWindowPreparation(t *testing.T) {
 	cfg.MaxActiveJobs = 2
 	w := &Worker{
 		config: cfg, logger: logger.New(logger.InfoLevel, io.Discard), transport: rt,
-		status: StatusIdle, executorRegistry: reg,
+		status: StatusIdle, executorRegistry: executor.NewRegistry(),
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(2),
 		pendingTasks:       make(map[string]*PendingTaskExecution),
 		activeTasks:        make(map[string]*ActiveTaskExecution),
@@ -80,7 +75,11 @@ func TestR67FGoldenTaskOfferAcceptsVideoWindowPreparation(t *testing.T) {
 		controltransport.MsgTaskOffer, "master", controltransport.ProtocolVersionCurrent, offer,
 	))
 	msg, ok := rt.last()
-	if !ok || msg.Type != controltransport.MsgTaskAccepted {
-		t.Fatalf("worker reply = %q, want %q", msg.Type, controltransport.MsgTaskAccepted)
+	if !ok || msg.Type != controltransport.MsgTaskRejected {
+		t.Fatalf("worker reply = %q, want %q", msg.Type, controltransport.MsgTaskRejected)
+	}
+	reject, ok := msg.TypedPayload.(*pb.TaskRejected)
+	if !ok || reject.GetReason() != "unsupported_executor" {
+		t.Fatalf("worker rejection = %#v, want unsupported_executor", msg.TypedPayload)
 	}
 }

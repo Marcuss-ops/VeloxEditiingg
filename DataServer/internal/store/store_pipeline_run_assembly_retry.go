@@ -84,7 +84,7 @@ func (s *SQLiteStore) RetryFailedAssembly(ctx context.Context, runID, clientID s
 	err = conn.QueryRowContext(ctx, `
 		SELECT t.task_id,t.executor_id,s.executor_id,t.status,t.revision,COALESCE(t.depends_on,'[]'),COALESCE(s.payload_json,'{}')
 		FROM tasks t JOIN task_specs s ON s.task_id=t.task_id
-		WHERE t.job_id=? AND t.executor_id IN ('video.assemble.copy.v1','video.assemble.slice.v1')
+		WHERE t.job_id=? AND t.executor_id='video.assemble.copy.v1'
 		ORDER BY t.created_at DESC,t.task_id LIMIT 1`, jobID).
 		Scan(&taskID, &executorID, &specExecutorID, &taskStatus, &taskRevision, &dependsOnJSON, &payloadJSON)
 	if err != nil {
@@ -96,7 +96,7 @@ func (s *SQLiteStore) RetryFailedAssembly(ctx context.Context, runID, clientID s
 	if taskStatus != string(taskgraph.StatusFailed) && taskStatus != string(taskgraph.StatusTimedOut) {
 		return AssemblyRetryResult{}, ErrAssemblyRetryNotEligible
 	}
-	if executorID != specExecutorID || (executorID != "video.assemble.copy.v1" && executorID != "video.assemble.slice.v1") {
+	if executorID != specExecutorID || executorID != "video.assemble.copy.v1" {
 		return AssemblyRetryResult{}, ErrAssemblyRetryNotEligible
 	}
 	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainTask, taskStatus, string(taskgraph.StatusReady), statemachine.ActorOperator); err != nil {

@@ -9,7 +9,7 @@ import (
 
 func supportedTargetExecutorID(id string) bool {
 	switch id {
-	case "video.assemble.copy.v1", "video.assemble.slice.v1":
+	case "video.assemble.copy.v1":
 		return true
 	default:
 		return false

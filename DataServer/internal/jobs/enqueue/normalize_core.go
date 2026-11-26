@@ -98,7 +98,7 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 }
 
 func resolveRequiredCapabilities(executorID string) []string {
-	if strings.HasPrefix(executorID, "video.assemble.copy.v1") || strings.HasPrefix(executorID, "video.assemble.slice.v1") {
+	if strings.HasPrefix(executorID, "video.assemble.copy.v1") {
 		return []string{"artifact.commit.v1"}
 	}
 	return nil

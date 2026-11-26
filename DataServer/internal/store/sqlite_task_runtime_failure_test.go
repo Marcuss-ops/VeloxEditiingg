@@ -91,7 +91,7 @@ func runtimeFailureFixture(t *testing.T, parentStatus, childStatus, finalizeStat
 	return NewSQLiteTaskRepository(s), db
 }
 
-func TestReconcileFailedRuntimePreparationRetriesExtradataMismatchAfterWorkerUpdate(t *testing.T) {
+func TestReconcileRetiredWindowPreparationDoesNotRetryAfterWorkerUpdate(t *testing.T) {
 	repo, db := runtimeFailureFixture(t, "READY", "FAILED", "WAITING_PREPARATION", false)
 	if _, err := db.Exec(`INSERT INTO fleet_operations(operation_id,worker_id,op,status,finished_at) VALUES('update-1','worker-1','update','SUCCEEDED','2026-01-02')`); err != nil {
 		t.Fatal(err)
@@ -110,8 +110,8 @@ func TestReconcileFailedRuntimePreparationRetriesExtradataMismatchAfterWorkerUpd
 		Scan(&jobStatus, &parentStatus, &childStatus, &finalizeStatus); err != nil {
 		t.Fatal(err)
 	}
-	if jobStatus != "RUNNING" || parentStatus != "READY" || childStatus != "PENDING" || finalizeStatus != "WAITING_PREPARATION" {
-		t.Fatalf("unexpected retry state job=%s parent=%s child=%s finalize=%s", jobStatus, parentStatus, childStatus, finalizeStatus)
+	if jobStatus != "FAILED" || parentStatus != "FAILED" || childStatus != "FAILED" || finalizeStatus != "FAILED" {
+		t.Fatalf("retired preparation must remain terminal job=%s parent=%s child=%s finalize=%s", jobStatus, parentStatus, childStatus, finalizeStatus)
 	}
 }
 

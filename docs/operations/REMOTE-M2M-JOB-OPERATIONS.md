@@ -118,12 +118,12 @@ Il producer deve inviare il `CompiledRenderPlanV2` completo nei due campi top-le
 quei byte e li valida. I piani con `stock_pool` (folder Drive, selezione
 `shuffle` e segmenti `stock_pool_slot`) vengono instradati automaticamente a
 `video.assemble.slice.v1`. Il Master enumera il folder e passa al worker i
-riferimenti e i metadati; non scarica, non prepara e non pre-riscalda i file del
-pool. Il worker li risolve nella propria cache, verifica che il materiale sia
-compatibile con il profilo H.264 dichiarato, riempie gli slot casualmente e
-concatena video e audio con stream copy. La preparazione anticipata resta per
-overlay, clip e audio fissi. Se i file del pool hanno profili o parametri H.264
-incompatibili, il job fallisce senza ricodifica.
+riferimenti e i metadati. Il Master seleziona il materiale e richiede, se manca,
+la certificazione completa della sorgente. Il worker assembly usa
+`video.assemble.copy.v1`, risolve le sorgenti nella propria cache e assembla in
+packet-copy; non vengono creati task di preparazione o frammenti MP4 intermedi.
+Se i file del pool hanno profili o parametri H.264 incompatibili, il job fallisce
+senza ricodifica.
 
 Per usare il pool con stream copy, il folder deve essere omogeneo rispetto al
 profilo del piano, inclusi livello H.264, timebase e codec extradata (SPS/PPS).

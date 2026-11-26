@@ -20,20 +20,13 @@ func (h *Handlers) Capabilities() gin.HandlerFunc {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "worker_capabilities_unavailable"})
 			return
 		}
-		prepareAvailable := false
 		certificationAvailable := false
 		for _, worker := range h.workerRegistry.List(c.Request.Context()) {
-			if hasStockWindowPreparation(worker) {
-				prepareAvailable = true
-			}
 			if hasVideoSourceCertification(worker) {
 				certificationAvailable = true
 			}
 		}
 		capabilities := []string{}
-		if prepareAvailable {
-			capabilities = append(capabilities, "stock_window_preparation")
-		}
 		if certificationAvailable {
 			capabilities = append(capabilities, controltransport.CapabilityVideoSourceCertificationV1)
 		}
@@ -45,10 +38,4 @@ func hasVideoSourceCertification(worker workers.Worker) bool {
 	return worker.SessionActive &&
 		strings.EqualFold(worker.ConnectionStatus, workers.StatusConnected) &&
 		worker.ExecutorRegistrySnapshot().Has(contract.VideoSourceCertificationExecutorID, contract.VideoSourceCertificationVersion)
-}
-
-func hasStockWindowPreparation(worker workers.Worker) bool {
-	return worker.SessionActive &&
-		strings.EqualFold(worker.ConnectionStatus, workers.StatusConnected) &&
-		worker.ExecutorRegistrySnapshot().Has("video.prepare.window.v1", 1)
 }

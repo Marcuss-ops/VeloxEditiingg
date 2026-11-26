@@ -37,13 +37,11 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"time"
 
-	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/oteltrace"
 	"velox-worker-agent/internal/taskrunner"
@@ -171,63 +169,6 @@ func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecutio
 	if report == nil || len(report.Outputs) == 0 {
 		return nil
 	}
-	if pte.ExecutorID == contract.VideoPrepareWindowExecutorID {
-		if w.apiClient == nil {
-			return fmt.Errorf("prepared-window registry upload: API client is unavailable")
-		}
-		var request contract.VideoPrepareWindowV1
-		requestJSON, err := json.Marshal(pte.Spec.Payload[contract.VideoPrepareWindowPayloadKey])
-		if err != nil || json.Unmarshal(requestJSON, &request) != nil {
-			return fmt.Errorf("prepared-window registry upload: task request is invalid")
-		}
-		if len(report.Outputs) != 1 || report.Outputs[0].Type != "video/mp4" {
-			return fmt.Errorf("prepared-window registry upload: executor must return exactly one MP4 output")
-		}
-		var certificate contract.VideoPrepareWindowCertificateV1
-		segmentIndex := -1
-		for i := range report.Segments {
-			if report.Segments[i].SourceType == contract.VideoPrepareWindowExecutorID {
-				segmentIndex = i
-				if err := json.Unmarshal([]byte(report.Segments[i].MetadataJSON), &certificate); err == nil {
-					break
-				}
-			}
-		}
-		if segmentIndex < 0 {
-			return fmt.Errorf("prepared-window registry upload: executor certificate is missing")
-		}
-		// A discovery request omits the source SHA by design. The executor's
-		// verified download discovered it; publish the resolved request so the
-		// Master registers the fragment under its content identity and other
-		// workers can reuse it.
-		if request.SourceIdentityDiscovery {
-			if certificate.SourceSHA256 == "" {
-				return fmt.Errorf("prepared-window registry upload: discovery certificate has no source identity")
-			}
-			request.Source.SHA256 = certificate.SourceSHA256
-			request.SourceIdentityDiscovery = false
-		}
-		assetID, reused, err := w.apiClient.PublishPreparedWindow(ctx, request, certificate, report.Outputs[0].URI)
-		if err != nil {
-			return fmt.Errorf("prepared-window registry upload: %w", err)
-		}
-		var metadata map[string]interface{}
-		if err := json.Unmarshal([]byte(report.Segments[segmentIndex].MetadataJSON), &metadata); err != nil {
-			return fmt.Errorf("prepared-window registry upload: decode certificate metadata: %w", err)
-		}
-		metadata["registered_asset_id"] = assetID
-		metadata["master_cache_reused"] = reused
-		encoded, err := json.Marshal(metadata)
-		if err != nil {
-			return fmt.Errorf("prepared-window registry upload: encode certificate metadata: %w", err)
-		}
-		report.Segments[segmentIndex].MetadataJSON = string(encoded)
-		// Preparation fragments are registered as reusable internal assets;
-		// they must not enter the final-video publication/delivery protocol.
-		report.Outputs = nil
-		return nil
-	}
-
 	// Record per-artifact manifest and declaration boundaries before the
 	// transport-specific upload path. These events make multi-artifact
 	// attempts distinguishable without placing artifact IDs in metric labels.

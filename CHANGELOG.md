@@ -1,5 +1,17 @@
 ## [Unreleased] - 2026-11-08
 
+### Changed — retire legacy video preparation and slice executors
+
+- New FINALIZE operations no longer publish `video.prepare.window.v1` tasks;
+  retry and cache reuse paths that could requeue or publish those tasks are
+  removed. New V2 jobs use source certification followed by
+  `video.assemble.copy.v1`.
+- The worker no longer registers or advertises `video.prepare.window.v1` or
+  `video.assemble.slice.v1`, and rejects offers for those IDs. Historical task
+  and attempt records and their read/inspection contracts remain intact.
+- Production Master audit on 2026-11-26 found no nonterminal legacy tasks.
+  The two successful jobs after the Master cutover used copy assembly only.
+
 ### Security — remove unauthenticated sparse source preparation
 
 - Removed the `VELOX_SPARSE_SOURCE_FETCH` path from `video.prepare.window.v1`.

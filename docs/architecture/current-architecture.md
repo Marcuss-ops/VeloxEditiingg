@@ -165,10 +165,10 @@ Webhook duplicati, poller concorrenti e retry post-crash convergono sullo stesso
 Il percorso video canonico crea ancora un solo Task di assembly per Job:
 
 ```text
-1 Job → 1 Task video.assemble.copy.v1@1 oppure video.assemble.slice.v1@1
+1 Job → 1 Task video.assemble.copy.v1@1
 ```
 
-Il Task riceve il `CompiledRenderPlanV2` producer-owned. Il routing verso copy o slice è deciso da `shared/contract.RequiredVideoAssemblyExecutor`. TaskGraph esiste, ma il video standard non è ancora compilato in un DAG di più Task granulari. La precedente descrizione come `scene.composite.v1@1` non rappresenta il percorso V2 corrente.
+Il Task riceve il `CompiledRenderPlanV2` producer-owned. `shared/contract.RequiredVideoAssemblyExecutor` seleziona sempre copy. La certificazione delle sorgenti può precedere l'assembly nel TaskGraph; i vecchi ID slice e prepare restano leggibili nello storico, ma non sono più selezionati o registrati dal worker.
 
 ---
 
@@ -259,7 +259,7 @@ Il composition root worker oggi:
 - costruisce `executor.Registry`;
 - costruisce il pipeline runner;
 - esegue bootstrap fail-closed del motore C++ e di FFmpeg;
-- registra `video.assemble.copy.v1@1` e `video.assemble.slice.v1@1` per i piani V2;
+- registra `video.source.certify.v1@1` e `video.assemble.copy.v1@1`; i vecchi executor prepare/slice non sono registrati;
 - costruisce cache persistente e blob store;
 - passa registry, cache e blob al runtime.
 
@@ -283,7 +283,7 @@ TaskRunner
     ↓
 ExecutorRegistry.Resolve(executor_id, version)
     ↓
-video.assemble.copy.v1 oppure video.assemble.slice.v1
+video.assemble.copy.v1
     ↓
 native packet-copy pipeline
     ↓
@@ -306,30 +306,19 @@ Il worker deve:
 
 Cache e blob locali sono ottimizzazioni ricostruibili, non autorità business.
 
-### 9.1 Drive stock: preparazione worker e assembly diretto
+### 9.1 Drive stock: certificazione sorgente e assembly diretto
 
 FINALIZE espande lo snapshot deterministico della stock pool in finestre esplicite.
-`AssetService.PlanDriveStockWindowTasks` evita la preparazione se il sorgente
-porta le evidenze canoniche richieste; altrimenti riusa un frammento READY o
-pianifica `video.prepare.window.v1`. Download, certificazione e packet-copy sono
-responsabilità del worker. Il Master verifica e registra i nuovi frammenti;
-non materializza le sorgenti né ricostruisce frammenti nel download handler.
+FINALIZE espande lo snapshot deterministico della stock pool e richiede una
+certificazione completa quando manca evidenza immutabile. Poi passa il piano
+finalizzato a `video.assemble.copy.v1`; il worker scarica e verifica le sorgenti
+e il mux C++ controlla i tagli ai keyframe. Non vengono creati frammenti MP4
+intermedi. Sorgenti non compatibili con il contratto di packet-copy fanno
+fallire il job in modo esplicito.
 
-I nuovi piani usano `video.assemble.copy.v1`. L'ID persistito
-`video.assemble.slice.v1` resta un adapter del copy executor e condivide classe
-IO e recupero degli input senza attesa del prefetch. Il vincolo
-`runtime_assets_pending` continua a impedire l'esecuzione prima di FINALIZE.
-Il mux C++ verifica i tagli ai keyframe e assembla direttamente le finestre dei
-sorgenti certificati, anche con offset non nullo.
-
-Il worker può allegare un certificato del sorgente completo alle evidenze del
-frammento. Il Master lo indicizza in `asset_sources` per SHA e revisione dopo la
-registrazione verificata del frammento. FINALIZE legge le prove in batch prima
-della selezione stock e può così evitare preparazione e upload dei frammenti nei
-render successivi. La prova non dipende dal job, da Drive o dalla timeline.
-Sorgenti senza frame count esatto, con origine temporale non nulla o parziali
-restano sul percorso di preparazione esistente. La selezione stock preferisce
-sorgenti certificate e rispetta il loro indice dei keyframe.
+I task storici `video.prepare.window.v1` e `video.assemble.slice.v1` restano
+decodificabili per audit; non sono producer, retry path o executor pubblicizzati
+dal worker.
 
 Il resolver dell'assembly richiede file locali verificati. Il recupero sparse
 è attualmente limitato alla preparazione opt-in; non costituisce una verifica
