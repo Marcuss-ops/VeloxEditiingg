@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	"velox-shared/identity"
 	"velox-worker-agent/internal/executor"
@@ -142,6 +143,9 @@ func (w *Worker) capabilityReport(hostname string) controltransport.CapabilityRe
 	}
 	if w.executorRegistry.Has("video.prepare.window.v1", 1) {
 		report.Features = append(report.Features, controltransport.CapabilityStockWindowPreparationV1)
+	}
+	if w.executorRegistry.Has(contract.VideoSourceCertificationExecutorID, contract.VideoSourceCertificationVersion) {
+		report.Features = append(report.Features, controltransport.CapabilityVideoSourceCertificationV1)
 	}
 	return report
 }

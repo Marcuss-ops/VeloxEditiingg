@@ -132,6 +132,10 @@ const (
 	// Master-planned stock windows through video.prepare.window.v1 and only
 	// certifies them when packet-copy preserves the canonical profile.
 	CapabilityStockWindowPreparationV1 = "stock_window_preparation"
+
+	// CapabilityVideoSourceCertificationV1 indicates support for fenced,
+	// artifact-free complete-source certification tasks.
+	CapabilityVideoSourceCertificationV1 = "video_source_certification.v1"
 )
 
 // allCapabilities is the private canonical closed-set of capabilities the
@@ -148,6 +152,7 @@ var allCapabilities = [...]string{
 	CapabilityFutureAssetPrefetchV1,
 	CapabilityArtifactProgressiveUploadV1,
 	CapabilityStockWindowPreparationV1,
+	CapabilityVideoSourceCertificationV1,
 }
 
 // KnownCapabilities returns a deterministic snapshot for logs, diagnostics

@@ -258,6 +258,15 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 				ackError = "stale_preparation_fence"
 				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskResultRejected, "[GRPC] stale prepared-window result for task=%s attempt=%s; acked to stop replay", taskID, attemptID)
 			}
+		} else if strings.EqualFold(tr.GetStatus(), "succeeded") && canonicalExecutorID == contract.VideoSourceCertificationExecutorID {
+			if err := h.commitVideoSourceCertificateResult(ctx, workerID, jobID, taskID, attemptID, leaseID, int(revision), segmentTimings); err != nil {
+				if !isStalePreparationFence(err) {
+					logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskResultFailed, "[GRPC] source-certificate completion commit failed task=%s attempt=%s: %v", taskID, attemptID, err)
+					return
+				}
+				ackError = "stale_source_certificate_fence"
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskResultRejected, "[GRPC] stale source-certificate result for task=%s attempt=%s; acked to stop replay", taskID, attemptID)
+			}
 		}
 		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCTaskResult, "[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q", taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
 		logArtifactProtocol("TASK_RESULT_INGESTED", protocolStartedAt, map[string]interface{}{
@@ -304,6 +313,68 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 			"lease_id": leaseID, "ack_error": ackError,
 		})
 	}
+}
+
+func (h *Handler) commitVideoSourceCertificateResult(ctx context.Context, workerID, jobID, taskID, attemptID, leaseID string, revision int, segments []taskattempts.SegmentTiming) error {
+	specStore, ok := h.taskRepo.(taskgraph.TaskSpecStore)
+	if !ok {
+		return fmt.Errorf("canonical task spec reader is not configured")
+	}
+	canonicalTask, err := h.taskRepo.Get(ctx, taskID)
+	if err != nil || canonicalTask == nil || canonicalTask.ID != taskID || canonicalTask.JobID != jobID || canonicalTask.AttemptID != attemptID || canonicalTask.WorkerID != workerID || canonicalTask.LeaseID != leaseID {
+		return errStalePreparationFence
+	}
+	revision = canonicalTask.Revision
+	payload, err := specStore.GetTaskSpecPayload(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("read canonical source-certificate task spec: %w", err)
+	}
+	rawRequest, ok := payload[contract.VideoSourceCertificationPayloadKey]
+	if !ok {
+		return fmt.Errorf("canonical task has no video_source_certification request")
+	}
+	encodedRequest, err := json.Marshal(rawRequest)
+	if err != nil {
+		return err
+	}
+	var request contract.VideoSourceCertificationV1
+	if err := json.Unmarshal(encodedRequest, &request); err != nil {
+		return fmt.Errorf("decode canonical source-certificate request: %w", err)
+	}
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	var certificate contract.VideoSourceCertificateV1
+	found := false
+	for _, segment := range segments {
+		if segment.SourceType != contract.VideoSourceCertificationExecutorID || segment.Status != "succeeded" || segment.MetadataJSON == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(segment.MetadataJSON), &certificate); err != nil {
+			return fmt.Errorf("decode source-certificate result: %w", err)
+		}
+		found = true
+		break
+	}
+	if !found {
+		return fmt.Errorf("source-certificate task result is missing certificate evidence")
+	}
+	if err := certificate.Validate(); err != nil || certificate.SizeBytes != request.Source.SizeBytes || certificate.ProfileID != request.OutputProfileID || certificate.PreparationRevision != request.OutputProfileRevision || (request.Source.SHA256 != "" && certificate.SHA256 != request.Source.SHA256) {
+		return fmt.Errorf("source certificate does not match canonical request")
+	}
+	coordinator, ok := h.completionCoord.(completion.SourceCertificateCoordinator)
+	if !ok {
+		return fmt.Errorf("source-certificate completion is not wired")
+	}
+	certificateJSON, err := json.Marshal(certificate)
+	if err != nil {
+		return fmt.Errorf("encode source-certificate result: %w", err)
+	}
+	_, err = coordinator.CommitSourceCertificate(ctx, completion.SourceCertificateCommitCommand{
+		Fence: completion.FenceTuple{TaskID: taskID, AttemptID: attemptID, WorkerID: identity.ParseWorkerID(workerID), LeaseID: leaseID, Revision: revision},
+		JobID: jobID, CertificateJSON: string(certificateJSON),
+	})
+	return err
 }
 
 // errStalePreparationFence marks a prepared-window result whose task attempt

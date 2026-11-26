@@ -36,6 +36,8 @@ type CompletionTx interface {
 	ExpireCompletionAttemptByID(ctx context.Context, commitID, now string) error
 	MarkCompletionCommitted(ctx context.Context, commitID, now string) error
 	CommitPreparedWindow(ctx context.Context, params PreparedWindowCommitParams) (string, error)
+	CommitSourceCertificate(ctx context.Context, params SourceCertificateCommitParams) (string, error)
+	PersistVideoSourceCertificate(ctx context.Context, certificateJSON, now string) error
 	MarkCompletionTaskAttemptSucceeded(ctx context.Context, attemptID, workerID, leaseID, now string) error
 	MarkCompletionTaskSucceeded(ctx context.Context, taskID, attemptID, workerID, leaseID, now string) error
 	MarkCompletionJobSucceededIfTasksDone(ctx context.Context, jobID, now string) error
@@ -73,6 +75,14 @@ type PreparedWindowCommitParams struct {
 	SourceCertificateJSON                                        string
 	SizeBytes                                                    int64
 	Now                                                          string
+}
+
+type SourceCertificateCommitParams struct {
+	Fence           CompletionFence
+	JobID           string
+	CertificateJSON string
+	TokenHash       string
+	Now             string
 }
 
 type CompletionDeclarationParams struct {

@@ -45,8 +45,10 @@ source-only certificate because the persisted task/result contract requires a
 registered prepared asset. FINALIZE now does reuse the certificate immediately
 after that result and can dispatch direct assembly for the same job; the window
 fragment is still produced first. The certificate registry is blob-independent,
-but no certificate-only task completion has been wired yet. No silent no-op
-completion is safe here.
+and `video.source.certify.v1` now has an artifact-free, fenced and idempotent
+completion protocol. The executor is not yet scheduled by FINALIZE, so ordinary
+first-use rendering still produces a window fragment. No silent no-op completion
+is safe here.
 
 ## 2026-11-26 — remaining source-contract work
 

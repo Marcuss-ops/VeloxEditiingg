@@ -180,6 +180,17 @@ func (r *sqliteCompletionTx) persistVideoSourceCertificate(ctx context.Context, 
 	return nil
 }
 
+func (r *sqliteCompletionTx) PersistVideoSourceCertificate(ctx context.Context, certificateJSON, now string) error {
+	var source contract.VideoSourceCertificateV1
+	if err := json.Unmarshal([]byte(certificateJSON), &source); err != nil {
+		return fmt.Errorf("store: decode source certificate for persistence: %w", err)
+	}
+	if err := source.Validate(); err != nil {
+		return fmt.Errorf("store: invalid source certificate for persistence: %w", err)
+	}
+	return r.persistVideoSourceCertificate(ctx, source, now)
+}
+
 func sameSourceCertificateFacts(left, right contract.VideoSourceCertificateV1) bool {
 	left.Chunks = nil
 	right.Chunks = nil

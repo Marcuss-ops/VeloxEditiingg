@@ -123,6 +123,82 @@ func TestCommitPreparedWindowClosesFencedInternalTask(t *testing.T) {
 	}
 }
 
+func TestCommitSourceCertificateNeedsNoPreparedAssetAndIsFenced(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	jobID := "job-source-cert-commit"
+	seedCompleteUploadFixture(t, db, "up-source-cert", "art-source-cert", jobID, strings.Repeat("a", 64))
+	taskID, attemptID := "task-source-cert-commit", "attempt-source-cert-commit"
+	f := validFence(taskID, attemptID)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`UPDATE tasks SET executor_id=?,winning_attempt_terminal_pending=1 WHERE task_id=?`, contract.VideoSourceCertificationExecutorID, taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE task_attempts SET status='SUCCEEDED' WHERE id=?`, attemptID); err != nil {
+		t.Fatal(err)
+	}
+	profile := contract.CanonicalVideoProfileV1Default
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contract.VideoSourceCertificationV1{
+		Version:         contract.VideoSourceCertificationVersion,
+		Source:          contract.AssetRefV2{AssetID: "source", SourceKind: "drive", DriveFileID: "drive-source", Kind: "video", SizeBytes: 123},
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	if _, err := db.Exec(`INSERT INTO task_specs(task_id,executor_id,payload_json,created_at) VALUES(?,?,?,?)`, taskID, contract.VideoSourceCertificationExecutorID, mustJSON(t, map[string]any{contract.VideoSourceCertificationPayloadKey: request}), now); err != nil {
+		t.Fatal(err)
+	}
+	certificate := contract.VideoSourceCertificateV1{
+		Version: 1, SHA256: strings.Repeat("b", 64), SizeBytes: request.Source.SizeBytes,
+		ProfileID: profile.ProfileID, PreparationRevision: revision, DurationUS: 5_000_000, KeyframesUS: []int64{0},
+		Evidence: contract.VideoWindowOutputEvidenceV1{
+			Codec: profile.Codec, Profile: strings.ToLower(profile.CodecProfile), Level: 40,
+			Width: profile.Width, Height: profile.Height, PixelFormat: profile.PixelFormat,
+			FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, TimeBaseNum: profile.TimeBaseNum,
+			TimeBaseDen: profile.TimeBaseDen, FrameCount: 120, FirstFrameKeyframe: true,
+			ExtradataSHA256: contract.CanonicalVideoExtradataSHA256,
+		},
+	}
+	if err := certificate.Validate(); err != nil {
+		t.Fatalf("source certificate fixture: %v", err)
+	}
+	coordinator := c.(SourceCertificateCoordinator)
+	command := SourceCertificateCommitCommand{Fence: f, JobID: jobID, CertificateJSON: mustJSON(t, certificate)}
+	commitID, err := coordinator.CommitSourceCertificate(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taskStatus, commitStatus string
+	if err := db.QueryRow(`SELECT status FROM tasks WHERE task_id=?`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM attempt_commits WHERE commit_id=?`, commitID).Scan(&commitStatus); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM assets`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("certificate-only completion created an asset blob row: count=%d err=%v", count, err)
+	}
+	var certificateJSON string
+	if err := db.QueryRow(`SELECT certificate_json FROM video_source_certificates WHERE source_sha256=?`, certificate.SHA256).Scan(&certificateJSON); err != nil || certificateJSON != command.CertificateJSON {
+		t.Fatalf("certificate registry row = %s err=%v", certificateJSON, err)
+	}
+	if taskStatus != "SUCCEEDED" || commitStatus != "COMMITTED" {
+		t.Fatalf("task/commit status = %s/%s", taskStatus, commitStatus)
+	}
+	if _, err := coordinator.CommitSourceCertificate(context.Background(), command); err != nil {
+		t.Fatalf("idempotent certificate completion replay: %v", err)
+	}
+	stale := command
+	stale.Fence.LeaseID = "different-lease"
+	stale.CertificateJSON = mustJSON(t, contract.VideoSourceCertificateV1{Version: 1})
+	if _, err := coordinator.CommitSourceCertificate(context.Background(), stale); err == nil {
+		t.Fatal("stale source-certificate result was accepted")
+	}
+}
+
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)

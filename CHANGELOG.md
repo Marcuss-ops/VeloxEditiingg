@@ -22,6 +22,11 @@
   that plan before dispatch. It chooses direct assembly when all windows are
   certified; the current completion contract still requires the preparation
   fragment to be produced and registered first.
+- Added the explicit `video.source.certify.v1` task contract and worker executor.
+  It requires a complete verified source and returns certificate evidence with
+  no media outputs. The Master accepts that evidence only through an
+  attempt/lease/revision-fenced idempotent completion transaction. FINALIZE
+  does not schedule this executor yet; source-level fan-out is the next step.
 
 ### Performance — fetch authenticated source ranges for direct assembly
 

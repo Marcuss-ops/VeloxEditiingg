@@ -76,6 +76,34 @@ func TestPrepareWindowDeclaresOnlyItsOwnSource(t *testing.T) {
 	}
 }
 
+func TestSourceCertificationHasExplicitArtifactFreeCompletion(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contract.VideoSourceCertificationV1{
+		Version:         contract.VideoSourceCertificationVersion,
+		Source:          contract.AssetRefV2{AssetID: "source", SourceKind: "drive", DriveFileID: "drive-1", Kind: "video", SizeBytes: 4096},
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	spec := TaskInput{ExecutorID: contract.VideoSourceCertificationExecutorID, ExecutorVersion: 1, Payload: map[string]interface{}{contract.VideoSourceCertificationPayloadKey: request}}
+	taskContract, ok := Default().Lookup(contract.VideoSourceCertificationExecutorID, 1)
+	if !ok {
+		t.Fatal("source certification contract is not registered")
+	}
+	if err := taskContract.Validate(spec); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	assets, err := taskContract.RequiredAssets(spec)
+	if err != nil || len(assets) != 1 || assets[0].Role != "video_source_certification" || assets[0].SHA256 != "" {
+		t.Fatalf("source inputs = %+v err=%v", assets, err)
+	}
+	if taskContract.CompletionKind() != CompletionSourceCertificate || taskContract.RequiresPrefetch(spec) {
+		t.Fatalf("source certificate completion kind/prefetch = %q/%v", taskContract.CompletionKind(), taskContract.RequiresPrefetch(spec))
+	}
+}
+
 func TestAssemblyDeclaresPlanAndRuntimeInputs(t *testing.T) {
 	plan := contract.CompiledRenderPlanV2{
 		PlanVersion:      contract.CompiledPlanVersionV2,

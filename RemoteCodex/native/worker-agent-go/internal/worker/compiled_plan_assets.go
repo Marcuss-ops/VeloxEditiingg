@@ -34,6 +34,9 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID stri
 		return nil, fmt.Errorf("compiled render plan v2: decode: %w", err)
 	}
 	if plan == nil {
+		if payload[contract.VideoSourceCertificationPayloadKey] != nil {
+			return w.resolveVideoSourceCertificationSource(ctx, payload)
+		}
 		return w.resolveVideoPrepareWindowSource(ctx, payload)
 	}
 
@@ -286,10 +289,32 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 	if err := request.Validate(); err != nil {
 		return nil, err
 	}
-	asset := request.Source
+	return w.resolveSingleVideoSource(ctx, payload, request.Source, request.SourceIdentityDiscovery, "video.prepare.window.v1")
+}
+
+func (w *Worker) resolveVideoSourceCertificationSource(ctx context.Context, payload map[string]interface{}) (runtimeassets.Bindings, error) {
+	raw, ok := payload[contract.VideoSourceCertificationPayloadKey]
+	if !ok || raw == nil {
+		return nil, fmt.Errorf("video.source.certify.v1: %q is required", contract.VideoSourceCertificationPayloadKey)
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("video.source.certify.v1: encode request: %w", err)
+	}
+	var request contract.VideoSourceCertificationV1
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		return nil, fmt.Errorf("video.source.certify.v1: decode request: %w", err)
+	}
+	if err := request.Validate(); err != nil {
+		return nil, err
+	}
+	return w.resolveSingleVideoSource(ctx, payload, request.Source, request.Source.SHA256 == "", "video.source.certify.v1")
+}
+
+func (w *Worker) resolveSingleVideoSource(ctx context.Context, payload map[string]interface{}, asset contract.AssetRefV2, discovery bool, operation string) (runtimeassets.Bindings, error) {
 	identity := compiledAssetIdentity(asset)
 	if identity == "" {
-		return nil, fmt.Errorf("video.prepare.window.v1: source cache identity is required")
+		return nil, fmt.Errorf("%s: source cache identity is required", operation)
 	}
 	uri := compiledAssetReference(asset)
 	if asset.SourceKind == "drive" || strings.TrimSpace(asset.DriveFileID) != "" {
@@ -298,7 +323,7 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 			driveID = compiledRuntimeDriveFileIDs(payload["runtime_assets"])[asset.AssetID]
 		}
 		if driveID == "" {
-			return nil, fmt.Errorf("video.prepare.window.v1: Drive source %q has no drive_file_id", asset.AssetID)
+			return nil, fmt.Errorf("%s: Drive source %q has no drive_file_id", operation, asset.AssetID)
 		}
 		sourceURI := compiledRuntimeDriveSourceURIs(payload["runtime_assets"])[driveID]
 		if sourceURI == "" {
@@ -314,15 +339,15 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 		}},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("video.prepare.window.v1: resolve source: %w", err)
+		return nil, fmt.Errorf("%s: resolve source: %w", operation, err)
 	}
 	items, ok := resolvedPayload["assets"].([]interface{})
 	if !ok || len(items) != 1 {
-		return nil, fmt.Errorf("video.prepare.window.v1: source resolver returned an invalid result")
+		return nil, fmt.Errorf("%s: source resolver returned an invalid result", operation)
 	}
 	resolved, ok := items[0].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("video.prepare.window.v1: source resolver returned %T, want object", items[0])
+		return nil, fmt.Errorf("%s: source resolver returned %T, want object", operation, items[0])
 	}
 	path, _ := resolved["uri"].(string)
 	info, err := os.Stat(path)
@@ -330,14 +355,14 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 		if err == nil {
 			err = fmt.Errorf("resolved source is empty or not a regular file")
 		}
-		return nil, fmt.Errorf("video.prepare.window.v1: local source invalid: %w", err)
+		return nil, fmt.Errorf("%s: local source invalid: %w", operation, err)
 	}
 	sha, _ := resolved["sha256"].(string)
 	sha = strings.TrimPrefix(strings.TrimSpace(sha), "sha256:")
 	if sha == "" {
 		sha = strings.TrimSpace(asset.SHA256)
 	}
-	if request.SourceIdentityDiscovery {
+	if discovery {
 		// A Drive asset may already be present in the worker cache under its
 		// Drive file ID, while that cache binding has no content digest. The
 		// bytes are already local and verified by the common resolver; hash
@@ -346,14 +371,14 @@ func (w *Worker) resolveVideoPrepareWindowSource(ctx context.Context, payload ma
 		if !isLowerHexSHA256(sha) {
 			sha, err = discoverLocalAssetSHA256(path, asset.SizeBytes)
 			if err != nil {
-				return nil, fmt.Errorf("video.prepare.window.v1: source identity discovery failed: %w", err)
+				return nil, fmt.Errorf("%s: source identity discovery failed: %w", operation, err)
 			}
 		}
 		if !isLowerHexSHA256(sha) || info.Size() != asset.SizeBytes {
-			return nil, fmt.Errorf("video.prepare.window.v1: source identity discovery failed (sha=%s size=%d)", sha, info.Size())
+			return nil, fmt.Errorf("%s: source identity discovery failed (sha=%s size=%d)", operation, sha, info.Size())
 		}
 	} else if sha != asset.SHA256 || info.Size() != asset.SizeBytes {
-		return nil, fmt.Errorf("video.prepare.window.v1: resolved source identity changed (sha=%s size=%d)", sha, info.Size())
+		return nil, fmt.Errorf("%s: resolved source identity changed (sha=%s size=%d)", operation, sha, info.Size())
 	}
 	return runtimeassets.Bindings{asset.AssetID: {
 		AssetID: asset.AssetID, CacheKey: identity, Path: path,

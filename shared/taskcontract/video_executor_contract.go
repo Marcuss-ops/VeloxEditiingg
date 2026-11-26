@@ -13,6 +13,9 @@ const (
 	// VideoPrepareWindowExecutorID is the worker-side window preparation
 	// executor. It resolves and certifies exactly one source window.
 	VideoPrepareWindowExecutorID = contract.VideoPrepareWindowExecutorID
+	// VideoSourceCertificationExecutorID certifies a complete source without
+	// producing an intermediate media asset.
+	VideoSourceCertificationExecutorID = contract.VideoSourceCertificationExecutorID
 	// VideoAssemblyCopyExecutorID is the packet-copy assembly executor.
 	VideoAssemblyCopyExecutorID = contract.VideoAssemblyCopyExecutorID
 	// VideoAssemblySliceExecutorID is the source-aware assembly executor.
@@ -23,6 +26,40 @@ const (
 // worker acquires, verifies and certifies that source itself; requiring a
 // job-wide future-asset plan here was the r67f stall class.
 type videoPrepareWindowContract struct{}
+
+type videoSourceCertificationContract struct{}
+
+func (videoSourceCertificationContract) Validate(spec TaskInput) error {
+	var request contract.VideoSourceCertificationV1
+	if err := spec.DecodePayload(contract.VideoSourceCertificationPayloadKey, &request); err != nil {
+		return err
+	}
+	return request.Validate()
+}
+
+func (videoSourceCertificationContract) RequiredAssets(spec TaskInput) ([]RequiredAsset, error) {
+	var request contract.VideoSourceCertificationV1
+	if err := spec.DecodePayload(contract.VideoSourceCertificationPayloadKey, &request); err != nil {
+		return nil, err
+	}
+	if err := request.Validate(); err != nil {
+		return nil, err
+	}
+	key := strings.TrimSpace(request.Source.AssetKey)
+	if key == "" {
+		key = strings.TrimSpace(request.Source.AssetID)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("video.source.certify.v1: source has no key or id")
+	}
+	return []RequiredAsset{{Key: key, AssetID: request.Source.AssetID, SHA256: request.Source.SHA256, SizeBytes: request.Source.SizeBytes, Role: "video_source_certification"}}, nil
+}
+
+func (videoSourceCertificationContract) RequiresPrefetch(TaskInput) bool { return false }
+
+func (videoSourceCertificationContract) CompletionKind() CompletionKind {
+	return CompletionSourceCertificate
+}
 
 func (videoPrepareWindowContract) Validate(spec TaskInput) error {
 	var request contract.VideoPrepareWindowV1

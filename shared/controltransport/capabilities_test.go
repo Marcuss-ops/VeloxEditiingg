@@ -22,6 +22,7 @@ func TestCapabilities_KnownConstants(t *testing.T) {
 		"prefetch.plan.v1",
 		"artifact.progressive-upload.v1",
 		"stock_window_preparation",
+		"video_source_certification.v1",
 	}
 	capabilities := KnownCapabilities()
 	if len(capabilities) != len(want) {
@@ -81,6 +82,7 @@ func TestCapabilities_KnownCapabilitiesIsClosedSet(t *testing.T) {
 		CapabilityFutureAssetPrefetchV1:       true,
 		CapabilityArtifactProgressiveUploadV1: true,
 		CapabilityStockWindowPreparationV1:    true,
+		CapabilityVideoSourceCertificationV1:  true,
 	}
 	allAsSet := map[string]bool{}
 	for _, c := range KnownCapabilities() {

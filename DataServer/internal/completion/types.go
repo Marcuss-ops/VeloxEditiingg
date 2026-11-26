@@ -233,6 +233,10 @@ type PreparedWindowCoordinator interface {
 	CommitPreparedWindow(ctx context.Context, cmd PreparedWindowCommitCommand) (string, error)
 }
 
+type SourceCertificateCoordinator interface {
+	CommitSourceCertificate(ctx context.Context, cmd SourceCertificateCommitCommand) (string, error)
+}
+
 // PreparedWindowCommitCommand references an already registered Master-side
 // blob. It never uploads bytes or creates a publishable video artifact.
 type PreparedWindowCommitCommand struct {
@@ -240,4 +244,10 @@ type PreparedWindowCommitCommand struct {
 	JobID, Identity, AssetID, SHA256, ExtradataSHA256 string
 	SourceCertificateJSON                             string
 	SizeBytes                                         int64
+}
+
+type SourceCertificateCommitCommand struct {
+	Fence           FenceTuple
+	JobID           string
+	CertificateJSON string
 }

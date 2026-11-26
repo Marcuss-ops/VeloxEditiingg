@@ -36,6 +36,9 @@ const (
 	// evidence is a certificate registered as an internal prepared fragment,
 	// not a final_video artifact.
 	CompletionPreparedSegment CompletionKind = "prepared_segment"
+	// CompletionSourceCertificate persists source evidence without requiring a
+	// prepared media blob or artifact upload.
+	CompletionSourceCertificate CompletionKind = "source_certificate"
 	// CompletionArtifactCommit is the artifact upload/commit path used by
 	// assembly executors that publish the final video.
 	CompletionArtifactCommit CompletionKind = "artifact_commit"
@@ -171,6 +174,7 @@ func newDefaultRegistry() *Registry {
 		}
 	}
 	register(VideoPrepareWindowExecutorID, 1, videoPrepareWindowContract{})
+	register(VideoSourceCertificationExecutorID, 1, videoSourceCertificationContract{})
 	register(VideoAssemblyCopyExecutorID, 1, videoAssemblyContract{executorID: VideoAssemblyCopyExecutorID})
 	register(VideoAssemblySliceExecutorID, 1, videoAssemblyContract{executorID: VideoAssemblySliceExecutorID})
 	return registry

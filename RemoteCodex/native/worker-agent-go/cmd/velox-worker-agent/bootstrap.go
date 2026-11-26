@@ -102,6 +102,9 @@ func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string,
 	if err := reg.Register(preparer); err != nil {
 		return err
 	}
+	if err := reg.Register(executors.NewVideoSourceCertification(filepath.Join(outputRoot, "prepared-windows"))); err != nil {
+		return err
+	}
 	if len(runners) > 0 && runners[0] != nil {
 		if err := reg.Register(executors.NewVideoAssembleCopy(runners[0], outputRoot)); err != nil {
 			return err
