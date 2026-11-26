@@ -42,7 +42,9 @@ Still open: a source with no immutable SHA requires identity discovery, which
 currently uses `video.prepare.window.v1` and produces a packet-copy fragment.
 That discovery result cannot yet be reused by the same first job as a
 source-only certificate because the persisted task/result contract requires a
-registered prepared asset. The certificate registry is now blob-independent,
+registered prepared asset. FINALIZE now does reuse the certificate immediately
+after that result and can dispatch direct assembly for the same job; the window
+fragment is still produced first. The certificate registry is blob-independent,
 but no certificate-only task completion has been wired yet. No silent no-op
 completion is safe here.
 

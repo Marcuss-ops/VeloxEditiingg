@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,10 @@ type RuntimePreparedWindowBatchCache interface {
 
 type RuntimePreparedWindowPlanRewriter interface {
 	RewriteDriveStockPlanFromWorkerResults(string, []map[string]interface{}, map[string]voiceoverassets.PreparedWindowAssetBinding) (string, string, []map[string]interface{}, error)
+}
+
+type RuntimeSourceCertificateEnricher interface {
+	EnrichPlanWithSourceCertificates(context.Context, string, []map[string]interface{}) (string, error)
 }
 
 type RuntimeTaskGraphExpander interface {
@@ -533,6 +538,7 @@ func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Co
 		return nil, fmt.Errorf("runtime finalizer: read preparation evidence: %w", err)
 	}
 	results := make(map[string]voiceoverassets.PreparedWindowAssetBinding, len(identityToTask))
+	sourceCertificates := make(map[string]contract.VideoSourceCertificateV1, len(identityToTask))
 	for _, segment := range segmentEvidence {
 		identity := taskToIdentity[segment.TaskID]
 		preparation, known := byIdentity[identity]
@@ -552,6 +558,13 @@ func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Co
 		}
 		if response.RegisteredAssetID == "" {
 			return nil, fmt.Errorf("runtime finalizer: prepared window %s was not registered on Master", identity)
+		}
+		if certificate.SourceCertificate != nil {
+			sourceCertificate := *certificate.SourceCertificate
+			if err := sourceCertificate.Validate(); err != nil || sourceCertificate.SHA256 != certificate.SourceSHA256 || sourceCertificate.SizeBytes != certificate.SourceSizeBytes {
+				return nil, fmt.Errorf("runtime finalizer: invalid source certificate for %s", segment.TaskID)
+			}
+			sourceCertificates[identity] = sourceCertificate
 		}
 		results[identity] = voiceoverassets.PreparedWindowAssetBinding{
 			AssetID: response.RegisteredAssetID, SHA256: certificate.OutputSHA256, SizeBytes: certificate.OutputSizeBytes, ExtradataSHA256: certificate.OutputEvidence.ExtradataSHA256,
@@ -573,7 +586,114 @@ func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Co
 	if len(results) != len(byIdentity) {
 		return nil, fmt.Errorf("runtime finalizer: recovered %d of %d prepared windows", len(results), len(byIdentity))
 	}
+	// A preparation result may also carry a complete source certificate. Bind
+	// the discovered immutable identity into this FINALIZE request and prefer
+	// direct source assembly when every source window is now certified. The
+	// legacy fragment binding remains the recovery path for non-certifiable input.
+	if len(sourceCertificates) > 0 {
+		if enricher, ok := p.assets.(RuntimeSourceCertificateEnricher); ok && !isNilInterface(enricher) {
+			certifiedBindings := bindPreparedSourceIdentities(bindings, byIdentity, sourceCertificates)
+			enriched, enrichErr := enricher.EnrichPlanWithSourceCertificates(ctx, planJSON, certifiedBindings)
+			if enrichErr != nil {
+				return nil, fmt.Errorf("runtime finalizer: reuse newly certified source: %w", enrichErr)
+			}
+			pending, planErr := planner.PlanDriveStockWindowTasks(enriched, certifiedBindings)
+			if planErr != nil {
+				return nil, fmt.Errorf("runtime finalizer: validate direct certified plan: %w", planErr)
+			}
+			if len(pending) == 0 {
+				if req.RuntimePayload == nil {
+					req.RuntimePayload = make(map[string]interface{})
+				}
+				planHash := contract.HashCompiledPlanV2([]byte(enriched))
+				req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = enriched
+				req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+				req.RuntimePayload["runtime_assets"] = certifiedBindings
+				req.RuntimeAssets = certifiedBindings
+				patch, patchErr := buildRuntimeFinalizePatch(ctx, candidate.JobID, enriched, req, current, p.assets)
+				if patchErr != nil {
+					return nil, patchErr
+				}
+				patch[contract.PayloadKeyCompiledRenderPlanJSON] = enriched
+				patch[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+				patch["runtime_assets"] = certifiedBindings
+				patch[runtimePrepareTaskIDsKey] = nil
+				patch[runtimePrepareTasksKey] = nil
+				patch[runtimePrepareWindowReuseKey] = nil
+				return patch, nil
+			}
+		}
+	}
 	return p.rewritePreparedWindowPlan(ctx, candidate, planJSON, req, current, bindings, results)
+}
+
+func bindPreparedSourceIdentities(
+	bindings []map[string]interface{},
+	preparations map[string]contract.VideoPrepareWindowTaskV1,
+	certificates map[string]contract.VideoSourceCertificateV1,
+) []map[string]interface{} {
+	out := make([]map[string]interface{}, len(bindings))
+	for i, binding := range bindings {
+		copyBinding := make(map[string]interface{}, len(binding)+2)
+		for key, value := range binding {
+			copyBinding[key] = value
+		}
+		for identity, sourceCertificate := range certificates {
+			preparation, ok := preparations[identity]
+			if !ok {
+				continue
+			}
+			source := preparation.Request.Source
+			assetID := runtimeBindingString(copyBinding, "asset_id", "id")
+			driveID := runtimeBindingString(copyBinding, "drive_file_id")
+			if assetID != source.AssetID && (source.DriveFileID == "" || driveID != source.DriveFileID) {
+				continue
+			}
+			declaredSHA := runtimeBindingString(copyBinding, "source_sha256", "sha256", "asset_sha256")
+			declaredSize := runtimeBindingInt64(copyBinding, "size_bytes")
+			if declaredSHA != "" && !strings.EqualFold(declaredSHA, sourceCertificate.SHA256) {
+				continue
+			}
+			if declaredSize > 0 && declaredSize != sourceCertificate.SizeBytes {
+				continue
+			}
+			copyBinding["source_sha256"] = sourceCertificate.SHA256
+			copyBinding["size_bytes"] = sourceCertificate.SizeBytes
+		}
+		out[i] = copyBinding
+	}
+	return out
+}
+
+func runtimeBindingString(binding map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := binding[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func runtimeBindingInt64(binding map[string]interface{}, key string) int64 {
+	switch value := binding[key].(type) {
+	case int:
+		return int64(value)
+	case int32:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		if value == float64(int64(value)) {
+			return int64(value)
+		}
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		return parsed
+	}
+	return 0
 }
 
 func decodePreparedWindowReuse(raw interface{}) (map[string]voiceoverassets.PreparedWindowAssetBinding, error) {

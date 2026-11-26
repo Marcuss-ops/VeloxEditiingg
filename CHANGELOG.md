@@ -16,6 +16,11 @@
   for authenticated block hashes. Existing prepared-window completion still
   produces the certificate, so the certificate-only task/result path remains
   to be implemented.
+- FINALIZE now reuses source certificates emitted by a preparation result in
+  the same job, binds discovered SHA/size into the canonical plan, and hashes
+  that plan before dispatch. It chooses direct assembly when all windows are
+  certified; the current completion contract still requires the preparation
+  fragment to be produced and registered first.
 
 ### Performance — fetch authenticated source ranges for direct assembly
 
