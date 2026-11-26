@@ -2,8 +2,9 @@
 
 Production evidence: [2026-11-26 live report](VIDEO-PERFORMANCE-LIVE-2026-11-26.md).
 
-Legacy retirement follow-up: tracked separately after the production inventory;
-do not remove legacy executors until open dead letters and persisted references
+Open follow-ups: [#39 — drain legacy TaskGraph work](https://github.com/Marcuss-ops/VeloxEditiingg/issues/39)
+and [#40 — full production `gervais-final-v1` PERFLIVE matrix](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40).
+Do not remove legacy executors until open dead letters and persisted references
 have a safe migration/drain plan.
 
 Audit base: `main` at `e8a0d0f9` (2026-11-26).
