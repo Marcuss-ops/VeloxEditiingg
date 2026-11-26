@@ -13,6 +13,8 @@ Master: `51.91.11.36` (local production host). All times UTC.
 
 These are successful six-second synthetic H.264 packet-copy renders using a canonical 1920x1080, 24 fps source and the deployed production worker. They are useful PERFLIVE evidence for source certification, cache transfer, and direct assembly. They are **not** the full `gervais-final-v1` matrix (two stock clips, voiceover, background music, ASS subtitle, three jobs per worker), so they are not inserted into `performance_benchmark_runs` under that case ID.
 
+The full matrix was not launched: the current worker-cert fixture's Master asset rows are marked READY, but the corresponding local storage files for its stock clips and voiceover are missing; the usable SHA-addressed music candidate's storage file is also absent. The ASS fixture exists. Restore/re-register verified source bytes before running the official harness; do not treat a stale READY row as usable media.
+
 | Mode | Job | Result | Job end-to-end | Render task wall | Source transfer | Tasks | Output |
 |---|---|---|---:|---:|---:|---:|---|
 | Cold | `job_f9f1babdeeb5ad96` | SUCCEEDED | 51.66 s | 0.66 s | 2,572,743 B, 1.60 s, cache miss | source certify + copy assemble (2) | 1,923,119 B, 6,000 ms |
