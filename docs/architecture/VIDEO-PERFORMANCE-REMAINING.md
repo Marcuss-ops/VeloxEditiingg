@@ -50,9 +50,16 @@ show a material gain.
 
 ### 4. Image release and production proof
 
-- [ ] Local worker image build succeeds from the target commit.
-- [ ] GitHub worker-image workflow builds, signs, verifies and certifies an
-  immutable registry digest.
+- [x] Local worker image build succeeds from the target commit. Local tag:
+  `ghcr.io/marcuss-ops/velox-worker:local-video-8b6617af`;
+  local build digest: `sha256:aa400e7f43b5ea38b17e011c861a028530a471e0814743a649fe76d292ab0845`.
+- [x] GitHub worker-image workflow builds, signs, verifies and certifies an
+  immutable registry digest:
+  `ghcr.io/marcuss-ops/velox-worker@sha256:00dee895df17ee5095fc7d73960c11387d6b9694415d685ade753d2c35dde9b7`.
+  Workflow: [run 45808930985](https://github.com/Marcuss-ops/VeloxEditiingg/actions/runs/45808930985).
+- [x] Pulled that exact remote digest locally and smoke-checked the bundled
+  `velox_video_engine --help` entrypoint. This verifies the image is available
+  from GHCR and starts locally; it does not mean it was deployed to a worker.
 - [ ] Confirm the digest and rollout state on the authorized worker hosts.
 - [ ] Run authorized cold/warm production renders and record process counts,
   intermediate bytes/uploads, transferred bytes and wall time against the
