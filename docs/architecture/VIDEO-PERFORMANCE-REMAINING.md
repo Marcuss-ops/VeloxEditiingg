@@ -2,7 +2,9 @@
 
 Production evidence: [2026-11-26 live report](VIDEO-PERFORMANCE-LIVE-2026-11-26.md).
 
-Open follow-up: [#40 — full production `gervais-final-v1` PERFLIVE matrix](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40).
+Open follow-ups:
+[#40 — full production `gervais-final-v1` PERFLIVE matrix](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40)
+and [#41 — retire legacy preparation/slice executors after producer cutover](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41).
 
 Audit base: `main` at `e8a0d0f9` (2026-11-26).
 
@@ -54,7 +56,8 @@ The 5,108 task-spec references and 783,337 task-ID references are historical
 records retained for audit and forensic recovery; their presence is not active
 retry work. `video.assemble.slice.v1` remains a supported current assembly
 adapter, so this work does not remove its executor or contract. Any later
-retirement is a separate change gated on current producer/worker compatibility.
+retirement is tracked in [#41](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41)
+and gated on current producer/worker compatibility.
 Before any exported-symbol or cross-package removal commit, run:
 
 ```bash
@@ -63,14 +66,17 @@ bash scripts/ci/pre-removal-verify.sh
 
 The read-only report is available as
 `scripts/ops/audit-legacy-video-tasks.py --db "$VELOX_DB_PATH" --json`.
-Legacy retirement remains open; no destructive migration was attempted.
+Legacy executor retirement remains open in
+[#41](https://github.com/Marcuss-ops/VeloxEditiingg/issues/41); no destructive
+migration was attempted.
 
 ### 3. Transfer and cache measurements
 
 Focused production cold/warm cache behavior, transfer bytes, source-certificate
 time and task counts are recorded in the live report. The exact
 `gervais-final-v1` stock/voiceover/music/ASS comparison, authenticated-range
-versus full-download matrix, and local disk-I/O measurements remain open.
+versus full-download matrix, and local disk-I/O measurements remain open in
+[#40](https://github.com/Marcuss-ops/VeloxEditiingg/issues/40).
 Keep cryptographic verification; optimize the read/hash path only when
 measurements show a material gain.
 
