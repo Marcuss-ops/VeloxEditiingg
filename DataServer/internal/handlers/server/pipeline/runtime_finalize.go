@@ -254,6 +254,22 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 		}
 		return p.commitFinalization(ctx, candidate, patch)
 	}
+	if enricher, ok := p.assets.(interface {
+		EnrichPlanWithSourceCertificates(context.Context, string, []map[string]interface{}) (string, error)
+	}); ok && strings.TrimSpace(planJSON) != "" {
+		enriched, enrichErr := enricher.EnrichPlanWithSourceCertificates(ctx, planJSON, bindings)
+		if enrichErr != nil {
+			return p.fail(ctx, candidate, fmt.Errorf("resolve source certificates: %w", enrichErr))
+		}
+		if enriched != planJSON {
+			planJSON = enriched
+			if req.RuntimePayload == nil {
+				req.RuntimePayload = make(map[string]interface{})
+			}
+			req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+			req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = contract.HashCompiledPlanV2([]byte(planJSON))
+		}
+	}
 	var stockPoolSnapshot interface{}
 	if compiledPlanHasStockPool(planJSON) {
 		expandedPlan, selectedBindings, snapshot, expandErr := expandRuntimeStockPoolPlan(planJSON, candidate.JobID, bindings)

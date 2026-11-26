@@ -237,6 +237,34 @@ func TestVideoPrepareWindow_ProducesCertifiedPacketCopyForCanonicalKeyframeWindo
 		certificate.OutputEvidence.ExtradataSHA256 != contract.CanonicalVideoExtradataSHA256 {
 		t.Fatalf("output lacks canonical packet-copy evidence: %+v", certificate)
 	}
+
+	if certificate.SourceCertificate == nil || certificate.SourceCertificate.Validate() != nil || certificate.SourceCertificate.Evidence.FrameCount != 96 {
+		t.Fatalf("full verified source was not certified: %+v", certificate.SourceCertificate)
+	}
+	certificate.SourceCertificate.SHA256 = strings.Repeat("f", 64)
+	if certificate.ValidateFor(request) == nil {
+		t.Fatal("source proof for different bytes was accepted")
+	}
+	certificate.SourceCertificate.SHA256 = request.Source.SHA256
+	// Warm fragments preserve reusable source facts without requiring the source.
+	warm, err := prepare.Execute(context.Background(), nil, spec)
+	if err != nil || warm.Status != "succeeded" {
+		t.Fatalf("warm reuse: %+v %v", warm, err)
+	}
+	var warmCert contract.VideoPrepareWindowCertificateV1
+	if json.Unmarshal([]byte(warm.Segments[0].MetadataJSON), &warmCert) != nil || warmCert.SourceCertificate == nil || warmCert.ValidateFor(request) != nil {
+		t.Fatal("warm fragment lost source evidence")
+	}
+	prepare.outputRoot = filepath.Join(root, "sparse-prepared")
+	sparseCtx := runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{"copy-source": {AssetID: "copy-source", Path: sourcePath, SHA256: request.Source.SHA256, Size: request.Source.SizeBytes, Verified: true, Sparse: true}})
+	sparse, err := prepare.Execute(sparseCtx, nil, spec)
+	if err != nil || sparse.Status != "succeeded" {
+		t.Fatalf("sparse preparation: %+v %v", sparse, err)
+	}
+	var sparseCert contract.VideoPrepareWindowCertificateV1
+	if json.Unmarshal([]byte(sparse.Segments[0].MetadataJSON), &sparseCert) != nil || sparseCert.SourceCertificate != nil {
+		t.Fatal("sparse input issued a full-source certificate")
+	}
 }
 
 func TestDiagnoseSourceWindowCopyReportsIndependentFallbackCauses(t *testing.T) {

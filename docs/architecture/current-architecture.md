@@ -322,6 +322,15 @@ IO e recupero degli input senza attesa del prefetch. Il vincolo
 Il mux C++ verifica i tagli ai keyframe e assembla direttamente le finestre dei
 sorgenti certificati, anche con offset non nullo.
 
+Il worker può allegare un certificato del sorgente completo alle evidenze del
+frammento. Il Master lo indicizza in `asset_sources` per SHA e revisione dopo la
+registrazione verificata del frammento. FINALIZE legge le prove in batch prima
+della selezione stock e può così evitare preparazione e upload dei frammenti nei
+render successivi. La prova non dipende dal job, da Drive o dalla timeline.
+Sorgenti senza frame count esatto, con origine temporale non nulla o parziali
+restano sul percorso di preparazione esistente. La selezione stock preferisce
+sorgenti certificate e rispetta il loro indice dei keyframe.
+
 Il resolver dell'assembly richiede file locali verificati. Il recupero sparse
 è attualmente limitato alla preparazione opt-in; non costituisce una verifica
 SHA-256 completa del sorgente. I controlli indipendenti sui nuovi frammenti

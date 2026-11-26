@@ -160,7 +160,8 @@ type AssetRefV2 struct {
 	// ExtradataSHA256 pins the H.264 decoder configuration (MP4 avcC/SPS/PPS).
 	// Profile and GOP metadata alone do not make independently encoded clips
 	// safe to packet-copy into one output track.
-	ExtradataSHA256 string `json:"extradata_sha256,omitempty"`
+	ExtradataSHA256   string                    `json:"extradata_sha256,omitempty"`
+	SourceCertificate *VideoSourceCertificateV1 `json:"source_certificate,omitempty"`
 }
 
 // CanonicalJSON returns the deterministic V2 document used for persistence

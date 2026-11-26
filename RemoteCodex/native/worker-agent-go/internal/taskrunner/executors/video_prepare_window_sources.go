@@ -51,7 +51,7 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 	}
 	args := []string{
 		"-v", "error", "-skip_frame", "nokey", "-select_streams", "v:0", "-show_streams", "-show_frames", "-show_data_hash", "sha256",
-		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,pix_fmt,r_frame_rate,time_base,has_b_frames,extradata_hash,bit_rate,start_time:frame=key_frame,best_effort_timestamp_time",
+		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,pix_fmt,r_frame_rate,time_base,has_b_frames,extradata_hash,bit_rate,start_time,nb_frames:frame=key_frame,best_effort_timestamp_time",
 		"-of", "json", path,
 	}
 	data, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
@@ -79,8 +79,10 @@ func (e *videoPrepareWindowExecutor) probeSource(ctx context.Context, path, sha2
 			return windowSourceProbe{}, fmt.Errorf("source window has invalid start_time %q", stream.StartTime)
 		}
 	}
+	frameCount, _ := strconv.ParseInt(stream.SourceFrameCount, 10, 64)
 	probe := windowSourceProbe{
-		CodecName: stream.CodecName, Profile: strings.ToLower(stream.Profile), Level: stream.Level,
+		FrameCount: frameCount,
+		CodecName:  stream.CodecName, Profile: strings.ToLower(stream.Profile), Level: stream.Level,
 		Width: stream.Width, Height: stream.Height, PixelFormat: stream.PixelFormat,
 		FPSNum: fpsNum, FPSDen: fpsDen, TimeBaseNum: tbNum, TimeBaseDen: tbDen,
 		BFrames: stream.BFrames, BitRateBPS: bitRate, StartTimeSec: startTime,
@@ -360,4 +362,28 @@ func absFloat(value float64) float64 {
 		return -value
 	}
 	return value
+}
+
+// Missing container frame counts or a non-zero presentation origin keep the
+// existing window-only path. Never fabricate full-source evidence from a slice.
+func sourceCertificateFromProbe(source windowSourceProbe, request contract.VideoPrepareWindowV1, profile contract.CanonicalVideoProfileV1) *contract.VideoSourceCertificateV1 {
+	if source.FrameCount <= 0 || source.StartTimeSec != 0 {
+		return nil
+	}
+	certificate := &contract.VideoSourceCertificateV1{Version: 1, SHA256: request.Source.SHA256, SizeBytes: request.Source.SizeBytes, ProfileID: request.OutputProfileID, PreparationRevision: request.OutputProfileRevision,
+		Evidence: contract.VideoWindowOutputEvidenceV1{Codec: source.CodecName, Profile: source.Profile, Level: source.Level, Width: source.Width, Height: source.Height, PixelFormat: source.PixelFormat, FPSNum: source.FPSNum, FPSDen: source.FPSDen, TimeBaseNum: source.TimeBaseNum, TimeBaseDen: source.TimeBaseDen, BFrames: source.BFrames, FrameCount: source.FrameCount, FirstFrameKeyframe: true, ExtradataSHA256: source.ExtradataSHA}}
+	if source.FrameCount > math.MaxInt64/int64(profile.FPSDen)/1_000_000 {
+		return nil
+	}
+	certificate.DurationUS = source.FrameCount * int64(profile.FPSDen) * 1_000_000 / int64(profile.FPSNum)
+	for _, seconds := range source.KeyframeTimes {
+		if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 || seconds > float64(certificate.DurationUS)/1e6 {
+			return nil
+		}
+		certificate.KeyframesUS = append(certificate.KeyframesUS, int64(math.Round(seconds*1e6)))
+	}
+	if certificate.Validate() != nil {
+		return nil
+	}
+	return certificate
 }

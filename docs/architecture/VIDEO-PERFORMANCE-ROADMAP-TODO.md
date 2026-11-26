@@ -11,18 +11,25 @@ assembly shares copy assembly's IO classification and on-demand input gate.
 Binding integrity is checked once per declared asset; failed resolution batches
 cancel sibling work.
 
-The following source work remains open; local performance fixes do not close it:
+Source-contract state and remaining work:
 
-- Persist source certification separately from prepared-fragment certificates
-  and propagate it into future stock snapshots. Worker probe indexes already
-  persist by SHA; introducing a second worker probe cache is unnecessary.
+- Implemented: worker preparation now emits an optional full-source certificate
+  from verified complete files with exact container frame count and zero
+  presentation origin. It persists with fragment attestations and is indexed in
+  the existing source registry by SHA and preparation revision. FINALIZE resolves
+  these proofs in a batch before stock selection/dependency planning; later
+  renders can mux source windows directly. Missing counts, non-zero origins,
+  sparse files and invalid proofs retain the existing window path.
 - Define authenticated range evidence before accepting partial sources in the
   assembly resolver. The existing sparse preparation binding carries the declared
   SHA, not a recomputed full-content digest; it cannot be promoted to an ordinary
   verified assembly binding. Complete downloads remain the default.
-- Select compatible stock windows from certified keyframe evidence. Advancing a
-  source cursor does not make an arbitrary boundary a keyframe; incompatible
-  cuts must continue to fail closed.
+- Implemented: deterministic stock selection prefers already certified compatible
+  candidates. After a partial slot consumes a mid-GOP boundary, expansion selects
+  the next certified keyframe, restarting only when the pool cycles. Exact source
+  frames take precedence over rounded duration metadata. Unselected assets are
+  pruned before dispatch. Explicit editorial cuts are not silently moved, and the
+  mux retains its packet-level checks.
 - Retain independent verification for newly registered fragments. Reused READY
   fragments already skip repeated probes; removing the initial verification
   requires an explicit trust/evidence contract, not another cache toggle.

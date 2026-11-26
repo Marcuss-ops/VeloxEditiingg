@@ -319,6 +319,12 @@ func validateFinalAudio(violations *CompiledRenderPlanV2ValidationErrors, plan *
 }
 
 func validateAsset(violations *CompiledRenderPlanV2ValidationErrors, path string, asset AssetRefV2) {
+	if source := asset.SourceCertificate; source != nil {
+		if source.Validate() != nil || asset.Kind != "video" || source.SHA256 != asset.SHA256 || source.SizeBytes != asset.SizeBytes || source.Evidence.FrameCount != asset.FrameCount || source.DurationUS != asset.DurationUS || source.Evidence.Width != asset.Width || source.Evidence.Height != asset.Height || source.Evidence.ExtradataSHA256 != asset.ExtradataSHA256 {
+			violations.add(path+".source_certificate", "source_evidence_mismatch", "complete certificate matching immutable source metadata", asset.AssetID)
+		}
+	}
+
 	if strings.TrimSpace(asset.AssetID) == "" {
 		violations.add(path+".asset_id", "required", "non-empty asset_id", asset.AssetID)
 	}

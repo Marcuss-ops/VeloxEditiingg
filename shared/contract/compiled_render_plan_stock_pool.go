@@ -99,6 +99,18 @@ func SelectCompiledStockPoolMembers(
 	rand.New(rand.NewSource(int64(binary.LittleEndian.Uint64(seed[:8])))).Shuffle(len(pool), func(i, j int) {
 		pool[i], pool[j] = pool[j], pool[i]
 	})
+	certified := make(map[string]bool)
+	for _, asset := range plan.Assets {
+		if asset.SourceCertificate != nil && strings.HasPrefix(asset.AssetID, "stockpool:") {
+			segment := VideoSegmentV2{AssetID: asset.AssetID, SHA256: asset.SHA256, SourceDurationUS: asset.DurationUS, FrameCount: asset.FrameCount}
+			if PacketCopySourceWindowCertified(plan, segment, asset) {
+				certified[strings.TrimPrefix(asset.AssetID, "stockpool:")] = true
+			}
+		}
+	}
+	// Preserve seeded ordering within each group while using compatible known
+	// sources before candidates that still require discovery/preparation.
+	sort.SliceStable(pool, func(i, j int) bool { return certified[pool[i].DriveFileID] && !certified[pool[j].DriveFileID] })
 
 	selected := make([]StockPoolCandidateV2, 0, len(pool))
 	var framesAvailable int64
@@ -262,6 +274,12 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 		if existing, ok := assetByID[assetID]; ok && (existing.SHA256 != stockPoolCandidateSHA(member) || existing.SizeBytes != member.SizeBytes) {
 			return fmt.Errorf("compiled render plan v2: stock_pool asset %q conflicts with its immutable identity", member.DriveFileID)
 		}
+		if asset, ok := assetByID[assetID]; ok && asset.SourceCertificate != nil {
+			segment := VideoSegmentV2{AssetID: asset.AssetID, SHA256: asset.SHA256, SourceDurationUS: asset.DurationUS, FrameCount: asset.FrameCount}
+			if !PacketCopySourceWindowCertified(plan, segment, asset) {
+				return fmt.Errorf("compiled render plan v2: stock source %q has invalid certification", assetID)
+			}
+		}
 		if _, ok := assetByID[assetID]; !ok {
 			sha := stockPoolCandidateSHA(member)
 			assetByID[assetID] = AssetRefV2{AssetID: assetID, AssetKey: member.DriveFileID, SourceKind: "drive", DriveFileID: member.DriveFileID, SHA256: sha, SizeBytes: member.SizeBytes, Kind: "video", MIME: "video/mp4", DurationUS: member.DurationMS * 1000, FrameCount: frames}
@@ -292,6 +310,19 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 					}
 				}
 				member := ordered[cursor]
+				sourceStartUS := int64(-1)
+				if certificate := assetByID["stockpool:"+member.DriveFileID].SourceCertificate; certificate != nil {
+					// Consuming a slot may stop mid-GOP. Skip to the next certified keyframe
+					// for the next editorial stock slot instead of producing an unsafe cut.
+					next, us, ok := certificate.NextKeyframeFrame(framesTotal[cursor] - framesLeft[cursor])
+					if !ok {
+						framesLeft[cursor] = 0
+						cursor++
+						continue
+					}
+					framesLeft[cursor] = framesTotal[cursor] - next
+					sourceStartUS = us
+				}
 				count := framesLeft[cursor]
 				if count > remaining {
 					count = remaining
@@ -306,7 +337,10 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 				part++
 				durationUS := count * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
 				assetID := "stockpool:" + member.DriveFileID
-				segments = append(segments, VideoSegmentV2{SegmentID: fmt.Sprintf("%s-pool-%03d", slot.SegmentID, part), AssetID: assetID, SHA256: assetByID[assetID].SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceInUS: sourceStartFrame * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum), SourceDurationUS: durationUS})
+				if sourceStartUS < 0 {
+					sourceStartUS = sourceStartFrame * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
+				}
+				segments = append(segments, VideoSegmentV2{SegmentID: fmt.Sprintf("%s-pool-%03d", slot.SegmentID, part), AssetID: assetID, SHA256: assetByID[assetID].SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceInUS: sourceStartUS, SourceDurationUS: durationUS})
 				framesLeft[cursor] -= count
 				remaining -= count
 				timelineFrame += count
@@ -317,6 +351,20 @@ func ExpandCompiledStockPoolSlots(plan *CompiledRenderPlanV2, members []StockPoo
 		}
 		plan.VideoTracks[trackIndex].Segments = segments
 	}
+	used := make(map[string]bool)
+	used[plan.FinalAudio.AssetID] = true
+	for _, track := range plan.VideoTracks {
+		for _, segment := range track.Segments {
+			used[segment.AssetID] = true
+		}
+	}
+	retained := plan.Assets[:0]
+	for _, asset := range plan.Assets {
+		if used[asset.AssetID] {
+			retained = append(retained, asset)
+		}
+	}
+	plan.Assets = retained
 	plan.StockPool = nil
 	return nil
 }

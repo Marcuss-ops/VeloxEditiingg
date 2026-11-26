@@ -21,6 +21,11 @@ func PacketCopySourceWindowCertified(
 	if err != nil || asset.ProfileID != profile.StreamProfile() || asset.Width != profile.Width || asset.Height != profile.Height {
 		return false
 	}
+	if source := asset.SourceCertificate; source != nil {
+		if source.Validate() != nil || source.SHA256 != asset.SHA256 || source.SizeBytes != asset.SizeBytes || source.ProfileID != plan.Output.ProfileID || source.Evidence.FrameCount != asset.FrameCount || source.DurationUS != asset.DurationUS || !source.HasKeyframe(segment.SourceInUS) {
+			return false
+		}
+	}
 	if segment.SourceDurationUS > asset.DurationUS || segment.SourceInUS > asset.DurationUS-segment.SourceDurationUS {
 		return false
 	}

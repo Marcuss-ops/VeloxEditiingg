@@ -90,7 +90,7 @@ func (r *SQLiteAssetRepository) GetBySourceReference(ctx context.Context, refere
 	}
 	row := r.store.db.QueryRowContext(ctx, `
 		SELECT a.asset_id, a.kind, a.status, a.sha256, COALESCE(a.mime_type,''),
-		       a.size_bytes, a.storage_provider, a.storage_key, CASE WHEN s.source_reference LIKE 'prepared-window:%' THEN COALESCE(s.metadata_json,'') ELSE COALESCE(a.metadata_json,'') END,
+		       a.size_bytes, a.storage_provider, a.storage_key, CASE WHEN s.source_reference LIKE 'prepared-window:%' OR s.source_reference LIKE 'certified-video-source:%' THEN COALESCE(s.metadata_json,'') ELSE COALESCE(a.metadata_json,'') END,
 		       a.created_at, COALESCE(a.verified_at,''), COALESCE(a.deleted_at,'')
 		  FROM assets a
 		  JOIN asset_sources s ON s.asset_id = a.asset_id
@@ -137,7 +137,7 @@ func (r *SQLiteAssetRepository) GetBySourceReferences(ctx context.Context, refer
 		query := `SELECT s.source_reference, a.asset_id, a.kind, a.status,
 			COALESCE(a.sha256,''), COALESCE(a.mime_type,''), a.size_bytes,
 			COALESCE(a.storage_provider,''), COALESCE(a.storage_key,''),
-			CASE WHEN s.source_reference LIKE 'prepared-window:%' THEN COALESCE(s.metadata_json,'') ELSE COALESCE(a.metadata_json,'') END, a.created_at, COALESCE(a.verified_at,''),
+			CASE WHEN s.source_reference LIKE 'prepared-window:%' OR s.source_reference LIKE 'certified-video-source:%' THEN COALESCE(s.metadata_json,'') ELSE COALESCE(a.metadata_json,'') END, a.created_at, COALESCE(a.verified_at,''),
 			COALESCE(a.deleted_at,'')
 			FROM asset_sources s JOIN assets a ON a.asset_id=s.asset_id
 			WHERE s.source_reference IN (` + string(placeholders) + `) AND a.status='READY'

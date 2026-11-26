@@ -108,6 +108,7 @@ type VideoPrepareWindowCertificateV1 struct {
 	TimelineRevision      int64                       `json:"timeline_revision"`
 	TimelineSHA256        string                      `json:"timeline_sha256"`
 	TimelineStartFrame    int64                       `json:"timeline_start_frame"`
+	SourceCertificate     *VideoSourceCertificateV1   `json:"source_certificate,omitempty"`
 	CacheHit              bool                        `json:"cache_hit"`
 }
 
@@ -135,6 +136,15 @@ func (c VideoPrepareWindowCertificateV1) ValidateFor(r VideoPrepareWindowV1) err
 	if strings.TrimSpace(c.EncoderVersion) == "" || !isLowerSHA256(c.EncoderBuildSHA256) ||
 		!isLowerSHA256(c.OutputSHA256) || c.OutputSizeBytes <= 0 || !c.ClosedGOPAttested || !c.PacketCopyUsed {
 		return fmt.Errorf("video.prepare.window.v1: certificate lacks toolchain, packet-copy, output, or closed-GOP evidence")
+	}
+	if c.SourceCertificate != nil {
+		source := c.SourceCertificate
+		if err := source.Validate(); err != nil {
+			return err
+		}
+		if source.SHA256 != c.SourceSHA256 || source.SizeBytes != c.SourceSizeBytes || source.ProfileID != c.OutputProfileID || source.PreparationRevision != c.OutputProfileRevision {
+			return fmt.Errorf("video.prepare.window.v1: source certificate does not match request identity")
+		}
 	}
 	e := c.OutputEvidence
 	if e.Codec != "h264" || e.FrameCount != r.OutputFrameCount || !e.FirstFrameKeyframe || !isLowerSHA256(e.ExtradataSHA256) ||

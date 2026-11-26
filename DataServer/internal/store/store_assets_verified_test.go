@@ -81,9 +81,9 @@ func TestAssetSourceLookupUsesWindowSpecificCertificate(t *testing.T) {
 	if err := repo.Insert(ctx, asset); err != nil {
 		t.Fatal(err)
 	}
-	refs := []string{"prepared-window:first", "prepared-window:second", "external-source"}
+	refs := []string{"prepared-window:first", "prepared-window:second", "external-source", "certified-video-source:source"}
 	for i, ref := range refs {
-		metadata := []string{`{"window_certificate":"first"}`, `{"window_certificate":"second"}`, `{"external":true}`}[i]
+		metadata := []string{`{"window_certificate":"first"}`, `{"window_certificate":"second"}`, `{"external":true}`, `{"source_certificate":"source"}`}[i]
 		if err := repo.InsertSource(ctx, AssetSourceRecord{SourceID: ref, AssetID: asset.AssetID, SourceType: "worker_prepared", SourceReference: ref, MetadataJSON: metadata}); err != nil {
 			t.Fatal(err)
 		}
@@ -93,7 +93,7 @@ func TestAssetSourceLookupUsesWindowSpecificCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, ref := range refs {
-		want := []string{`{"window_certificate":"first"}`, `{"window_certificate":"second"}`, asset.MetadataJSON}[i]
+		want := []string{`{"window_certificate":"first"}`, `{"window_certificate":"second"}`, asset.MetadataJSON, `{"source_certificate":"source"}`}[i]
 		single, err := repo.GetBySourceReference(ctx, ref)
 		if err != nil || single == nil {
 			t.Fatalf("single %s: %+v %v", ref, single, err)

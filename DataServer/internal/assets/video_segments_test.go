@@ -178,9 +178,20 @@ func TestRegisterPreparedWindowRejectsNonCanonicalAVCCAndDeduplicatesCanonical(t
 		}
 		return
 	}
+	sourceEvidence := certificate.OutputEvidence
+	sourceEvidence.FrameCount = 96
+	certificate.SourceCertificate = &videoContract.VideoSourceCertificateV1{Version: 1, SHA256: request.Source.SHA256, SizeBytes: request.Source.SizeBytes, ProfileID: profile.ProfileID, PreparationRevision: revision, Evidence: sourceEvidence, DurationUS: 4000000, KeyframesUS: []int64{0, 1000000, 2000000, 3000000}}
 	asset, err := service.RegisterPreparedWindow(context.Background(), preparedPath, request, certificate)
 	if err != nil {
 		t.Fatalf("register prepared window: %v", err)
+	}
+	proof, err := repo.GetBySourceReference(context.Background(), sourceCertificateReference(request.Source.SHA256, revision))
+	if err != nil || proof == nil {
+		t.Fatalf("source certificate not registered with verified fragment: %+v %v", proof, err)
+	}
+	var savedSource videoContract.VideoSourceCertificateV1
+	if json.Unmarshal([]byte(proof.MetadataJSON), &savedSource) != nil || savedSource.Validate() != nil || savedSource.SHA256 != request.Source.SHA256 {
+		t.Fatal("registered source proof is invalid")
 	}
 	if asset.AssetID != outputSHA || asset.SHA256 != outputSHA || len(repo.inserted) != 1 {
 		t.Fatalf("registered asset=%+v inserts=%d", asset, len(repo.inserted))

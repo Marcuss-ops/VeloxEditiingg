@@ -34,25 +34,26 @@ type windowFFmpegRunner interface {
 type windowOutputEvidence = contract.VideoWindowOutputEvidenceV1
 
 type windowArtifactAttestation struct {
-	Version               int                  `json:"version"`
-	SourceSHA256          string               `json:"source_sha256"`
-	SourceStartFrame      int64                `json:"source_start_frame"`
-	SourceFrameCount      int64                `json:"source_frame_count"`
-	SourceFPSNum          int                  `json:"source_fps_num"`
-	SourceFPSDen          int                  `json:"source_fps_den"`
-	SourceStartUS         int64                `json:"source_start_us,omitempty"`
-	SourceDurationUS      int64                `json:"source_duration_us,omitempty"`
-	OutputFrameCount      int64                `json:"output_frame_count"`
-	OutputProfileID       string               `json:"output_profile_id"`
-	OutputProfileRevision string               `json:"output_profile_revision"`
-	EncoderVersion        string               `json:"encoder_version"`
-	EncoderBuildSHA256    string               `json:"encoder_build_sha256"`
-	OutputSHA256          string               `json:"output_sha256"`
-	OutputSizeBytes       int64                `json:"output_size_bytes"`
-	OutputModTimeUnixNano int64                `json:"output_mtime_unix_nano"`
-	OutputEvidence        windowOutputEvidence `json:"output_evidence"`
-	ClosedGOPAttested     bool                 `json:"closed_gop_attested"`
-	PacketCopyUsed        bool                 `json:"packet_copy_used"`
+	SourceCertificate     *contract.VideoSourceCertificateV1 `json:"source_certificate,omitempty"`
+	Version               int                                `json:"version"`
+	SourceSHA256          string                             `json:"source_sha256"`
+	SourceStartFrame      int64                              `json:"source_start_frame"`
+	SourceFrameCount      int64                              `json:"source_frame_count"`
+	SourceFPSNum          int                                `json:"source_fps_num"`
+	SourceFPSDen          int                                `json:"source_fps_den"`
+	SourceStartUS         int64                              `json:"source_start_us,omitempty"`
+	SourceDurationUS      int64                              `json:"source_duration_us,omitempty"`
+	OutputFrameCount      int64                              `json:"output_frame_count"`
+	OutputProfileID       string                             `json:"output_profile_id"`
+	OutputProfileRevision string                             `json:"output_profile_revision"`
+	EncoderVersion        string                             `json:"encoder_version"`
+	EncoderBuildSHA256    string                             `json:"encoder_build_sha256"`
+	OutputSHA256          string                             `json:"output_sha256"`
+	OutputSizeBytes       int64                              `json:"output_size_bytes"`
+	OutputModTimeUnixNano int64                              `json:"output_mtime_unix_nano"`
+	OutputEvidence        windowOutputEvidence               `json:"output_evidence"`
+	ClosedGOPAttested     bool                               `json:"closed_gop_attested"`
+	PacketCopyUsed        bool                               `json:"packet_copy_used"`
 }
 
 type windowPreparationCertificate = contract.VideoPrepareWindowCertificateV1
@@ -74,20 +75,21 @@ type windowFFprobeDocument struct {
 }
 
 type windowFFprobeStream struct {
-	CodecType     string `json:"codec_type"`
-	CodecName     string `json:"codec_name"`
-	Profile       string `json:"profile"`
-	Level         int    `json:"level"`
-	Width         int    `json:"width"`
-	Height        int    `json:"height"`
-	PixelFormat   string `json:"pix_fmt"`
-	FrameRate     string `json:"r_frame_rate"`
-	TimeBase      string `json:"time_base"`
-	BFrames       int    `json:"has_b_frames"`
-	FrameCount    string `json:"nb_read_frames"`
-	ExtradataHash string `json:"extradata_hash"`
-	BitRate       string `json:"bit_rate"`
-	StartTime     string `json:"start_time"`
+	CodecType        string `json:"codec_type"`
+	CodecName        string `json:"codec_name"`
+	Profile          string `json:"profile"`
+	Level            int    `json:"level"`
+	Width            int    `json:"width"`
+	Height           int    `json:"height"`
+	PixelFormat      string `json:"pix_fmt"`
+	FrameRate        string `json:"r_frame_rate"`
+	TimeBase         string `json:"time_base"`
+	BFrames          int    `json:"has_b_frames"`
+	FrameCount       string `json:"nb_read_frames"`
+	SourceFrameCount string `json:"nb_frames"`
+	ExtradataHash    string `json:"extradata_hash"`
+	BitRate          string `json:"bit_rate"`
+	StartTime        string `json:"start_time"`
 }
 
 func (ffprobeWindowOutputCertifier) Certify(ctx context.Context, path string, profile contract.CanonicalVideoProfileV1, wantFrames int64) (windowOutputEvidence, error) {
@@ -148,6 +150,7 @@ type videoPrepareWindowExecutor struct {
 }
 
 type windowSourceProbe struct {
+	FrameCount    int64
 	CodecName     string
 	Profile       string
 	Level         int
@@ -175,7 +178,7 @@ type windowSourceProbeIndex struct {
 	Probe     windowSourceProbe `json:"probe"`
 }
 
-const windowSourceProbeIndexVersion = 1
+const windowSourceProbeIndexVersion = 2
 
 type keyedWindowLock struct {
 	mu   sync.Mutex
@@ -425,6 +428,9 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		OutputSizeBytes: artifact.SizeBytes, OutputModTimeUnixNano: outputInfo.ModTime().UnixNano(),
 		OutputEvidence: evidence, ClosedGOPAttested: true, PacketCopyUsed: true,
 	}
+	if !source.Sparse {
+		attestation.SourceCertificate = sourceCertificateFromProbe(sourceProbe, resolvedRequest, e.profile)
+	}
 	attestationJSON, err := json.Marshal(attestation)
 	if err != nil {
 		return fail("WINDOW_ATTESTATION_ENCODE_FAILED", err)
@@ -582,7 +588,8 @@ func windowEvidenceMatchesProfile(evidence windowOutputEvidence, profile contrac
 
 func bindWindowCertificate(attestation windowArtifactAttestation, request contract.VideoPrepareWindowV1) windowPreparationCertificate {
 	return windowPreparationCertificate{
-		Version: attestation.Version, SourceSHA256: attestation.SourceSHA256,
+		SourceCertificate: attestation.SourceCertificate,
+		Version:           attestation.Version, SourceSHA256: attestation.SourceSHA256,
 		SourceStartFrame: attestation.SourceStartFrame, SourceFrameCount: attestation.SourceFrameCount,
 		SourceFPSNum: attestation.SourceFPSNum, SourceFPSDen: attestation.SourceFPSDen,
 		SourceStartUS: attestation.SourceStartUS, SourceDurationUS: attestation.SourceDurationUS,

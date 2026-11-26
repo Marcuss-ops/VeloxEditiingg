@@ -1,5 +1,23 @@
 ## [Unreleased] - 2026-11-08
 
+### Added — reusable source certificates and certified stock cuts
+
+- Full verified worker sources can emit versioned source evidence tied to SHA,
+  size, exact frame count, canonical profile/revision and source keyframe index.
+  Sparse files cannot produce full-source certificates. Unknown frame counts and
+  non-zero presentation origins retain window preparation.
+- Source evidence is preserved on warm fragment reuse and registered in the
+  existing source registry after independent fragment verification. FINALIZE
+  resolves it in batch before stock selection and dependency planning, enabling
+  subsequent renders to bypass intermediate window tasks and transfers.
+- Deterministic stock selection prefers certified candidates; consecutive stock
+  slots advance to the next certified keyframe after mid-GOP consumption. Explicit
+  editorial cuts remain unchanged and native packet validation remains active.
+- Expanded plans omit unreferenced candidate assets before worker resolution.
+- Verification: full DataServer gate passes (vet, build, full tests: 322 s);
+  shared contracts and affected worker suites pass, including real FFmpeg
+  full-source certification, warm reuse and sparse-source refusal.
+
 ### Fixed — read both persisted window certificate representations
 
 - Cache lookup and repeated registration accept both the first-registration
