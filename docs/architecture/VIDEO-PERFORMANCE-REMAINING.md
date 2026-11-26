@@ -1,0 +1,73 @@
+# Video performance: remaining work
+
+Tracking issue: [#38 — Complete source certification and retire remaining render work](https://github.com/Marcuss-ops/VeloxEditiingg/issues/38)
+
+Audit base: `main` at `8b6617af` (2026-11-26).
+
+## Already implemented
+
+- New FINALIZE jobs certify one immutable source identity, reuse the proof in
+  the same job, and dispatch direct packet-copy assembly for compatible windows.
+- New ordinary jobs do not create window MP4 fragments when source certification
+  is available. Unauthenticated sparse source preparation has been removed.
+- Sparse inputs use source-certificate block SHA-256 evidence; authenticated
+  blocks are staged directly in the private sparse file.
+- Runtime source SHA-256 and size are reconciled before deciding whether to
+  plan per-window work.
+- Exact `nb_read_frames` and packet keyframe timestamps are collected in one
+  FFprobe invocation. The probe cache schema was revised to invalidate older
+  evidence.
+- A race in the sparse-fetch test counter was fixed in `8b6617af`; the full
+  worker race suite passes locally. Its GitHub image workflow is running.
+
+## Remaining
+
+### 1. Native source certification
+
+Replace the remaining FFprobe source inspection with equivalent evidence from
+the existing LibAV engine. The evidence must cover stream identity, exact frame
+count, timestamp origin/timebase, frame-rate consistency and packet keyframe
+facts. The packet mux must continue to verify the requested H.264 IDR boundary;
+a generic container keyframe flag is not proof of IDR.
+
+### 2. Persisted legacy work
+
+Inventory persisted TaskGraph tasks, attempts, retries and recovery references
+for `video.prepare.window.v1` and `video.assemble.slice.v1`. Migrate or drain
+persisted work before retiring their executors, contracts, cache paths or
+wrappers. Before any exported-symbol or cross-package removal commit, run:
+
+```bash
+bash scripts/ci/pre-removal-verify.sh
+```
+
+### 3. Transfer and cache measurements
+
+Measure cold and warm cache behavior, full-download versus authenticated-range
+bytes, local I/O, duplicate downloads/certifications and task counts. Keep
+cryptographic verification. Optimize the read/hash path only when measurements
+show a material gain.
+
+### 4. Image release and production proof
+
+- [ ] Local worker image build succeeds from the target commit.
+- [ ] GitHub worker-image workflow builds, signs, verifies and certifies an
+  immutable registry digest.
+- [ ] Confirm the digest and rollout state on the authorized worker hosts.
+- [ ] Run authorized cold/warm production renders and record process counts,
+  intermediate bytes/uploads, transferred bytes and wall time against the
+  agreed PERFLIVE baselines.
+
+Do not claim production performance improvements based on source inspection,
+local tests or an image build alone.
+
+## Verification already run
+
+- DataServer: `bash scripts/ci/pre-removal-verify.sh` passed all three full
+  module checks (`go vet`, `go build`, and `go test -count=1 ./...`).
+- Worker: `go test ./...` passed.
+- Worker race gate: `go test -race -timeout 5m ./internal/... ./pkg/...` passed
+  after the test counter fix.
+- C++/LibAV: `render_copy_only_zero_intermediates_tests` passed with real media.
+
+These checks do not replace release certification or production measurements.
