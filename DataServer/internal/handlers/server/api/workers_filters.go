@@ -58,12 +58,9 @@ func ParseFilters(c *gin.Context) (Filters, error) {
 // ApplyFilters returns the subset of `infos` matching the typed
 // filters. Empty filters return the input unchanged.
 //
-// Implementation note: the in-memory applier is the defense layer
-// above the SQL WHERE filter (A7) — the SQL filter is the source of
-// truth, the applier catches mislabelled rows that might have leaked
-// from a future bug before reaching operators. Running both reduces
-// the bug surface to a single line; running neither would let a
-// regression in the SQL pass through silently.
+// The worker registry is a small operator read model, so filters are
+// applied once to the hydrated snapshot rather than duplicated in SQL and
+// in-memory predicates. Apply filters before sanitizing and sorting the DTOs.
 func ApplyFilters(infos []workersreg.Worker, f Filters) []workersreg.Worker {
 	if f.IsZero() {
 		return infos

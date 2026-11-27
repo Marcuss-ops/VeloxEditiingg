@@ -53,7 +53,12 @@ func (h *WorkersHandler) ListWorkers() gin.HandlerFunc {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker registry not available"})
 			return
 		}
+		filters, err := ParseFilters(c)
+		if err != nil {
+			return // ParseFilters has already written the 400 response.
+		}
 		list := h.reg.List(c.Request.Context())
+		list = ApplyFilters(list, filters)
 		resp := WorkersListResponse{
 			Workers: make([]WorkerResponse, 0, len(list)),
 		}
