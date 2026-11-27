@@ -35,7 +35,6 @@ type Handlers struct {
 	workerRegistry    *workers.Registry
 	stockFolderLister StockFolderLister
 	credentialVault   *credentials.Vault
-	pipelineRuns      PipelineRunService
 	finalizeMu        sync.Mutex
 }
 
@@ -82,7 +81,6 @@ func HandlersFactory(
 		submission:   creatorflow.NewCanonicalJobSubmitter(resolver),
 		socialClient: socialclient.New(socialclient.ConfigFromRuntime(cfg.Runtime.Social)),
 		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
-		pipelineRuns: newPipelineRunService(nil, client, resolver),
 	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store.Delivery())
 	return h
@@ -101,9 +99,6 @@ func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 		}
 	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store.Delivery())
-	// The pipeline-run service needs the store, wired later than the other
-	// service dependencies (client + resolver), so rebuild it here.
-	h.pipelineRuns = newPipelineRunService(db, h.client, h.resolver)
 	return h
 }
 
