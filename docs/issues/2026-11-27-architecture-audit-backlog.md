@@ -18,18 +18,20 @@ package or file.
 | P1 | [Review store package cohesion](2026-11-27-audit-p1-store-package-cohesion.md) | Store ownership and internal boundaries are evidence-based and clearer. | Verified; retain current boundary |
 | P2 | [Review worker package cohesion](2026-11-27-audit-p2-worker-package-cohesion.md) | Worker package responsibilities and candidate boundaries are documented. | Verified; retain current boundary |
 | P2 | [Measure complexity and change coupling](2026-11-27-audit-p2-change-coupling-metrics.md) | Refactor priorities use reproducible code and history metrics. | Verified; report in `docs/metrics/2026-11-27-architecture-audit-metrics.md` |
-| P2 | [Verify and remove unreachable legacy code](2026-11-27-audit-p2-dead-code.md) | Only proven unreachable code is removed under repository rules. | Open; no candidate has complete indirect-call evidence |
+| P2 | [Verify and remove unreachable legacy code](2026-11-27-audit-p2-dead-code.md) | Only proven unreachable code is removed under repository rules. | Verified; current-head review and safe removals recorded |
 | P2 | [Profile persistence and runtime hot paths](2026-11-27-audit-p2-performance-profiling.md) | Optimizations target measured bottlenecks with repeatable evidence. | Verified; no optimization justified by current evidence |
 | P3 | [Consolidate residual duplication and needless abstractions](2026-11-27-audit-p3-simplification.md) | Confirmed duplication is reduced without adding abstraction layers. | Verified for confirmed lifecycle/runtime findings |
 
 ## Suggested sequence
 
-The reviewed P0/P1 lifecycle and ownership tickets are verified. Package
-reviews and metrics support retaining the current store and worker boundaries.
+The reviewed P0/P1 lifecycle and ownership tickets are verified. The dead-code
+candidate list was reconciled with current `main`; proven retired paths were
+removed and the remaining analyzer hits were classified. Package reviews and
+metrics support retaining the current store and worker boundaries.
 The current production profiling decision is recorded; it identifies readiness
 wait and cold transfer as the observed delays and does not justify speculative
-code changes. Dead-code review remains open for exported API candidates whose
-complete runtime/consumer contract still needs classification.
+code changes. The analyzer output is retained as historical evidence; future
+candidates must be generated and reviewed against the current tree.
 
 ## Repository constraints
 

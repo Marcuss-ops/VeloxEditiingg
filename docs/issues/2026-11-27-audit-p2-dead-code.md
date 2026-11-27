@@ -1,6 +1,6 @@
 # P2 — Verify and remove unreachable legacy code
 
-**Status:** Open — no safe removal certified
+**Status:** Verified — current-head candidate review and safe removals complete
 **Area:** Repository-wide, prioritized by production call paths
 **Source:** Preliminary audit lists dead code and legacy paths as unverified.
 
@@ -50,13 +50,52 @@ runtime telemetry where available. Run focused tests for each removal and the
 mandatory full DataServer gate for qualifying removal commits. Record any
 external-use uncertainty instead of claiming dead code prematurely.
 
-## Review result
+## Review result — 2026-11-27
 
-No production symbol was removed by this audit. The available dead-code
-candidate output was not sufficient to prove unreachability across bootstrap,
-reflection, generated registration, scripts, and external callers; a direct
-reference check confirmed at least one apparent candidate,
-`SQLiteStore.observeDBTransaction`, is live. Under `AGENTS.md` §2 and ADR 0008,
-uncertain candidates must be retained rather than turning an analyzer warning
-into an unsafe removal. A candidate-by-candidate inventory with complete
-indirect-call evidence remains necessary before this ticket can close.
+The raw analyzer output is preserved in
+[`deadcode-candidates-2026-11-27.txt`](../architecture/evidence/deadcode-candidates-2026-11-27.txt).
+It is a candidate list, not proof: its snapshot predates several removals
+already present on `main`, and it reports interface implementations and test
+doubles as unreachable. Each candidate was checked against current production
+references, interface contracts, route registration, test-only use, and the
+repository's `internal` package boundaries. The decision log is in
+[`dead-code-review-2026-11-27.md`](../architecture/dead-code-review-2026-11-27.md).
+
+Confirmed dead production paths removed:
+
+- The retired `POST /api/v1/pipeline-runs` creation handler, service, and
+  bootstrap wiring. `routes.go` already retired the route; no production or
+  test caller used the creation service.
+- The unused per-worker `current_task` SQL loader and API adapter. The active
+  worker response uses the distinct registry-backed `current_task_id` field.
+- Three unused fleet surfaces: the SSH constructor that bypassed the canonical
+  worker registry, the unused runtime-preflight string helper, and the
+  superseded `FreshSmokeRunner` path.
+- The unused config-based Cosign constructor. Production bootstrap uses the
+  base constructor and applies the typed settings in its wiring.
+
+Each removal was committed atomically and passed
+`bash scripts/ci/pre-removal-verify.sh` (full-module vet, build, and tests)
+before push. Commits: `ec70fc6c`, `8ed374b3`, `40fee3dc`, `be1695f1`.
+
+Other candidate lines were classified rather than removed mechanically:
+
+- Already absent on the reviewed `main`: `internal/jobs/ingress/registry.go`
+  (`90cf4c9e`), `http_response_compat.go` (`be8b3f04`), and
+  `DataLayerAuditor.IsLegacyAllowed` (`4735bbf3`).
+- Live through real callers or composition: `BlobStore.RemoveStaging`,
+  `LoadCurrentTaskRow` before its removal, `ConfigFromRuntime`, and the
+  forwarding, delivery, and task lifecycle methods wired by bootstrap or
+  called through domain interfaces.
+- Required Go contract methods, including `Error()` implementations and
+  methods satisfying `BackoffPolicy` or runtime interfaces, are not dead just
+  because a text search finds no concrete receiver call.
+- Test stubs and clock/drive fakes are test support and remain in place.
+- `SQLiteStore.observeDBTransaction` was confirmed live during the original
+  review and remains present.
+
+No public route or published-module API was found among the removed symbols;
+their packages are under `internal/`. Under `AGENTS.md` §2 / ADR 0008, C2
+therefore fails and no soft-deprecation period was required. This closes the
+audit finding; new candidates must be reviewed against the current tree rather
+than reusing the stale analyzer snapshot.
