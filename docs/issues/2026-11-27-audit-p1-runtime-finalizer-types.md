@@ -1,6 +1,6 @@
 # P1 — Type runtime finalizer dependencies and internal bindings
 
-**Status:** Partial; typed dependency fixed, binding schema remains
+**Status:** Verified at internal decision boundary; wire binding map retained
 **Area:** `DataServer/internal/handlers/server/pipeline/runtime_finalize.go`
 **Source:** Preliminary audit at `4d42269c`; dynamic dependency field,
 reflection nil checks, type assertions, and map-based bindings.
@@ -74,9 +74,13 @@ helper, run the full pre-removal gate before push.
   enricher as one typed dependency contract.
 - Runtime type assertions for these required operations were removed; bootstrap
   and unit-test implementations are checked by the compiler.
+- Business decisions now decode the identity, SHA-256, and size fields into a
+  small typed projection before comparing certificates. The original
+  `[]map[string]interface{}` payload is preserved at the producer/persistence
+  boundary so unknown wire fields and compatibility behavior are not dropped.
+- This is intentionally not a typed replacement of the persisted schema: the
+  map represents the boundary payload, while fields that drive matching and
+  certificate validation are typed internally.
 - Focused verification passed: `go test -count=1
-  ./internal/handlers/server/pipeline ./internal/assets`; full-module vet,
-  build, and tests passed in `bash scripts/ci/pre-removal-verify.sh`.
-- The persisted `[]map[string]interface{}` binding schema remains open for a
-  separate boundary-focused change; this ticket is not complete until that
-  representation is either typed or justified as wire-boundary data.
+  ./internal/handlers/server/pipeline` (current change); the earlier typed
+  dependency change also passed `./internal/assets` and the full-module gate.

@@ -69,6 +69,25 @@ type RuntimeFinalizationAssetPlanner interface {
 	RuntimeSourceCertificateEnricher
 }
 
+// runtimeAssetBinding is the small, typed projection used for source identity
+// and certificate checks. The original map remains the persisted/transport
+// payload owned by the producer contract.
+type runtimeAssetBinding struct {
+	assetID      string
+	driveFileID  string
+	sourceSHA256 string
+	sizeBytes    int64
+}
+
+func decodeRuntimeAssetBinding(raw map[string]interface{}) runtimeAssetBinding {
+	return runtimeAssetBinding{
+		assetID:      runtimeBindingString(raw, "asset_id", "id"),
+		driveFileID:  runtimeBindingString(raw, "drive_file_id"),
+		sourceSHA256: runtimeBindingString(raw, "source_sha256", "sha256", "asset_sha256"),
+		sizeBytes:    runtimeBindingInt64(raw, "size_bytes"),
+	}
+}
+
 type RuntimeTaskGraphExpander interface {
 	Extend(context.Context, string, []taskgraph.ExpandedTask, []string, map[string]interface{}) ([]taskgraph.Task, error)
 }
@@ -411,11 +430,8 @@ func (p *RuntimeFinalizationProcessor) publishSourceCertifications(ctx context.C
 
 func runtimeBindingsForSource(bindings []map[string]interface{}, source contract.AssetRefV2) []map[string]interface{} {
 	for _, binding := range bindings {
-		id, _ := binding["asset_id"].(string)
-		if id == "" {
-			id, _ = binding["drive_file_id"].(string)
-		}
-		if id == source.AssetID || (source.DriveFileID != "" && id == source.DriveFileID) {
+		typed := decodeRuntimeAssetBinding(binding)
+		if typed.assetID == source.AssetID || (source.DriveFileID != "" && typed.driveFileID == source.DriveFileID) {
 			return []map[string]interface{}{binding}
 		}
 	}
@@ -521,25 +537,22 @@ func bindSourceCertificateIdentities(bindings []map[string]interface{}, tasks ma
 		for key, value := range binding {
 			copyBinding[key] = value
 		}
+		typed := decodeRuntimeAssetBinding(copyBinding)
 		for identity, task := range tasks {
 			certificate, exists := certificates[identity]
 			if !exists {
 				continue
 			}
-			assetID := runtimeBindingString(copyBinding, "asset_id", "id")
-			driveID := runtimeBindingString(copyBinding, "drive_file_id")
 			matches := false
 			for _, candidate := range task.AssetIDs {
-				matches = matches || candidate == assetID
+				matches = matches || candidate == typed.assetID
 			}
-			matches = matches || (task.Request.Source.DriveFileID != "" && task.Request.Source.DriveFileID == driveID)
+			matches = matches || (task.Request.Source.DriveFileID != "" && task.Request.Source.DriveFileID == typed.driveFileID)
 			if !matches {
 				continue
 			}
-			declaredSHA := runtimeBindingString(copyBinding, "source_sha256", "sha256", "asset_sha256")
-			declaredSize := runtimeBindingInt64(copyBinding, "size_bytes")
-			if (declaredSHA != "" && !strings.EqualFold(declaredSHA, certificate.SHA256)) || (declaredSize > 0 && declaredSize != certificate.SizeBytes) {
-				return nil, fmt.Errorf("runtime source binding conflicts with certificate for %s", assetID)
+			if (typed.sourceSHA256 != "" && !strings.EqualFold(typed.sourceSHA256, certificate.SHA256)) || (typed.sizeBytes > 0 && typed.sizeBytes != certificate.SizeBytes) {
+				return nil, fmt.Errorf("runtime source binding conflicts with certificate for %s", typed.assetID)
 			}
 			copyBinding["source_sha256"] = certificate.SHA256
 			copyBinding["size_bytes"] = certificate.SizeBytes

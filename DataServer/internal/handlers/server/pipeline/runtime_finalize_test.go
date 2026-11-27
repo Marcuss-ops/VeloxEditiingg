@@ -134,6 +134,34 @@ func (runtimeFinalizeTestPreparer) EnrichPlanWithSourceCertificates(_ context.Co
 	return plan, nil
 }
 
+func TestBindSourceCertificateIdentitiesUsesTypedBindingProjection(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	tasks := map[string]contract.VideoSourceCertificationTaskV1{
+		"source:identity": {
+			Identity: "source:identity",
+			AssetIDs: []string{"asset-1"},
+			Request: contract.VideoSourceCertificationV1{
+				Source: contract.AssetRefV2{DriveFileID: "drive-1"},
+			},
+		},
+	}
+	bindings := []map[string]interface{}{{
+		"asset_id": "asset-1", "drive_file_id": "drive-1", "sha256": sha,
+		"size_bytes": int64(120), "producer_extension": "preserved",
+	}}
+	certificates := map[string]contract.VideoSourceCertificateV1{
+		"source:identity": {SHA256: sha, SizeBytes: 120},
+	}
+
+	got, err := bindSourceCertificateIdentities(bindings, tasks, certificates)
+	if err != nil {
+		t.Fatalf("bindSourceCertificateIdentities: %v", err)
+	}
+	if got[0]["source_sha256"] != sha || got[0]["size_bytes"] != int64(120) || got[0]["producer_extension"] != "preserved" {
+		t.Fatalf("certified binding = %#v", got[0])
+	}
+}
+
 type runtimeFinalizeTestNotifier struct{ jobs []string }
 
 func (n *runtimeFinalizeTestNotifier) NotifyTaskUpdated(_ context.Context, jobID string) {
