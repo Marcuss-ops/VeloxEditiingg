@@ -13,9 +13,19 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/publicationstate"
 	"velox-server/internal/repository"
+	"velox-server/internal/store"
 	"velox-shared/contract/domain"
 )
+
+func (r *DeliveryRunner) validatePublishedEvidence(ctx context.Context, publicationID string, state *store.PublicationState, destination *Destination) error {
+	if state == nil || strings.TrimSpace(state.RemoteID) == "" || strings.TrimSpace(state.SubmittedRemoteID) == "" || strings.TrimSpace(state.RemoteID) == strings.TrimSpace(state.SubmittedRemoteID) {
+		return fmt.Errorf("durable PUBLISHED state lacks distinct submission and final media evidence")
+	}
+	operation := phaseOperation(publicationstate.Verifying, nil, destination, state.SubmittedRemoteID)
+	return r.store.ValidatePublishedAfterReconciliation(ctx, publicationID, operation)
+}
 
 // resolveRetryAfter extracts the RetryAfter time from a ProviderError.
 // Returns a zero time if the error does not carry RetryAfter.

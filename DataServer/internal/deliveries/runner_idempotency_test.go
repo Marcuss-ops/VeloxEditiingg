@@ -32,7 +32,7 @@ func (p *publishedShortCircuitProvider) DeliverWithCredential(_ context.Context,
 	return &Result{Success: true, RemoteID: "unexpected-credential-call"}, nil
 }
 
-func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
+func TestDeliveryRunnerRejectsPublishedStateWithoutReconciliation(t *testing.T) {
 	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "published-short-circuit.sqlite"))
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
@@ -119,8 +119,8 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 	if len(leases) != 1 {
 		t.Fatalf("leases = %d, want 1", len(leases))
 	}
-	if err := runner.processLease(context.Background(), leases[0]); err != nil {
-		t.Fatalf("processLease: %v", err)
+	if err := runner.processLease(context.Background(), leases[0]); err == nil {
+		t.Fatal("processLease accepted PUBLISHED state without a resumable reconciler")
 	}
 
 	if provider.credentialCalls != 0 || provider.providerCalls != 0 {
@@ -130,7 +130,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
-	if row.Status != "SUCCEEDED" || row.RemoteID != "youtube-video-already-uploaded" {
-		t.Fatalf("delivery = status=%q remote_id=%q, want SUCCEEDED/youtube-video-already-uploaded", row.Status, row.RemoteID)
+	if row.Status != "FAILED" || row.RemoteID != "" {
+		t.Fatalf("delivery = status=%q remote_id=%q, want FAILED with no published media", row.Status, row.RemoteID)
 	}
 }

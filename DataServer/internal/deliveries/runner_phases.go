@@ -35,11 +35,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		return r.phaseInfrastructureFailure("PUBLICATION_STATE_NOT_FOUND", err)
 	}
 	if state.State == publicationstate.Published {
-		if strings.TrimSpace(state.RemoteID) == "" || strings.TrimSpace(state.SubmittedRemoteID) == "" || strings.TrimSpace(state.RemoteID) == strings.TrimSpace(state.SubmittedRemoteID) {
-			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_DISTINCT_MEDIA_ID", fmt.Errorf("durable PUBLISHED state lacks distinct submission and final media evidence"))
-		}
-		verificationOperation := phaseOperation(publicationstate.Verifying, input.artifact, input.destination, state.SubmittedRemoteID)
-		if err := r.store.ValidatePublishedAfterReconciliation(ctx, input.publicationID, verificationOperation); err != nil {
+		if err := r.validatePublishedEvidence(ctx, input.publicationID, state, input.destination); err != nil {
 			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_RECONCILIATION_EVIDENCE", err)
 		}
 		if err := r.deliveryStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, state.RemoteID, state.RemoteURL); err != nil {

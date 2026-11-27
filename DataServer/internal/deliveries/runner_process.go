@@ -150,13 +150,22 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease deliverystore.D
 			return fmt.Errorf("read publication state: %w", stateErr)
 		}
 		if stateErr == nil && state != nil && state.State == publicationstate.Published {
-			markErr := r.deliveryStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, state.RemoteID, state.RemoteURL)
-			if markErr == nil {
-				status = "succeeded"
+			if _, resumable := r.registry.ResolvePhaseExecutor(providerName); resumable {
+				if r.validatePublishedEvidence(ctx, publicationID, state, dest) == nil {
+					markErr := r.deliveryStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, state.RemoteID, state.RemoteURL)
+					if markErr != nil {
+						return deliveryStatePersistenceError("mark already-published delivery succeeded", markErr)
+					}
+					status = "succeeded"
+					return nil
+				}
 			} else {
-				return deliveryStatePersistenceError("mark already-published delivery succeeded", markErr)
+				err := fmt.Errorf("%w: PUBLISHED state requires a resumable provider with reconciliation evidence", ErrProviderPermanent)
+				if markErr := r.deliveryStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PUBLISHED_EVIDENCE_INVALID", err.Error()); markErr != nil {
+					return joinDeliveryErrors(err, deliveryStatePersistenceError("mark invalid PUBLISHED evidence", markErr))
+				}
+				return err
 			}
-			return nil
 		}
 	}
 
