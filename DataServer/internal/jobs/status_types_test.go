@@ -36,3 +36,12 @@ func TestJobStatusKeepsWireSpelling(t *testing.T) {
 		t.Fatalf("wire job status = %s", data)
 	}
 }
+
+func TestFinalizationTargetStatus(t *testing.T) {
+	if got := FinalizationTargetStatus(true); got != StatusDelivering {
+		t.Fatalf("finalization with required deliveries = %s, want DELIVERING", got)
+	}
+	if got := FinalizationTargetStatus(false); got != StatusSucceeded {
+		t.Fatalf("finalization without required deliveries = %s, want SUCCEEDED", got)
+	}
+}

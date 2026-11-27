@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"velox-server/internal/identity"
+	"velox-server/internal/jobs"
 	"velox-server/internal/repository"
 	"velox-server/internal/storecore"
 )
@@ -278,7 +279,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if len(destinations) == 0 {
+	if jobs.FinalizationTargetStatus(len(destinations) > 0) == jobs.StatusSucceeded {
 		var requestJSON string
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(request_json,'{}') FROM jobs WHERE job_id=?`, jobID).Scan(&requestJSON); err != nil {
 			return err

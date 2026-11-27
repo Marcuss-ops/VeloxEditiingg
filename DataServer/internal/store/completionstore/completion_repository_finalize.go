@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/repository"
 	"velox-shared/contract"
 )
@@ -380,10 +381,7 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 	if err := r.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_deliveries WHERE artifact_id IN (SELECT id FROM artifacts WHERE job_id=?) AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED')`, jobID).Scan(&pendingDeliveries); err != nil {
 		return fmt.Errorf("store: count completion deliveries: %w", err)
 	}
-	nextStatus := "SUCCEEDED"
-	if pendingDeliveries > 0 {
-		nextStatus = "DELIVERING"
-	}
+	nextStatus := jobs.FinalizationTargetStatus(pendingDeliveries > 0)
 	query := `
 		UPDATE jobs
 		SET status='SUCCEEDED', completed_at=?, updated_at=?, revision=revision+1
@@ -392,7 +390,7 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 		  AND ` + artifactGate + `
 		  AND status=?`
 	args := []interface{}{now, now, jobID, jobID}
-	if nextStatus == "DELIVERING" {
+	if nextStatus == jobs.StatusDelivering {
 		query = `
 			UPDATE jobs
 			SET status='DELIVERING', updated_at=?, revision=revision+1

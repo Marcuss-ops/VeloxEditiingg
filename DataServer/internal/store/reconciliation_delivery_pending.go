@@ -212,40 +212,11 @@ func (r *DeliveryPendingReconciler) applyJobRollup(ctx context.Context, c Delive
 	nowStr := now.UTC().Format(time.RFC3339Nano)
 	reason := ReconciliationReasonStaleDeliveryPending
 
-	res, err := tx.ExecContext(ctx, `
-		UPDATE jobs
-		   SET status = CASE
-		           WHEN EXISTS (
-		               SELECT 1 FROM job_deliveries d2
-		                 JOIN artifacts a2 ON a2.id = d2.artifact_id
-		                WHERE a2.job_id = jobs.job_id
-		                  AND d2.status <> 'SUCCEEDED'
-		           ) THEN 'FAILED'
-		           ELSE 'SUCCEEDED'
-		       END,
-		       completed_at = ?,
-		       updated_at = ?,
-		       revision = revision + 1,
-		       reconciled_at = ?,
-		       reconciliation_reason = ?,
-		       reconciliation_version = COALESCE(reconciliation_version, 0) + 1
-		 WHERE job_id = ?
-		   AND status = 'DELIVERING'
-		   AND NOT EXISTS (
-		       SELECT 1 FROM job_deliveries d3
-		         JOIN artifacts a3 ON a3.id = d3.artifact_id
-		        WHERE a3.job_id = jobs.job_id
-		          AND d3.status NOT IN ('SUCCEEDED','FAILED','BLOCKED_AUTH','CANCELLED')
-		   )`,
-		nowStr, nowStr, nowStr, reason, c.ID)
+	rolledUp, err := rollupDeliveringJob(ctx, tx, c.ID, nowStr, reason)
 	if err != nil {
 		return err
 	}
-	n, err := readRowsAffected(res, "delivery pending job rollup")
-	if err != nil {
-		return err
-	}
-	if n != 1 {
+	if !rolledUp {
 		// Concurrent runner already rolled the job up, or it left
 		// DELIVERING. Nothing to do.
 		return nil

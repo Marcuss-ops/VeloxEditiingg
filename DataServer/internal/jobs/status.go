@@ -73,3 +73,15 @@ func (s JobStatus) IsTerminal() bool {
 	}
 	return false
 }
+
+// FinalizationTargetStatus is the canonical status decision after verified
+// artifact finalization: required delivery work keeps the job nonterminal in
+// DELIVERING; a job with no required delivery work can finish as SUCCEEDED.
+// Transaction owners still enforce their artifact and task evidence gates and
+// persist this target atomically with their own records.
+func FinalizationTargetStatus(hasRequiredDeliveries bool) JobStatus {
+	if hasRequiredDeliveries {
+		return StatusDelivering
+	}
+	return StatusSucceeded
+}

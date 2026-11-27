@@ -312,7 +312,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		}
 	}
 
-	if len(destinations) > 0 {
+	if jobs.FinalizationTargetStatus(len(destinations) > 0) == jobs.StatusDelivering {
 		jobQuery := `
 			UPDATE jobs SET status = 'DELIVERING', completed_at = completed_at,
 			    updated_at = ?, revision = revision + 1

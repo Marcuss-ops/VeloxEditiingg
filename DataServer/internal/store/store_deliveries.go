@@ -60,7 +60,26 @@ func (s *SQLiteStore) FinalizeParentJobIfDeliveriesDone(ctx context.Context, tx 
 // Render-only jobs are completed by artifact finalization and already
 // terminal parent jobs are never regressed by delivery callbacks.
 func finalizeParentJobIfDeliveriesDone(ctx context.Context, tx *sql.Tx, deliveryID, now string) error {
-	_, err := tx.ExecContext(ctx, `
+	var jobID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT a.job_id FROM job_deliveries d JOIN artifacts a ON a.id=d.artifact_id
+		WHERE d.delivery_id=?`, deliveryID).Scan(&jobID)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = rollupDeliveringJob(ctx, tx, jobID, now, "")
+	return err
+}
+
+// rollupDeliveringJob is the single transaction-level decision for closing a
+// DELIVERING job: all terminal deliveries succeeded means SUCCEEDED; any
+// failed, blocked, or cancelled delivery means FAILED. Reconciliation callers
+// pass a reason so the same CAS also records its traceability fields.
+func rollupDeliveringJob(ctx context.Context, tx *sql.Tx, jobID, now, reconciliationReason string) (bool, error) {
+	res, err := tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET status = CASE
 				WHEN EXISTS (
@@ -74,20 +93,29 @@ func finalizeParentJobIfDeliveriesDone(ctx context.Context, tx *sql.Tx, delivery
 			END,
 			completed_at = ?,
 			updated_at = ?,
-			revision = revision + 1
-		WHERE job_id = (
-			SELECT a.job_id
-			FROM job_deliveries d
-			JOIN artifacts a ON a.id = d.artifact_id
-			WHERE d.delivery_id = ?
-		)
+			revision = revision + 1,
+			reconciled_at = CASE WHEN ? = '' THEN reconciled_at ELSE ? END,
+			reconciliation_reason = CASE WHEN ? = '' THEN reconciliation_reason ELSE ? END,
+			reconciliation_version = COALESCE(reconciliation_version, 0) + CASE WHEN ? = '' THEN 0 ELSE 1 END
+		WHERE job_id = ?
 		AND status = 'DELIVERING'
+		AND EXISTS (
+			SELECT 1 FROM job_deliveries d4 JOIN artifacts a4 ON a4.id = d4.artifact_id
+			WHERE a4.job_id = jobs.job_id
+		)
 		AND NOT EXISTS (
 			SELECT 1
 			FROM job_deliveries d3
 			JOIN artifacts a3 ON a3.id = d3.artifact_id
 			WHERE a3.job_id = jobs.job_id
 			  AND d3.status NOT IN ('SUCCEEDED', 'FAILED', 'BLOCKED_AUTH', 'CANCELLED')
-		)`, now, now, deliveryID)
-	return err
+		)`, now, now, reconciliationReason, reconciliationReason, reconciliationReason, reconciliationReason, reconciliationReason, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
