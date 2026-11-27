@@ -58,7 +58,7 @@ func TestPhase6_Acceptance_GoldenPath(t *testing.T) {
 	jobID := "job-acc"
 	seedCompleteUploadFixture(t, db, "up-acc", "art-acc", jobID, strings.Repeat("a", 64))
 	seedDeliveryDestination(t, db, "dest-acc", "drive")
-	seedJobDeliveryPlan(t, db, jobID, "dest-acc")
+	seedJobDeliveryPlanWithBudget(t, db, jobID, "dest-acc", 2)
 
 	_, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence:           fence,
@@ -102,8 +102,8 @@ func TestPhase6_Acceptance_GoldenPath(t *testing.T) {
 	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&jobStatus); err != nil {
 		t.Fatalf("acc jobs.status read: %v", err)
 	}
-	if jobStatus != "SUCCEEDED" {
-		t.Errorf("acc jobs.status: got=%q want=SUCCEEDED (MarkSucceededIfTasksDone must fire because the only task SUCCEEDED)", jobStatus)
+	if jobStatus != "DELIVERING" {
+		t.Errorf("acc jobs.status: got=%q want=DELIVERING while the required delivery is pending", jobStatus)
 	}
 	var deliveriesCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id = ?`, "art-acc").Scan(&deliveriesCount); err != nil {
@@ -111,6 +111,13 @@ func TestPhase6_Acceptance_GoldenPath(t *testing.T) {
 	}
 	if deliveriesCount < 1 {
 		t.Errorf("acc job_deliveries count: got=%d want>=1 (durable cross-join)", deliveriesCount)
+	}
+	var maxAttempts int
+	if err := db.QueryRow(`SELECT max_attempts FROM job_deliveries WHERE artifact_id = ?`, "art-acc").Scan(&maxAttempts); err != nil {
+		t.Fatalf("acc delivery retry budget: %v", err)
+	}
+	if maxAttempts != 2 {
+		t.Errorf("acc delivery max_attempts: got=%d want=2 from job_delivery_plans.retry_budget", maxAttempts)
 	}
 	if res != nil && res.JobStatus != jobStatus {
 		t.Errorf("acc CommitResult.JobStatus drift: result=%q db=%q", res.JobStatus, jobStatus)

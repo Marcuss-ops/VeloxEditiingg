@@ -18,16 +18,14 @@
 // AWAITING_ARTIFACT and DELIVERING are non-terminal gates between rendering
 // and job success. AWAITING_ARTIFACT is used while the artifact is being
 // verified; DELIVERING is used when explicit delivery attempts are pending.
-// AWAITING_ARTIFACT was added between RUNNING and SUCCEEDED so the
-// maybeTransitionJob roll-up can mark "all tasks succeeded" without
-// writing the terminal SUCCEEDED itself. The actual SUCCEEDED flip is
-// reserved for the verified-finalization path
-// (`internal/artifacts/sqlite_finalize_writer.go`), audited by
-// `internal/artifacts/scan_test.go`. This makes Job-level CAS writers
-// deterministic (sole SUCCEEDED writer). AWAITING_ARTIFACT is NOT
-// terminal — the artifact
-// can still fail, transition to FAILED via artifact-timeout, or be
-// CANCELLED.
+// AWAITING_ARTIFACT was added between RUNNING and SUCCEEDED so task
+// convergence does not itself write terminal SUCCEEDED. Verified artifact
+// finalization and the completion protocol own separate transaction paths;
+// each must apply its verified artifact and task gates. If either path creates
+// required deliveries, it must leave the job in DELIVERING until delivery
+// reconciliation closes that lifecycle. AWAITING_ARTIFACT is NOT terminal —
+// the artifact can still fail, transition to FAILED via artifact-timeout, or
+// be CANCELLED.
 package jobs
 
 // JobStatus is the canonical job lifecycle state. It is the ONLY type

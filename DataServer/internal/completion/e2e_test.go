@@ -114,11 +114,15 @@ func seedDeliveryDestination(t *testing.T, db *sql.DB, destID, provider string) 
 // CommitAttempt delivery fan-out reads ONLY job_delivery_plans; without
 // an explicit plan the job gets zero delivery rows (render-only).
 func seedJobDeliveryPlan(t *testing.T, db *sql.DB, jobID, destID string) {
+	seedJobDeliveryPlanWithBudget(t, db, jobID, destID, 5)
+}
+
+func seedJobDeliveryPlanWithBudget(t *testing.T, db *sql.DB, jobID, destID string, retryBudget int) {
 	t.Helper()
 	if _, err := db.Exec(
 		`INSERT INTO job_delivery_plans (job_id, destination_id, enabled, priority, retry_budget, created_at, updated_at)
-		 VALUES (?, ?, 1, 0, 5, ?, ?)`,
-		jobID, destID, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
+		 VALUES (?, ?, 1, 0, ?, ?, ?)`,
+		jobID, destID, retryBudget, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("seedJobDeliveryPlan: %v", err)
 	}

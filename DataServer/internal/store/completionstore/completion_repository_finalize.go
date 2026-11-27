@@ -376,6 +376,14 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 		status = "AWAITING_ARTIFACT"
 	}
 
+	var pendingDeliveries int
+	if err := r.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_deliveries WHERE artifact_id IN (SELECT id FROM artifacts WHERE job_id=?) AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED')`, jobID).Scan(&pendingDeliveries); err != nil {
+		return fmt.Errorf("store: count completion deliveries: %w", err)
+	}
+	nextStatus := "SUCCEEDED"
+	if pendingDeliveries > 0 {
+		nextStatus = "DELIVERING"
+	}
 	query := `
 		UPDATE jobs
 		SET status='SUCCEEDED', completed_at=?, updated_at=?, revision=revision+1
@@ -384,6 +392,16 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 		  AND ` + artifactGate + `
 		  AND status=?`
 	args := []interface{}{now, now, jobID, jobID}
+	if nextStatus == "DELIVERING" {
+		query = `
+			UPDATE jobs
+			SET status='DELIVERING', updated_at=?, revision=revision+1
+			WHERE job_id=?
+			  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.job_id=? AND t.status!='SUCCEEDED')
+			  AND ` + artifactGate + `
+			  AND status=?`
+		args = []interface{}{now, jobID, jobID}
+	}
 	if artifactContract {
 		args = append(args, jobID, jobID, jobID)
 	}
@@ -402,9 +420,10 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 
 func (r *sqliteCompletionTx) InsertCompletionDeliveries(ctx context.Context, jobID, now string) error {
 	rows, err := r.tx.QueryContext(ctx, `
-		SELECT a.id, p.destination_id, COALESCE(p.publication_id, '')
+		SELECT a.id, p.destination_id, COALESCE(p.publication_id, ''), p.retry_budget
 		FROM artifacts a CROSS JOIN job_delivery_plans p
 		WHERE a.job_id=? AND p.job_id=? AND a.status='READY' AND p.enabled=1
+		  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.job_id=a.job_id AND t.status!='SUCCEEDED')
 		  AND (
 			(json_extract(p.metadata_json, '$.output_variant_id') IS NOT NULL
 			 AND a.output_kind = json_extract(p.metadata_json, '$.output_variant_id'))
@@ -424,7 +443,8 @@ func (r *sqliteCompletionTx) InsertCompletionDeliveries(ctx context.Context, job
 	seen := map[key]bool{}
 	for rows.Next() {
 		var a, d, publicationID string
-		if err := rows.Scan(&a, &d, &publicationID); err != nil {
+		var retryBudget int
+		if err := rows.Scan(&a, &d, &publicationID, &retryBudget); err != nil {
 			return fmt.Errorf("store: completion delivery scan: %w", err)
 		}
 		if a == "" || d == "" || seen[key{a, publicationID, d}] {
@@ -432,7 +452,7 @@ func (r *sqliteCompletionTx) InsertCompletionDeliveries(ctx context.Context, job
 		}
 		seen[key{a, publicationID, d}] = true
 		deliveryKey := a + "_" + publicationID + "_" + d
-		if _, err := r.tx.ExecContext(ctx, `INSERT OR IGNORE INTO job_deliveries (delivery_id,artifact_id,publication_id,destination_id,status,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,'PENDING',?,?,?)`, `jbd_comp_`+deliveryKey, a, publicationID, d, deliveryKey, now, now); err != nil {
+		if _, err := r.tx.ExecContext(ctx, `INSERT INTO job_deliveries (delivery_id,artifact_id,publication_id,destination_id,status,max_attempts,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,'PENDING',?,?,?,?) ON CONFLICT(artifact_id,publication_id,destination_id) DO NOTHING`, `jbd_comp_`+deliveryKey, a, publicationID, d, retryBudget, deliveryKey, now, now); err != nil {
 			return fmt.Errorf("store: completion delivery insert: %w", err)
 		}
 	}
