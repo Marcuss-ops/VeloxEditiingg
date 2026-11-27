@@ -11,8 +11,9 @@ legitimately write or read this capability from outside that owner.
 
 | Responsibility | Canonical owner | Forbidden |
 | --- | --- | --- |
-| Job business state (status, runs identity) | `internal/jobs` repository + `LifecycleService` | Direct SQL writes from handlers or background jobs |
-| Job finalisation (`SUCCEEDED` flip — exclusive gate) | `internal/artifacts.Service` orchestration + `internal/artifactsstore.SQLiteArtifactFinalizer` SQL gateway | A second writer that sets `status = 'SUCCEEDED'` outside the service; `maybeTransitionJob → SUCCEEDED` (PR-02 closed it) |
+| Job business state (status, runs identity) | `internal/jobs` domain + `LifecycleService`; `jobs.FinalizationTargetStatus` owns the finalization choice between `DELIVERING` and `SUCCEEDED` | Independent status decisions in handlers/background jobs; transaction adapters must enforce their own task/artifact gates |
+| Verified job finalization | `internal/artifacts.Service` → `artifactsstore.SQLiteArtifactFinalizer`, completion protocol → `completionstore`; both persist verified evidence and the canonical finalization target in their transaction | A second success predicate that bypasses the artifact/task gate or completes while required deliveries remain |
+| `DELIVERING` job roll-up | `store.rollupDeliveringJob` transaction predicate, used by delivery callbacks and stale-delivery reconciliation | Separate callback/reconciler rules for whether terminal delivery rows yield job `SUCCEEDED` or `FAILED` |
 | Asset registry | `internal/assets.ResolverRegistry` | Switch/case trees that pick a resolver by URL scheme |
 | Asset upload / canonicalisation | `internal/assets.Service` | Hand-rolled blob persistence from a job handler |
 | Configuration (env / file) | `internal/config` (loader + validator) | Sparse `os.Getenv` calls in handlers |

@@ -1,6 +1,6 @@
 # P0 — Completion must respect pending required deliveries
 
-**Status:** Pending-delivery defect fixed; writer-ownership follow-up remains
+**Status:** Verified
 **Area:** `DataServer/internal/completion`, `completionstore`, `artifactsstore`,
 `jobs`
 **Source:** Preliminary audit at `4d42269c`; see
@@ -82,15 +82,24 @@ failures separately as required by `AGENTS.md`.
 - Completion now materializes delivery rows before rolling up the job status;
   a job with pending deliveries remains `DELIVERING` and is not given a new
   terminal `completed_at` timestamp.
-- Delivery fan-out only runs after all job tasks have succeeded. Existing
-  delivery reconciliation closes the `DELIVERING` lifecycle after all rows
-  become terminal.
+- Delivery fan-out only runs after all job tasks have succeeded. Callback and
+  stale-delivery recovery now use the same `rollupDeliveringJob` transaction
+  predicate to close the lifecycle after all rows become terminal.
+- `jobs.FinalizationTargetStatus` is the shared decision for whether verified
+  finalization targets `DELIVERING` or `SUCCEEDED`; artifact and task evidence
+  remains guarded by each transaction owner.
 - The acceptance regression asserts `DELIVERING` with a pending delivery and
   checks the plan retry budget reaches `job_deliveries.max_attempts`.
 - Focused verification passed: `go test -count=1 ./internal/completion
   ./internal/deliveries ./internal/artifacts`.
 - `bash scripts/ci/pre-removal-verify.sh` passed: full-module vet, build, and
   tests all returned zero.
-- A single shared job-success owner is still tracked by the lifecycle-writer
-  map ticket; this change resolves premature terminal status with pending
-  deliveries without claiming that broader ownership consolidation is done.
+- The lifecycle-writer inventory is recorded in
+  [`2026-11-27-lifecycle-writer-map.md`](../architecture/2026-11-27-lifecycle-writer-map.md)
+  and `OWNERSHIP.md`; transaction adapters remain separate to preserve atomic
+  artifact/task/completion commits.
+- Additional focused verification passed: `go test -count=1 -run
+  'TestDeliveryPendingReconciler|TestApplyReconciledDelivery|TestMarkDeliverySucceeded|TestDeliveryChildren_' ./internal/store`,
+  `go test -count=1 ./internal/completion`, `go test -count=1
+  ./internal/artifacts ./internal/artifactsstore`, and
+  `go test -count=1 ./internal/jobs`.

@@ -1,6 +1,6 @@
 # P2 — Profile SQL, allocations, rendering, I/O, and concurrency
 
-**Status:** Backlog
+**Status:** Open — production workload profile unavailable
 **Area:** DataServer and worker runtime hot paths
 **Source:** Preliminary audit lists these areas as unmeasured.
 
@@ -49,3 +49,16 @@ Use existing benchmark/profile commands and `docs/performance-gates.md`.
 Repeat measurements enough to report variance and tail behavior. Run the
 focused correctness and race tests relevant to changed code; performance
 numbers alone do not establish correctness.
+
+## Review result
+
+Existing August 2026 benchmark/profile documents provide historical reference
+data, but they do not profile the current November worker and renderer build.
+The current baseline script was attempted in this session, but it produced no
+complete artifact, workload record, or repeatable result. No current
+production-like assets, worker hardware profile, or concurrency run was
+available in the workspace. The OOM report from the earlier run makes another
+unbounded benchmark inappropriate without a bounded workload and explicit
+resource limits. No performance optimization is justified from the available
+evidence; this ticket needs a bounded representative run before it can meet its
+acceptance criteria.

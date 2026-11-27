@@ -11,26 +11,24 @@ package or file.
 | Priority | Ticket | Outcome | Status |
 | --- | --- | --- | --- |
 | P0 | [Canonical publication success validation](2026-11-27-audit-p0-publication-success-validation.md) | Every path accepting `PUBLISHED` enforces the same evidence contract. | Verified |
-| P0 | [Completion must respect pending deliveries](2026-11-27-audit-p0-job-success-with-pending-deliveries.md) | A job with required delivery work is not exposed as terminal success. | Pending-delivery defect fixed; writer ownership remains |
+| P0 | [Completion must respect pending deliveries](2026-11-27-audit-p0-job-success-with-pending-deliveries.md) | A job with required delivery work is not exposed as terminal success. | Verified |
 | P1 | [Unify completion delivery creation policy](2026-11-27-audit-p1-delivery-creation-policy.md) | Both creation paths agree on identity, retry budget, and conflict handling. | Verified |
-| P1 | [Map lifecycle state writers](2026-11-27-audit-p1-lifecycle-writer-map.md) | Each state has one documented owner and authorized transition path. | Backlog |
-| P1 | [Type runtime finalizer contracts](2026-11-27-audit-p1-runtime-finalizer-types.md) | Required dependencies and internal binding data are explicit and typed. | Partial; binding schema remains |
-| P1 | [Review store package cohesion](2026-11-27-audit-p1-store-package-cohesion.md) | Store ownership and internal boundaries are evidence-based and clearer. | Backlog |
-| P2 | [Review worker package cohesion](2026-11-27-audit-p2-worker-package-cohesion.md) | Worker package responsibilities and candidate boundaries are documented. | Backlog |
-| P2 | [Measure complexity and change coupling](2026-11-27-audit-p2-change-coupling-metrics.md) | Refactor priorities use reproducible code and history metrics. | Backlog |
-| P2 | [Verify and remove unreachable legacy code](2026-11-27-audit-p2-dead-code.md) | Only proven unreachable code is removed under repository rules. | Backlog |
-| P2 | [Profile persistence and runtime hot paths](2026-11-27-audit-p2-performance-profiling.md) | Optimizations target measured bottlenecks with repeatable evidence. | Backlog |
-| P3 | [Consolidate residual duplication and needless abstractions](2026-11-27-audit-p3-simplification.md) | Confirmed duplication is reduced without adding abstraction layers. | Backlog |
+| P1 | [Map lifecycle state writers](2026-11-27-audit-p1-lifecycle-writer-map.md) | Each state has one documented owner and authorized transition path. | Verified inventory; no duplicate decision remains in reviewed lifecycle paths |
+| P1 | [Type runtime finalizer contracts](2026-11-27-audit-p1-runtime-finalizer-types.md) | Required dependencies and internal binding data are explicit and typed. | Verified at decision boundary; persisted wire map retained |
+| P1 | [Review store package cohesion](2026-11-27-audit-p1-store-package-cohesion.md) | Store ownership and internal boundaries are evidence-based and clearer. | Verified; retain current boundary |
+| P2 | [Review worker package cohesion](2026-11-27-audit-p2-worker-package-cohesion.md) | Worker package responsibilities and candidate boundaries are documented. | Verified; retain current boundary |
+| P2 | [Measure complexity and change coupling](2026-11-27-audit-p2-change-coupling-metrics.md) | Refactor priorities use reproducible code and history metrics. | Verified; report in `docs/metrics/2026-11-27-architecture-audit-metrics.md` |
+| P2 | [Verify and remove unreachable legacy code](2026-11-27-audit-p2-dead-code.md) | Only proven unreachable code is removed under repository rules. | Open; no candidate has complete indirect-call evidence |
+| P2 | [Profile persistence and runtime hot paths](2026-11-27-audit-p2-performance-profiling.md) | Optimizations target measured bottlenecks with repeatable evidence. | Open; current production-like workload profile unavailable |
+| P3 | [Consolidate residual duplication and needless abstractions](2026-11-27-audit-p3-simplification.md) | Confirmed duplication is reduced without adding abstraction layers. | Verified for confirmed lifecycle/runtime findings |
 
 ## Suggested sequence
 
-Resolve the P0 lifecycle contracts first. Then map state writers before
-changing persistence ownership. Delivery policy and runtime typing can proceed
-as separate, bounded changes after their contracts are explicit. Package
-cohesion, history metrics, dead-code review, and profiling are evidence-gathering
-work; use their results to select small implementation tickets. The P3 cleanup
-is intentionally last so it removes abstractions only after the behavior and
-ownership rules are stable.
+The reviewed P0/P1 lifecycle and ownership tickets are verified. Package
+reviews and metrics support retaining the current store and worker boundaries.
+Dead-code certification and current production profiling remain open because
+the available evidence cannot prove safe removals or provide a representative
+current workload. Do not mark either complete until those inputs exist.
 
 ## Repository constraints
 

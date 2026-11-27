@@ -1,6 +1,6 @@
 # P3 — Consolidate confirmed duplication and remove needless abstractions
 
-**Status:** Backlog
+**Status:** Verified for confirmed lifecycle/runtime findings
 **Area:** Repository-wide, after P0/P1 contracts and evidence work
 **Source:** Preliminary audit recommends eliminating abstractions with no
 useful role after invariants are consolidated.
@@ -49,3 +49,18 @@ not permission to deduplicate code mechanically.
 Run the focused tests for the affected contract and the repository's existing
 refactor metrics against a known base ref. If an exported/cross-package helper
 is retired, follow ADR 0008 and run `bash scripts/ci/pre-removal-verify.sh`.
+
+## Evidence
+
+- The duplicate publication acceptance predicate now has one owner, and the
+  delivery callback/reconciliation paths share one transaction roll-up.
+- `jobs.FinalizationTargetStatus` centralizes the finalization choice without
+  moving transaction boundaries. Runtime source binding comparisons use a
+  typed projection while the wire map remains intact.
+- The refactor metrics and their limits are recorded in
+  [`2026-11-27-architecture-audit-metrics.md`](../metrics/2026-11-27-architecture-audit-metrics.md).
+  The report measures the earlier committed lifecycle fixes; no claim is made
+  that this small follow-up reduced repository-wide LOC or complexity.
+- Focused tests passed for the affected jobs, delivery roll-up, completion,
+  artifact, and runtime pipeline paths. No package split or speculative
+  abstraction was introduced.

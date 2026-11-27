@@ -1,6 +1,6 @@
 # P2 — Verify and remove unreachable legacy code
 
-**Status:** Backlog
+**Status:** Open — no safe removal certified
 **Area:** Repository-wide, prioritized by production call paths
 **Source:** Preliminary audit lists dead code and legacy paths as unverified.
 
@@ -49,3 +49,14 @@ Use `rg`, `go list`, build tags, route/command registration inspection, and
 runtime telemetry where available. Run focused tests for each removal and the
 mandatory full DataServer gate for qualifying removal commits. Record any
 external-use uncertainty instead of claiming dead code prematurely.
+
+## Review result
+
+No production symbol was removed by this audit. The available dead-code
+candidate output was not sufficient to prove unreachability across bootstrap,
+reflection, generated registration, scripts, and external callers; a direct
+reference check confirmed at least one apparent candidate,
+`SQLiteStore.observeDBTransaction`, is live. Under `AGENTS.md` §2 and ADR 0008,
+uncertain candidates must be retained rather than turning an analyzer warning
+into an unsafe removal. A candidate-by-candidate inventory with complete
+indirect-call evidence remains necessary before this ticket can close.

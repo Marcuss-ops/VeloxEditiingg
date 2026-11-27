@@ -1,6 +1,6 @@
 # P2 — Review worker package cohesion and responsibility boundaries
 
-**Status:** Backlog
+**Status:** Verified — retain current boundary
 **Area:** `RemoteCodex/native/worker-agent-go/internal/worker`
 **Source:** Preliminary audit reported 95 non-test source files; count alone
 does not establish an architectural defect.
@@ -48,3 +48,12 @@ Use `go list` and the existing refactor metrics. For any code change, run the
 worker module's focused tests, race checks where concurrency behavior changes,
 and relevant repository CI guards. Do not introduce a new package-analysis
 framework for this ticket.
+
+## Evidence
+
+The reproducible count, lifecycle/resource ownership map, one-way import
+direction, high-frequency co-change examples, and retain-as-is decision are in
+[`2026-11-27-package-cohesion-review.md`](../architecture/2026-11-27-package-cohesion-review.md).
+Worker session orchestration shares cancellation, lease, active-task, and
+result-reporting state; no independent lifecycle boundary was demonstrated
+that would justify a package split.

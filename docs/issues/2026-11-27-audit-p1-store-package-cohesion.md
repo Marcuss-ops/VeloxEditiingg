@@ -1,6 +1,6 @@
 # P1 — Review `internal/store` package cohesion and ownership
 
-**Status:** Backlog
+**Status:** Verified — retain current boundary
 **Area:** `DataServer/internal/store`
 **Source:** Preliminary audit reported 156 non-test source files; this is a
 hotspot for inspection, not proof of poor cohesion.
@@ -58,3 +58,13 @@ risk. First identify actual ownership and coupling.
 Use existing `go list`/`rg` tooling and `scripts/metrics/refactor_metrics.py`
 where useful. Do not add a new analyzer for the survey. For implementation,
 run focused store tests and the module gate required by the change scope.
+
+## Evidence
+
+The reproducible count, responsibility groups, import direction, transaction
+ownership, compatibility caveat, and sampled change-coupling rationale are in
+[`2026-11-27-package-cohesion-review.md`](../architecture/2026-11-27-package-cohesion-review.md).
+The 156-file package remains the SQLite transaction/composition boundary;
+artifact, completion, and delivery leaf stores already own their bounded
+contracts. Moving cross-entity SQL without moving its atomic transaction
+would add coupling. No file-count-driven split is justified.

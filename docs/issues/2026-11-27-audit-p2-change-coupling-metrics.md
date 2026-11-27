@@ -1,6 +1,6 @@
 # P2 — Measure complexity, churn, and change coupling for refactor priorities
 
-**Status:** Backlog
+**Status:** Verified
 **Area:** Repository-wide, starting with audit hotspots
 **Source:** Preliminary audit noted that priorities were not ranked using
 historical change frequency.
@@ -49,3 +49,12 @@ Run the documented `make refactor-metrics` workflow with explicit refs and
 inspect the generated JSON/Markdown. Verify historical scripts against a small
 sample of commits before relying on conclusions. No production tests are
 needed for metrics-only work.
+
+## Evidence
+
+The exact analyzer command, base/head refs, metric definitions, history
+filter, change-coupling tables, sampled commits, and interpretation are in
+[`2026-11-27-architecture-audit-metrics.md`](../metrics/2026-11-27-architecture-audit-metrics.md).
+The data supports retaining the store and worker boundaries and prioritizing
+the confirmed lifecycle correctness work; counts alone do not justify moving
+files.

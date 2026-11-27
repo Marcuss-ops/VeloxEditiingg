@@ -1,6 +1,6 @@
 # P1 — Map lifecycle state writers and transition ownership
 
-**Status:** Backlog
+**Status:** Verified inventory; no separate duplicate writer confirmed
 **Area:** Jobs, tasks, attempts, artifacts, publications, deliveries
 **Source:** Preliminary audit at `4d42269c`; repository ownership rules in
 `docs/architecture/OWNERSHIP.md` and state contracts in domain packages.
@@ -59,3 +59,19 @@ inventory useful for review; do not paste an unbounded grep dump.
 Review the inventory against `rg` results for all status columns and state
 constants in the relevant packages. For code changes, run focused lifecycle
 tests; any helper removal follows `AGENTS.md`'s full-module gate.
+
+## Evidence and limits
+
+- The ownership map is in
+  [`2026-11-27-lifecycle-writer-map.md`](../architecture/2026-11-27-lifecycle-writer-map.md)
+  and the canonical job rows in `OWNERSHIP.md`.
+- The review identifies transaction adapters that independently persist
+  cross-entity state but share explicit domain decisions and evidence gates;
+  it does not claim one SQL statement or one transaction owner for every
+  entity.
+- The repeatable `rg` review command and its dynamic-SQL/test limitations are
+  recorded in the map. No additional independent job-success decision was
+  found after consolidating finalization target selection and the
+  `DELIVERING` roll-up.
+- Focused lifecycle verification passed for `internal/jobs`, `internal/store`,
+  `internal/completion`, `internal/artifacts`, and `internal/artifactsstore`.
