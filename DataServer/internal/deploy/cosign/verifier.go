@@ -34,8 +34,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-
-	"velox-server/internal/config"
 )
 
 // ErrSkippedByOverride is returned when VELOX_SKIP_COSIGN_VERIFY=1
@@ -108,15 +106,6 @@ type ExternalCosignVerifier struct {
 // a server-side deadline.
 func NewExternalCosignVerifier() *ExternalCosignVerifier {
 	return &ExternalCosignVerifier{BinaryPath: "", VerifyTimeout: 30 * time.Second}
-}
-
-// NewExternalCosignVerifierFromConfig builds the verifier from the typed
-// bootstrap process settings.
-func NewExternalCosignVerifierFromConfig(cfg config.RuntimeConfig) *ExternalCosignVerifier {
-	verifier := NewExternalCosignVerifier()
-	verifier.SkipVerify = cfg.CosignSkipVerify
-	verifier.OverrideReason = cfg.CosignOverrideReason
-	return verifier
 }
 
 // Verify shells to `cosign verify <ref>` and returns nil on a 0
