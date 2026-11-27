@@ -63,6 +63,12 @@ type RuntimeSourceCertificateEnricher interface {
 	EnrichPlanWithSourceCertificates(context.Context, string, []map[string]interface{}) (string, error)
 }
 
+type RuntimeFinalizationAssetPlanner interface {
+	RuntimeStockWindowTaskPlanner
+	RuntimeSourceCertificationTaskPlanner
+	RuntimeSourceCertificateEnricher
+}
+
 type RuntimeTaskGraphExpander interface {
 	Extend(context.Context, string, []taskgraph.ExpandedTask, []string, map[string]interface{}) ([]taskgraph.Task, error)
 }
@@ -80,7 +86,7 @@ type RuntimeFinalizationProcessor struct {
 	failures  taskgraph.RuntimeFinalizationFailures
 	expander  RuntimeTaskGraphExpander
 	evidence  taskattempts.SuccessfulSegmentTimingReader
-	assets    interface{}
+	assets    RuntimeFinalizationAssetPlanner
 	notifier  RuntimeTaskUpdateNotifier
 }
 
@@ -89,7 +95,7 @@ type RuntimeFinalizationProcessor struct {
 // FINALIZE must never be accepted into an in-memory-only/noop path.
 func NewRuntimeFinalizationProcessor(
 	repository taskgraph.Repository,
-	assets RuntimeStockWindowTaskPlanner,
+	assets RuntimeFinalizationAssetPlanner,
 	notifier RuntimeTaskUpdateNotifier,
 ) (*RuntimeFinalizationProcessor, error) {
 	if isNilInterface(repository) {
@@ -113,9 +119,6 @@ func NewRuntimeFinalizationProcessor(
 	}
 	if isNilInterface(assets) {
 		return nil, errors.New("runtime finalizer: worker stock-window planner is not configured")
-	}
-	if planner, ok := interface{}(assets).(RuntimeSourceCertificationTaskPlanner); !ok || isNilInterface(planner) {
-		return nil, errors.New("runtime finalizer: immutable source certification planner is not configured")
 	}
 	if isNilInterface(notifier) {
 		return nil, errors.New("runtime finalizer: task update notifier is not configured")
@@ -250,10 +253,8 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 		}
 		return p.commitFinalization(ctx, candidate, patch)
 	}
-	if enricher, ok := p.assets.(interface {
-		EnrichPlanWithSourceCertificates(context.Context, string, []map[string]interface{}) (string, error)
-	}); ok && strings.TrimSpace(planJSON) != "" {
-		enriched, enrichErr := enricher.EnrichPlanWithSourceCertificates(ctx, planJSON, bindings)
+	if strings.TrimSpace(planJSON) != "" {
+		enriched, enrichErr := p.assets.EnrichPlanWithSourceCertificates(ctx, planJSON, bindings)
 		if enrichErr != nil {
 			return p.fail(ctx, candidate, fmt.Errorf("resolve source certificates: %w", enrichErr))
 		}
@@ -283,8 +284,8 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 		req.RuntimePayload["runtime_assets"] = bindings
 		req.RuntimePayload["runtime_stock_pool_snapshot"] = snapshot
 	}
-	if planner, ok := p.assets.(RuntimeSourceCertificationTaskPlanner); ok && strings.TrimSpace(planJSON) != "" {
-		certifications, planErr := planner.PlanVideoSourceCertificationTasks(planJSON, bindings)
+	if strings.TrimSpace(planJSON) != "" {
+		certifications, planErr := p.assets.PlanVideoSourceCertificationTasks(planJSON, bindings)
 		if planErr != nil {
 			return p.fail(ctx, candidate, fmt.Errorf("plan immutable video source certification: %w", planErr))
 		}
@@ -422,8 +423,7 @@ func runtimeBindingsForSource(bindings []map[string]interface{}, source contract
 }
 
 func (p *RuntimeFinalizationProcessor) completeWorkerSourceCertifications(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, planJSON string, req FinalizeJobRequest, current map[string]interface{}, bindings []map[string]interface{}, rawTasks interface{}) (map[string]interface{}, error) {
-	planner, ok := p.assets.(RuntimeSourceCertificationTaskPlanner)
-	if !ok || isNilInterface(planner) || isNilInterface(p.evidence) {
+	if isNilInterface(p.assets) || isNilInterface(p.evidence) {
 		return nil, errors.New("runtime finalizer: source certification recovery is not configured")
 	}
 	encoded, err := json.Marshal(rawTasks)
@@ -434,7 +434,7 @@ func (p *RuntimeFinalizationProcessor) completeWorkerSourceCertifications(ctx co
 	if err := json.Unmarshal(encoded, &identityToTask); err != nil || len(identityToTask) == 0 {
 		return nil, errors.New("runtime finalizer: source certification task map is invalid")
 	}
-	tasks, err := planner.PlanVideoSourceCertificationTasks(planJSON, bindings)
+	tasks, err := p.assets.PlanVideoSourceCertificationTasks(planJSON, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("rebuild source certification plan: %w", err)
 	}
@@ -483,15 +483,11 @@ func (p *RuntimeFinalizationProcessor) completeWorkerSourceCertifications(ctx co
 	if err != nil {
 		return nil, err
 	}
-	enricher, ok := p.assets.(RuntimeSourceCertificateEnricher)
-	if !ok || isNilInterface(enricher) {
-		return nil, errors.New("runtime finalizer: source certificate plan enricher is not configured")
-	}
-	enriched, err := enricher.EnrichPlanWithSourceCertificates(ctx, planJSON, certifiedBindings)
+	enriched, err := p.assets.EnrichPlanWithSourceCertificates(ctx, planJSON, certifiedBindings)
 	if err != nil {
 		return nil, fmt.Errorf("runtime finalizer: project certified sources into plan: %w", err)
 	}
-	remaining, err := planner.PlanVideoSourceCertificationTasks(enriched, certifiedBindings)
+	remaining, err := p.assets.PlanVideoSourceCertificationTasks(enriched, certifiedBindings)
 	if err != nil || len(remaining) != 0 {
 		if err != nil {
 			return nil, fmt.Errorf("runtime finalizer: validate certified plan: %w", err)
@@ -619,7 +615,7 @@ func buildRuntimeFinalizePatch(
 	planJSON string,
 	req FinalizeJobRequest,
 	current map[string]interface{},
-	assets interface{},
+	assets RuntimeFinalizationAssetPlanner,
 ) (map[string]interface{}, error) {
 	bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 	var err error
@@ -645,11 +641,10 @@ func buildRuntimeFinalizePatch(
 	}
 	preparedStockPlan := compiledPlanHasDriveStock(planJSON, finalRuntimeAssets)
 	if preparedStockPlan {
-		planner, ok := assets.(RuntimeStockWindowTaskPlanner)
-		if !ok || isNilInterface(planner) {
+		if isNilInterface(assets) {
 			return nil, errors.New("runtime finalizer: worker stock-window planner is unavailable; refusing Master-side source download")
 		}
-		pending, planErr := planner.PlanDriveStockWindowTasks(planJSON, bindings)
+		pending, planErr := assets.PlanDriveStockWindowTasks(planJSON, bindings)
 		if planErr != nil {
 			return nil, fmt.Errorf("runtime finalizer: check worker stock-window plan: %w", planErr)
 		}

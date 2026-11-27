@@ -130,6 +130,10 @@ func (runtimeFinalizeTestPreparer) PlanVideoSourceCertificationTasks(string, []m
 	return nil, nil
 }
 
+func (runtimeFinalizeTestPreparer) EnrichPlanWithSourceCertificates(_ context.Context, plan string, _ []map[string]interface{}) (string, error) {
+	return plan, nil
+}
+
 type runtimeFinalizeTestNotifier struct{ jobs []string }
 
 func (n *runtimeFinalizeTestNotifier) NotifyTaskUpdated(_ context.Context, jobID string) {
