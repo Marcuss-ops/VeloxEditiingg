@@ -52,6 +52,59 @@ does not claim the full `gervais-final-v1` matrix.
 
 Both final artifacts have SHA-256 `18d8fce639d11aeaf3c6ce23c2630607c69161c11626048a3b8a591ee5aa4e7d`. The cold certificate task completed in 817 ms and recorded the exact source SHA, 2,572,743-byte size, 192 decoded frames, H.264 High profile, 24 fps, verified zero timestamp origin, and authenticated 1 MiB block hashes. The warm job reused the verified source cache. Both assembly task records show `ffmpeg_encode_ms=0`; the source-certificate task emitted no media artifact. The cold job's 51.66 s includes about 48 seconds waiting for the worker's readiness/lease, and must not be read as render time. The available production timing record does not expose OS-level process-launch counts, so process counts are not claimed here.
 
+## Full-length production copy-only cold/warm comparison — 2026-11-27
+
+The Master (`51.91.11.36`) created both jobs through the canonical V2
+preflight/finalize path, using the saved production request and its 328 runtime
+asset bindings. This is the 46-clip compilation material prepared by remote
+77, with its finalized audio and stock pool; no audio or subtitle generation
+was added to Velox. Both attempts ran on `host_57_129_132_133`, worker v1.4.55,
+image digest
+`ghcr.io/marcuss-ops/velox-worker@sha256:3f6f4ed7cb7bd4d319101a6b453f85fad5d3600e80696da6b773953a3804c854`.
+The producer timeline SHA-256 is identical in both jobs:
+`175ed7dbe8556c8c3083ac3839d3d44cadca0b099395a451e73e01d2a9a61a82`;
+duration is 2,384.687 s (39:44.687). Each job emitted one assembly task and
+194/194 packet-copy segments, with zero encoded frames.
+
+| Measurement | Pool-cold attempt | Warm attempt |
+|---|---:|---:|
+| Job | `job_8a8f3abe3da63117` | `job_ffeeaac321d14712` |
+| Result | SUCCEEDED | SUCCEEDED |
+| Master job end-to-end | 47.20 s | 22.67 s |
+| Worker task wall | 41.365 s | 17.376 s |
+| Worker render critical path | 2.726 s | 2.568 s |
+| Cache lookups / unique assets requested | 703 / 233 | 703 / 233 |
+| Cache hits / misses | 563 / 140 | 703 / 0 |
+| Download count / bytes | 140 / 158,347,051 B | 0 / 0 B |
+| Hash verification phase | 626 ms | cache hits verified; no separate aggregate phase recorded |
+| Logical bytes read from worker cache | 2,738,202,910 B | 2,896,549,961 B |
+| Worker cgroup disk read / write | 4,096 / 212,881,408 B | 8,192 / 45,629,440 B |
+| Worker cgroup network RX / TX | 164,388,236 / 54,341 B | 3,598,722 / 43,883 B |
+| Packet-copy segments / all segments | 194 / 194 | 194 / 194 |
+| Output media duration | 2,384.71 s | 2,384.71 s |
+| Output size / SHA-256 | 445,406,637 B / `ccc2db94a15f761ddc786bec682dba1078f515783bb62ee89e5d1b241b27d783` | 446,125,686 B / `0ff5f90b1eba6dea7981cbf99c03ecb444b00be4e821e581343adda14b0e837f` |
+
+“Pool-cold” is deliberately narrower than a fully cold worker cache. The
+supported `velox-cache-evict` command removed the selected stock-pool entries,
+but rejects SHA-namespaced asset keys; some fixed assets therefore remained
+warm. The measured attempt had 140 misses and 563 hits, not a zero-hit cold
+run. The warm attempt had 703 hits and no misses. The two realized plan hashes
+and output hashes differ because stock-pool selection is deterministically
+seeded by job ID; the common producer timeline, duration, pool, worker, and
+assembly shape make this a comparable operational cold/warm sample, but not a
+bit-identical input-media replay.
+
+The attempt report attributes 158.3 MB of transfer to 140 misses and provides
+separate worker cache, cgroup disk, network, render, and packet-mux metrics.
+Neither the persisted Master telemetry nor the attempt report records HTTP
+status or `Content-Range` per source transfer. Therefore these runs do not
+establish authenticated-range versus full-download behavior; no range claim
+is made. That comparison requires per-transfer range/status evidence for the
+same immutable sources. The results do establish that the full-length copy
+assembly completed successfully without re-encoding, and resolve the earlier
+`manifest binding is not exact` rejection after the Master-side stock-pool
+certification fix.
+
 ## Initial persisted legacy TaskGraph audit (before final terminalization)
 
 Read-only report generated from `/opt/velox/current/.velox/data/velox.db` with `scripts/ops/audit-legacy-video-tasks.py` on 2026-11-26:
