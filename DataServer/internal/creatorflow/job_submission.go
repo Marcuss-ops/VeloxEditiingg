@@ -64,7 +64,9 @@ const (
 	// IntakeSourceScriptGenerate is POST /api/v1/script/generate-with-images
 	// and POST /api/v1/script/generate (script ingress, direct enqueue).
 	IntakeSourceScriptGenerate = "script_generate"
-	// IntakeSourceScriptKind is POST /api/v1/script/jobs/:kind.
+	// IntakeSourceScriptKind is a reserved legacy metric label. The former
+	// POST /api/v1/script/jobs/:kind route is not registered; retain the label
+	// so historical intake-source series remain part of the stable vocabulary.
 	IntakeSourceScriptKind = "script_kind"
 	// IntakeSourcePipelineRun is POST /api/v1/pipeline-runs (durable run).
 	IntakeSourcePipelineRun = "pipeline_run"

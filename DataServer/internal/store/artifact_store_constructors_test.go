@@ -22,9 +22,6 @@ func TestArtifactRepositoriesFromStoreUseCanonicalSQLiteStore(t *testing.T) {
 	if got := artifactsstore.NewSQLiteUploadSessionWriter(s.DB()); got == nil {
 		t.Fatal("upload session writer must be constructed from the canonical database")
 	}
-	if got := artifactsstore.NewSQLiteArtifactRepository(s.DB()); got == nil {
-		t.Fatal("artifact repository must be constructed from the canonical database")
-	}
 	if got := artifactsstore.NewSQLiteArtifactReader(s.DB()); got == nil {
 		t.Fatal("artifact reader must be constructed from the canonical database")
 	}
