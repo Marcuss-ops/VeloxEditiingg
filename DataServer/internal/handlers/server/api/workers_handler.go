@@ -19,9 +19,6 @@
 //	workers_dto.go                — DTO shapes + canonical enum constants.
 //	workers_mapper.go             — conversion / sanitization / parsing
 //	                                helpers (security-critical surface).
-//	workers_handler_current_task.go — LoadCurrentTask adapter (separate
-//	                                concern; not part of the dto/mapper
-//	                                split).
 //	api_v1.go                     — AdminAuthMiddleware + public route
 //	                                allow-list.
 package api

@@ -177,19 +177,6 @@ type ExecutorSummary struct {
 	ResourceClass string `json:"resource_class,omitempty"`
 }
 
-// TaskSummary is the per-worker current_task projection. Empty when
-// the worker has no RUNNING TaskAttempt. Race-tolerant: LoadCurrentTask
-// is called from the handler read path with row-level locking via the
-// task_attempts table primary index, so concurrent TaskAttempt updates
-// surface as either (RUNNING, task X) or (no row) for at most one tick.
-type TaskSummary struct {
-	TaskID    string `json:"task_id"`
-	JobID     string `json:"job_id"`
-	Executor  string `json:"executor,omitempty"` // e.g. "scene.composite.v1@1"
-	Status    string `json:"status,omitempty"`   // always "RUNNING" today
-	StartedAt string `json:"started_at,omitempty"`
-}
-
 // Filter canonical status enum (case-insensitive accepted by ParseFilters,
 // canonical case emitted). Mirrors the canonical ConnectionStatus
 // taxonomy so the operator-facing list endpoint and the diagnostic
