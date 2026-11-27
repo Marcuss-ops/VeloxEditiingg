@@ -9,9 +9,3 @@ import "context"
 func NormalizeSceneVideoPayload(payload map[string]interface{}) (map[string]interface{}, error) {
 	return normalizeSceneVideoPayloadContext(context.Background(), payload)
 }
-
-// NormalizeSceneVideoPayloadContext is the context-aware form used when
-// strict render-manifest compilation must observe request cancellation.
-func NormalizeSceneVideoPayloadContext(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
-	return normalizeSceneVideoPayloadContext(ctx, payload)
-}
