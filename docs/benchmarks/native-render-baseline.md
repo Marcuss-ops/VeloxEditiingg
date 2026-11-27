@@ -105,6 +105,12 @@ baseline.
 scripts/benchmarks/native-render-baseline.sh
 ```
 
+The current copy-only fixture uses `scale_mode=cover`, matching the strict
+runtime contract. The report includes user/system CPU, peak RSS, and output
+size. A five-run, four-segment local reference is recorded in
+[architecture-audit-2026-11-27.md](architecture-audit-2026-11-27.md); it is
+synthetic and should not be compared to a production cold/warm run.
+
 A larger copy-only workload:
 
 ```bash

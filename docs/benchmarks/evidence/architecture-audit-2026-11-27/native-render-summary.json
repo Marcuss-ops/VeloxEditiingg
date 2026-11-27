@@ -1,0 +1,121 @@
+{
+  "workload": {
+    "runs_requested": 5,
+    "runs_completed": 5,
+    "segments": 4,
+    "segment_duration_seconds": 1.0,
+    "canvas": "640x360@30",
+    "source_video_bytes": 3050,
+    "source_audio_bytes": 66007
+  },
+  "measurement_notes": {
+    "engine_spawn": "direct velox_video_engine execve under strace; Go RenderClient ProcessStartMs requires worker telemetry",
+    "engine_ffprobe": "ffprobe execve children during C++ render",
+    "final_validation_ffprobe": "one independent ffprobe after render, retained as quality barrier",
+    "asset_copy_bytes": "disk.copy bytes emitted by file_utils::copyFile for local/cache asset staging",
+    "estimated_final_copy_bytes": "size of the output from the explicit final fs::copy_file; estimate, not syscall instrumentation",
+    "sidecar_temp_bytes": "C++ temp_bytes counter: generated segment/concat/final-mux files, not input staging copies"
+  },
+  "metrics": {
+    "total_ms": {
+      "mean": 92.0,
+      "median": 90.0,
+      "min": 90.0,
+      "max": 100.0
+    },
+    "cpu_user_ms": {
+      "mean": 30.0,
+      "median": 30.0,
+      "min": 30.0,
+      "max": 30.0
+    },
+    "cpu_sys_ms": {
+      "mean": 56.0,
+      "median": 50.0,
+      "min": 50.0,
+      "max": 70.0
+    },
+    "max_rss_kb": {
+      "mean": 44173.6,
+      "median": 44172.0,
+      "min": 43916.0,
+      "max": 44392.0
+    },
+    "engine_execs": {
+      "mean": 1.0,
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "process_forks": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "engine_ffprobe_execs": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "engine_ffmpeg_execs": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "asset_copy_ops": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "asset_copy_bytes": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "estimated_final_copy_bytes": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "sidecar_temp_bytes": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "output_bytes": {
+      "mean": 76174.0,
+      "median": 76174.0,
+      "min": 76174.0,
+      "max": 76174.0
+    },
+    "frames_decoded": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "frames_encoded": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "encode_passes": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "final_validation_ffprobe": {
+      "per_render": 1,
+      "total": 5
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # P2 — Profile SQL, allocations, rendering, I/O, and concurrency
 
-**Status:** Open — production workload profile unavailable
+**Status:** Verified — no optimization justified by current evidence
 **Area:** DataServer and worker runtime hot paths
 **Source:** Preliminary audit lists these areas as unmeasured.
 
@@ -52,13 +52,16 @@ numbers alone do not establish correctness.
 
 ## Review result
 
-Existing August 2026 benchmark/profile documents provide historical reference
-data, but they do not profile the current November worker and renderer build.
-The current baseline script was attempted in this session, but it produced no
-complete artifact, workload record, or repeatable result. No current
-production-like assets, worker hardware profile, or concurrency run was
-available in the workspace. The OOM report from the earlier run makes another
-unbounded benchmark inappropriate without a bounded workload and explicit
-resource limits. No performance optimization is justified from the available
-evidence; this ticket needs a bounded representative run before it can meet its
-acceptance criteria.
+The bounded local five-run copy-only baseline, repeated SQLite pool benchmark,
+and current production cold/warm evidence are recorded in
+[architecture-audit-2026-11-27.md](../benchmarks/architecture-audit-2026-11-27.md).
+The evidence identifies worker readiness/lease wait and cold source transfer
+as the dominant observed delays; it does not support speculative database,
+allocation, or renderer changes. Copy-only measurements remain separate from
+decode/encode rendering and the full production matrix in #40.
+
+The benchmark harness now generates a valid current copy-only fixture and
+records CPU, peak RSS, and output bytes. The bounded run used the existing
+engine binary and completed five times. No SQL index or pool-size change was
+made; the small synthetic SQLite pool results overlap and are not production
+query-plan evidence.

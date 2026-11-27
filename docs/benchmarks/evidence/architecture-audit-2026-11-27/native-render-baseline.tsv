@@ -1,0 +1,6 @@
+run	total_ms	cpu_user_ms	cpu_sys_ms	max_rss_kb	engine_execs	process_forks	engine_ffprobe_execs	engine_ffmpeg_execs	final_validation_ffprobe	asset_copy_ops	asset_copy_bytes	estimated_final_copy_ops	estimated_final_copy_bytes	sidecar_temp_bytes	output_bytes	frames_decoded	frames_encoded	encode_passes	concat_mode
+1	90.000	30.000	60.000	44172	1	0	0	0	1	0	0	0	0	0	76174	0	0	0	packet_copy
+2	90.000	30.000	50.000	44380	1	0	0	0	1	0	0	0	0	0	76174	0	0	0	packet_copy
+3	100.000	30.000	70.000	43916	1	0	0	0	1	0	0	0	0	0	76174	0	0	0	packet_copy
+4	90.000	30.000	50.000	44008	1	0	0	0	1	0	0	0	0	0	76174	0	0	0	packet_copy
+5	90.000	30.000	50.000	44392	1	0	0	0	1	0	0	0	0	0	76174	0	0	0	packet_copy

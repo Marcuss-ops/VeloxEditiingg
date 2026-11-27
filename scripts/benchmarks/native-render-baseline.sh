@@ -133,7 +133,7 @@ plan = {
             "source": {"type": "video", "url": video_path},
             "duration_seconds": 1.0,
             "include_audio": False,
-            "transform": {"scale_mode": "stretch", "slow_zoom": False},
+            "transform": {"scale_mode": "cover", "slow_zoom": False},
         }
         for _ in range(segment_count)
     ],
@@ -151,7 +151,7 @@ pathlib.Path(plan_path).write_text(json.dumps(plan, indent=2), encoding="utf-8")
 PY
 
 REPORT="$OUTPUT_DIR/baseline.tsv"
-printf 'run\ttotal_ms\tengine_execs\tprocess_forks\tengine_ffprobe_execs\tengine_ffmpeg_execs\tfinal_validation_ffprobe\tasset_copy_ops\tasset_copy_bytes\testimated_final_copy_ops\testimated_final_copy_bytes\tsidecar_temp_bytes\toutput_bytes\tframes_decoded\tframes_encoded\tencode_passes\tconcat_mode\n' >"$REPORT"
+printf 'run\ttotal_ms\tcpu_user_ms\tcpu_sys_ms\tmax_rss_kb\tengine_execs\tprocess_forks\tengine_ffprobe_execs\tengine_ffmpeg_execs\tfinal_validation_ffprobe\tasset_copy_ops\tasset_copy_bytes\testimated_final_copy_ops\testimated_final_copy_bytes\tsidecar_temp_bytes\toutput_bytes\tframes_decoded\tframes_encoded\tencode_passes\tconcat_mode\n' >"$REPORT"
 
 render_failures=0
 for run in $(seq 1 "$RUNS"); do
@@ -224,13 +224,16 @@ PY
   # compatibility, but assert that no full final copy is performed.
   estimated_final_copy_ops=0
   estimated_final_copy_bytes=0
-  total_ms="$(awk '{printf "%.3f", $1 * 1000}' "$TIMEFILE")"
+  read -r elapsed_s cpu_user_s cpu_sys_s max_rss_kb <"$TIMEFILE"
+  total_ms="$(awk -v value="$elapsed_s" 'BEGIN {printf "%.3f", value * 1000}')"
+  cpu_user_ms="$(awk -v value="$cpu_user_s" 'BEGIN {printf "%.3f", value * 1000}')"
+  cpu_sys_ms="$(awk -v value="$cpu_sys_s" 'BEGIN {printf "%.3f", value * 1000}')"
 
   # One independent final ffprobe is deliberately retained as the quality
   # barrier. It is not included in engine_ffprobe_execs because it runs after
   # strace; final_validation_ffprobe=1 makes that distinction explicit.
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$run" "$total_ms" "$engine_execs" "$process_forks" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$run" "$total_ms" "$cpu_user_ms" "$cpu_sys_ms" "$max_rss_kb" "$engine_execs" "$process_forks" \
     "$engine_ffprobe_execs" "$engine_ffmpeg_execs" "1" "$asset_copy_ops" \
     "$asset_copy_bytes" "$estimated_final_copy_ops" "$estimated_final_copy_bytes" "$sidecar_temp_bytes" \
     "$(stat -c '%s' "$OUTPUT")" "$frames_decoded" "$frames_encoded" \
@@ -238,7 +241,7 @@ PY
 
   printf '[native-render-baseline] run=%s total_ms=%s engine_ffprobe=%s engine_ffmpeg=%s asset_copy_bytes=%s output_bytes=%s\n' \
     "$run" "$total_ms" "$engine_ffprobe_execs" "$engine_ffmpeg_execs" \
-    "$asset_copy_bytes" "$estimated_final_copy_bytes"
+    "$asset_copy_bytes" "$(stat -c '%s' "$OUTPUT")"
 done
 
 python3 - "$REPORT" "$OUTPUT_DIR/summary.json" "$RUNS" "$SEGMENTS" "$SOURCE_VIDEO_BYTES" "$SOURCE_AUDIO_BYTES" <<'PY'
@@ -287,9 +290,10 @@ summary = {
     "metrics": {},
 }
 for key in [
-    "total_ms", "engine_execs", "process_forks", "engine_ffprobe_execs",
+    "total_ms", "cpu_user_ms", "cpu_sys_ms", "max_rss_kb",
+    "engine_execs", "process_forks", "engine_ffprobe_execs",
     "engine_ffmpeg_execs", "asset_copy_ops", "asset_copy_bytes",
-    "estimated_final_copy_bytes", "sidecar_temp_bytes", "frames_decoded",
+    "estimated_final_copy_bytes", "sidecar_temp_bytes", "output_bytes", "frames_decoded",
     "frames_encoded", "encode_passes",
 ]:
     values = [float(row[key]) for row in rows if key in row]

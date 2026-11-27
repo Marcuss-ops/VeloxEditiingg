@@ -1,0 +1,26 @@
+goos: linux
+goarch: amd64
+pkg: velox-server/internal/platform/database
+cpu: Intel Core Processor (Haswell, no TSX)
+BenchmarkSQLiteConcurrentWriters_Pool1_W4-2   	    1000	     49606 ns/op	    1176 B/op	      31 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool1_W4-2   	    1000	     47813 ns/op	    1182 B/op	      32 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool1_W4-2   	    1000	     46952 ns/op	    1175 B/op	      31 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool1_W4-2   	    1000	     47752 ns/op	    1176 B/op	      32 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool1_W4-2   	    1000	     45615 ns/op	    1175 B/op	      31 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool2_W4-2   	    1000	     40919 ns/op	     931 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool2_W4-2   	    1000	     40672 ns/op	    1116 B/op	      30 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool2_W4-2   	    1000	     44439 ns/op	    1025 B/op	      28 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool2_W4-2   	    1000	     48121 ns/op	    1149 B/op	      31 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool2_W4-2   	    1000	     48110 ns/op	    1143 B/op	      31 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool4_W4-2   	    1000	     44171 ns/op	     899 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool4_W4-2   	    1000	     43193 ns/op	     899 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool4_W4-2   	    1000	     42591 ns/op	     914 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool4_W4-2   	    1000	     47794 ns/op	     901 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool4_W4-2   	    1000	     47223 ns/op	     901 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool8_W4-2   	    1000	     42415 ns/op	     901 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool8_W4-2   	    1000	     51022 ns/op	     908 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool8_W4-2   	    1000	     43400 ns/op	     909 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool8_W4-2   	    1000	     51003 ns/op	     908 B/op	      26 allocs/op
+BenchmarkSQLiteConcurrentWriters_Pool8_W4-2   	    1000	     44108 ns/op	     909 B/op	      26 allocs/op
+PASS
+ok  	velox-server/internal/platform/database	0.994s
