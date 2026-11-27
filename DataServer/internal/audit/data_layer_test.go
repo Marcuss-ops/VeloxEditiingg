@@ -372,32 +372,6 @@ func TestCheckDatabase_NoDuplicate(t *testing.T) {
 	}
 }
 
-// TestAllowLegacy_SkippedAllowed tests that allowed legacy files don't
-// produce errors.
-func TestAllowLegacy_SkippedAllowed(t *testing.T) {
-	tmpDir := t.TempDir()
-	secretsDir := filepath.Join(tmpDir, "secrets")
-	os.MkdirAll(secretsDir, 0755)
-
-	// Create a known legacy file
-	os.MkdirAll(filepath.Join(tmpDir, "social", "GroupSocialManager"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "social", "GroupSocialManager", "ChannelsSaved.json"), []byte(`{}`), 0644)
-
-	auditor := NewDataLayerAuditor(tmpDir, secretsDir)
-	auditor.AllowLegacy("social/GroupSocialManager/ChannelsSaved.json")
-
-	result := auditor.Audit()
-
-	// With the file allowed, checkLegacyFiles should not report it
-	// but checkPrimaryFiles might require velox.db
-	// So we check specifically that ChannelsSaved.json is not in errors
-	for _, err := range result.Errors {
-		if strings.Contains(err, "ChannelsSaved.json") {
-			t.Errorf("Allowed legacy file should not produce error: %s", err)
-		}
-	}
-}
-
 // TestFailOnError_ReturnsError tests that FailOnError returns an error
 // for failed audits.
 func TestFailOnError_ReturnsError(t *testing.T) {
@@ -477,9 +451,6 @@ func TestNewDataLayerAuditor(t *testing.T) {
 	}
 	if auditor.secretsDir != "/tmp/data/secrets" {
 		t.Errorf("Expected secretsDir='/tmp/data/secrets', got '%s'", auditor.secretsDir)
-	}
-	if auditor.allowedLegacy == nil {
-		t.Error("allowedLegacy map should be initialized")
 	}
 }
 
