@@ -1,5 +1,12 @@
 ## [Unreleased] - 2026-11-26
 
+### Fixed — certify stock-pool sources before expanding timeline slots
+
+- The Master now snapshots the selected pool members and certifies their source
+  media before expanding stock slots. Expansion uses the persisted selection
+  after certificates are attached, so source offsets align with verified
+  keyframes instead of estimates derived from folder metadata.
+
 ### Changed — retire legacy video preparation and slice executors
 
 - New FINALIZE operations no longer publish `video.prepare.window.v1` tasks;

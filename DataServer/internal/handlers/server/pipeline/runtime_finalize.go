@@ -288,12 +288,13 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 	}
 	var stockPoolSnapshot interface{}
 	if compiledPlanHasStockPool(planJSON) {
-		expandedPlan, selectedBindings, snapshot, expandErr := expandRuntimeStockPoolPlan(planJSON, candidate.JobID, bindings)
-		if expandErr != nil {
-			return p.fail(ctx, candidate, fmt.Errorf("resolve stock pool plan: %w", expandErr))
+		stockPlan, selectedBindings, snapshot, prepareErr := prepareRuntimeStockPoolPlan(planJSON, candidate.JobID, bindings)
+		if prepareErr != nil {
+			return p.fail(ctx, candidate, fmt.Errorf("select stock pool sources: %w", prepareErr))
 		}
-		planJSON, bindings = expandedPlan, selectedBindings
+		planJSON, bindings = stockPlan, selectedBindings
 		stockPoolSnapshot = snapshot
+		req.RuntimeAssets = selectedBindings
 		if req.RuntimePayload == nil {
 			req.RuntimePayload = make(map[string]interface{})
 		}
@@ -315,6 +316,19 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 			}
 			return nil
 		}
+	}
+	if stockPoolSnapshot != nil {
+		planJSON, err = expandRuntimeStockPoolPlanFromSnapshot(planJSON, candidate.JobID, stockPoolSnapshot, bindings)
+		if err != nil {
+			return p.fail(ctx, candidate, fmt.Errorf("expand certified stock pool plan: %w", err))
+		}
+		if req.RuntimePayload == nil {
+			req.RuntimePayload = make(map[string]interface{})
+		}
+		planHash := contract.HashCompiledPlanV2([]byte(planJSON))
+		req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+		req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
+		req.RuntimePayload["runtime_assets"] = bindings
 	}
 	// New jobs never publish intermediate window-MP4 tasks. Source certification
 	// must resolve immutable source identity before FINALIZE reaches the direct
@@ -509,6 +523,19 @@ func (p *RuntimeFinalizationProcessor) completeWorkerSourceCertifications(ctx co
 			return nil, fmt.Errorf("runtime finalizer: validate certified plan: %w", err)
 		}
 		return nil, errors.New("runtime finalizer: source certificates did not resolve all required sources")
+	}
+	if compiledPlanHasStockPool(enriched) {
+		snapshot := current["runtime_stock_pool_snapshot"]
+		if snapshot == nil {
+			snapshot = req.RuntimePayload["runtime_stock_pool_snapshot"]
+		}
+		if snapshot == nil {
+			return nil, errors.New("runtime finalizer: persisted stock pool selection is missing after source certification")
+		}
+		enriched, err = expandRuntimeStockPoolPlanFromSnapshot(enriched, candidate.JobID, snapshot, certifiedBindings)
+		if err != nil {
+			return nil, fmt.Errorf("runtime finalizer: expand stock pool from certified sources: %w", err)
+		}
 	}
 	if req.RuntimePayload == nil {
 		req.RuntimePayload = make(map[string]interface{})
