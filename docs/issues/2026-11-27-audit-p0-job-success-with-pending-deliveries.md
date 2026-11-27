@@ -1,6 +1,6 @@
 # P0 — Completion must respect pending required deliveries
 
-**Status:** Backlog
+**Status:** Pending-delivery defect fixed; writer-ownership follow-up remains
 **Area:** `DataServer/internal/completion`, `completionstore`, `artifactsstore`,
 `jobs`
 **Source:** Preliminary audit at `4d42269c`; see
@@ -76,3 +76,21 @@ Run focused completion integration tests, artifact finalizer tests, and job
 state/lifecycle tests. Run the full DataServer pre-removal gate if a retired
 exported or cross-package helper is part of the change. Record any pre-existing
 failures separately as required by `AGENTS.md`.
+
+## Implementation evidence
+
+- Completion now materializes delivery rows before rolling up the job status;
+  a job with pending deliveries remains `DELIVERING` and is not given a new
+  terminal `completed_at` timestamp.
+- Delivery fan-out only runs after all job tasks have succeeded. Existing
+  delivery reconciliation closes the `DELIVERING` lifecycle after all rows
+  become terminal.
+- The acceptance regression asserts `DELIVERING` with a pending delivery and
+  checks the plan retry budget reaches `job_deliveries.max_attempts`.
+- Focused verification passed: `go test -count=1 ./internal/completion
+  ./internal/deliveries ./internal/artifacts`.
+- `bash scripts/ci/pre-removal-verify.sh` passed: full-module vet, build, and
+  tests all returned zero.
+- A single shared job-success owner is still tracked by the lifecycle-writer
+  map ticket; this change resolves premature terminal status with pending
+  deliveries without claiming that broader ownership consolidation is done.

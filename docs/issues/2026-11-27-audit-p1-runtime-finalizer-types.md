@@ -1,6 +1,6 @@
 # P1 — Type runtime finalizer dependencies and internal bindings
 
-**Status:** Backlog
+**Status:** Partial; typed dependency fixed, binding schema remains
 **Area:** `DataServer/internal/handlers/server/pipeline/runtime_finalize.go`
 **Source:** Preliminary audit at `4d42269c`; dynamic dependency field,
 reflection nil checks, type assertions, and map-based bindings.
@@ -66,3 +66,17 @@ that are genuinely wire data.
 Run pipeline finalization tests and any contract serialization tests affected
 by the boundary conversions. If the work retires an exported or cross-package
 helper, run the full pre-removal gate before push.
+
+## Implementation evidence
+
+- `RuntimeFinalizationProcessor.assets` and its constructor now require the
+  stock-window planner, source-certification planner, and source-certificate
+  enricher as one typed dependency contract.
+- Runtime type assertions for these required operations were removed; bootstrap
+  and unit-test implementations are checked by the compiler.
+- Focused verification passed: `go test -count=1
+  ./internal/handlers/server/pipeline ./internal/assets`; full-module vet,
+  build, and tests passed in `bash scripts/ci/pre-removal-verify.sh`.
+- The persisted `[]map[string]interface{}` binding schema remains open for a
+  separate boundary-focused change; this ticket is not complete until that
+  representation is either typed or justified as wire-boundary data.

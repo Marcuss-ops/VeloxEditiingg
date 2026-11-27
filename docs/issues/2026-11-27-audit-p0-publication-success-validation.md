@@ -1,6 +1,6 @@
 # P0 — Canonical publication success validation
 
-**Status:** Backlog
+**Status:** Verified
 **Area:** `DataServer/internal/deliveries`
 **Source:** Preliminary audit at `4d42269c`; compare `runner_process.go` and
 `runner_phases.go`.
@@ -69,3 +69,16 @@ Run focused `DataServer/internal/deliveries/...` tests and the relevant
 publication store tests. If production code or an exported helper is removed,
 run `bash scripts/ci/pre-removal-verify.sh`. Record exact commands and results
 in the implementation commit.
+
+## Implementation evidence
+
+- `DeliveryRunner.validatePublishedEvidence` is now the shared predicate used
+  by the preflight shortcut and phase recovery. It checks distinct submission
+  and final IDs and exact reconciliation evidence.
+- The preflight shortcut is limited to registered resumable providers. A
+  synchronous provider cannot turn a raw `PUBLISHED` row into delivery success.
+- Regression coverage rejects a `PUBLISHED` row without a resumable reconciler
+  and confirms the delivery is not marked successful.
+- Focused verification passed: `go test -count=1 ./internal/deliveries`.
+- `bash scripts/ci/pre-removal-verify.sh` passed: full-module vet, build, and
+  tests all returned zero.

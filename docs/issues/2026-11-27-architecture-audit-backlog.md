@@ -8,19 +8,19 @@ package or file.
 
 ## Priority order
 
-| Priority | Ticket | Outcome |
-| --- | --- | --- |
-| P0 | [Canonical publication success validation](2026-11-27-audit-p0-publication-success-validation.md) | Every path accepting `PUBLISHED` enforces the same evidence contract. |
-| P0 | [Completion must respect pending deliveries](2026-11-27-audit-p0-job-success-with-pending-deliveries.md) | A job with required delivery work is not exposed as terminal success. |
-| P1 | [Unify completion delivery creation policy](2026-11-27-audit-p1-delivery-creation-policy.md) | Both creation paths agree on identity, retry budget, and conflict handling. |
-| P1 | [Map lifecycle state writers](2026-11-27-audit-p1-lifecycle-writer-map.md) | Each state has one documented owner and authorized transition path. |
-| P1 | [Type runtime finalizer contracts](2026-11-27-audit-p1-runtime-finalizer-types.md) | Required dependencies and internal binding data are explicit and typed. |
-| P1 | [Review store package cohesion](2026-11-27-audit-p1-store-package-cohesion.md) | Store ownership and internal boundaries are evidence-based and clearer. |
-| P2 | [Review worker package cohesion](2026-11-27-audit-p2-worker-package-cohesion.md) | Worker package responsibilities and candidate boundaries are documented. |
-| P2 | [Measure complexity and change coupling](2026-11-27-audit-p2-change-coupling-metrics.md) | Refactor priorities use reproducible code and history metrics. |
-| P2 | [Verify and remove unreachable legacy code](2026-11-27-audit-p2-dead-code.md) | Only proven unreachable code is removed under repository rules. |
-| P2 | [Profile persistence and runtime hot paths](2026-11-27-audit-p2-performance-profiling.md) | Optimizations target measured bottlenecks with repeatable evidence. |
-| P3 | [Consolidate residual duplication and needless abstractions](2026-11-27-audit-p3-simplification.md) | Confirmed duplication is reduced without adding abstraction layers. |
+| Priority | Ticket | Outcome | Status |
+| --- | --- | --- | --- |
+| P0 | [Canonical publication success validation](2026-11-27-audit-p0-publication-success-validation.md) | Every path accepting `PUBLISHED` enforces the same evidence contract. | Verified |
+| P0 | [Completion must respect pending deliveries](2026-11-27-audit-p0-job-success-with-pending-deliveries.md) | A job with required delivery work is not exposed as terminal success. | Pending-delivery defect fixed; writer ownership remains |
+| P1 | [Unify completion delivery creation policy](2026-11-27-audit-p1-delivery-creation-policy.md) | Both creation paths agree on identity, retry budget, and conflict handling. | Verified |
+| P1 | [Map lifecycle state writers](2026-11-27-audit-p1-lifecycle-writer-map.md) | Each state has one documented owner and authorized transition path. | Backlog |
+| P1 | [Type runtime finalizer contracts](2026-11-27-audit-p1-runtime-finalizer-types.md) | Required dependencies and internal binding data are explicit and typed. | Partial; binding schema remains |
+| P1 | [Review store package cohesion](2026-11-27-audit-p1-store-package-cohesion.md) | Store ownership and internal boundaries are evidence-based and clearer. | Backlog |
+| P2 | [Review worker package cohesion](2026-11-27-audit-p2-worker-package-cohesion.md) | Worker package responsibilities and candidate boundaries are documented. | Backlog |
+| P2 | [Measure complexity and change coupling](2026-11-27-audit-p2-change-coupling-metrics.md) | Refactor priorities use reproducible code and history metrics. | Backlog |
+| P2 | [Verify and remove unreachable legacy code](2026-11-27-audit-p2-dead-code.md) | Only proven unreachable code is removed under repository rules. | Backlog |
+| P2 | [Profile persistence and runtime hot paths](2026-11-27-audit-p2-performance-profiling.md) | Optimizations target measured bottlenecks with repeatable evidence. | Backlog |
+| P3 | [Consolidate residual duplication and needless abstractions](2026-11-27-audit-p3-simplification.md) | Confirmed duplication is reduced without adding abstraction layers. | Backlog |
 
 ## Suggested sequence
 

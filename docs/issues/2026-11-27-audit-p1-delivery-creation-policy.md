@@ -1,6 +1,6 @@
 # P1 — Unify completion delivery creation policy
 
-**Status:** Backlog
+**Status:** Verified
 **Area:** `DataServer/internal/store/completionstore`,
 `DataServer/internal/artifactsstore`
 **Source:** Preliminary audit at `4d42269c`; completion writer and
@@ -67,3 +67,14 @@ Run targeted completionstore/artifactsstore tests and delivery retry-budget
 tests. Validate against an in-memory or temporary SQLite database using the
 real migrations. Run the pre-removal gate only if this change removes an
 exported symbol or cross-package helper.
+
+## Implementation evidence
+
+- Completion delivery insertion now passes `job_delivery_plans.retry_budget`
+  explicitly, targets only the logical delivery uniqueness conflict, and lets
+  unrelated constraint errors abort the transaction.
+- Fan-out waits for all task rows to reach `SUCCEEDED`, so an early task commit
+  cannot create deliveries before the job-level roll-up is eligible.
+- The completion acceptance test pins the propagated retry budget. Focused
+  completion and artifact tests passed. The full gate also passed: vet, build,
+  and full-module tests all returned zero.
