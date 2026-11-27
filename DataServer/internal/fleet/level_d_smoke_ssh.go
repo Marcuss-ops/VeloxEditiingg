@@ -37,13 +37,6 @@ type sshClient struct {
 	targets map[string]SSHWorkerTarget
 }
 
-// NewSSHClient returns a BackendSSHClient backed by the system ssh
-// binary. targets maps workerID → SSH connection details; workers
-// not in the map will receive an error on Run.
-func NewSSHClient(targets map[string]SSHWorkerTarget) BackendSSHClient {
-	return &sshClient{targets: targets}
-}
-
 // NewSSHClientFromRegistry returns a BackendSSHClient whose target map
 // is derived from the canonical WorkerRegistry (itself populated from the
 // persistent `ansible_hosts` worker-node view). This is the Phase 9

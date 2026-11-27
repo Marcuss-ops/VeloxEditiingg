@@ -40,9 +40,3 @@ func (p *CanonicalWorkerRuntimePreflight) Check(ctx context.Context, workerID st
 	}
 	return nil
 }
-
-// CanonicalWorkerRuntimePreflightCommand is exposed only for contract tests
-// and diagnostics; production callers should use Check.
-func CanonicalWorkerRuntimePreflightCommand() string {
-	return fmt.Sprintf("%v", canonicalWorkerRuntimePreflightCommands)
-}
