@@ -81,6 +81,133 @@ func CompileRenderPlanV2FromManifestWithOverlays(raw map[string]any, overlays []
 	return compileRenderPlanV2Manifest(manifest, replacements)
 }
 
+// CompileRenderPlanV2FromManifestWithPreparedOverlays compiles a base
+// manifest and applies already-rendered Chronon fragments for composite
+// overlay windows. Velox only places the certified fragments in the final
+// packet-copy timeline; it never composites pixels itself.
+func CompileRenderPlanV2FromManifestWithPreparedOverlays(
+	raw map[string]any,
+	overlays []Overlay,
+	fragments []PreparedOverlayFragmentArtifact,
+) (*CompiledRenderPlanV2, error) {
+	composites := make([]Overlay, 0, len(overlays))
+	replacements := make([]Overlay, 0, len(overlays))
+	for _, overlay := range overlays {
+		switch overlay.Mode {
+		case string(OverlayModeComposite):
+			composites = append(composites, overlay)
+		case string(OverlayModeReplace):
+			replacements = append(replacements, overlay)
+		default:
+			return nil, fmt.Errorf("compiled render plan v2: overlay %q has unsupported mode %q", overlay.ID, overlay.Mode)
+		}
+	}
+	plan, err := CompileRenderPlanV2FromManifestWithOverlays(raw, replacements)
+	if err != nil {
+		return nil, err
+	}
+	if len(composites) == 0 {
+		if len(fragments) != 0 {
+			return nil, fmt.Errorf("compiled render plan v2: prepared overlay fragments supplied without composite overlays")
+		}
+		return plan, nil
+	}
+
+	profile, err := KnownCanonicalVideoProfileV1(plan.Output.ProfileID)
+	if err != nil {
+		return nil, fmt.Errorf("compiled render plan v2: composite overlays require a canonical output profile: %w", err)
+	}
+	if len(plan.VideoTracks) != 1 || len(plan.VideoTracks[0].Segments) == 0 {
+		return nil, fmt.Errorf("compiled render plan v2: composite overlays require one non-empty base video track")
+	}
+	base := plan.VideoTracks[0].Segments
+	windows, err := ResolveOverlayWindows(composites, videoTrackFrameCount(base))
+	if err != nil {
+		return nil, fmt.Errorf("compiled render plan v2: composite overlay windows: %w", err)
+	}
+	if len(windows) != len(fragments) {
+		return nil, fmt.Errorf("compiled render plan v2: %d composite windows but %d prepared fragments", len(windows), len(fragments))
+	}
+
+	prepared := make([]PreparedOverlayFragment, 0, len(fragments))
+	seenAssets := make(map[string]struct{}, len(fragments))
+	declaredAssets := make(map[string]struct{}, len(plan.Assets))
+	for _, asset := range plan.Assets {
+		declaredAssets[asset.AssetID] = struct{}{}
+	}
+	for _, artifact := range fragments {
+		manifest := artifact.Manifest
+		if err := manifest.Validate(); err != nil {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment %q: %w", artifact.WindowID, err)
+		}
+		if strings.TrimSpace(artifact.WindowID) == "" {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment window_id is required")
+		}
+		if _, exists := seenAssets[manifest.ArtifactID]; exists {
+			return nil, fmt.Errorf("compiled render plan v2: duplicate prepared fragment asset_id %q", manifest.ArtifactID)
+		}
+		if _, exists := declaredAssets[manifest.ArtifactID]; exists {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment asset_id %q is already declared by the manifest", manifest.ArtifactID)
+		}
+		seenAssets[manifest.ArtifactID] = struct{}{}
+		if manifest.TimelineRevision != plan.TimelineRevision || manifest.TimelineSHA256 != plan.TimelineSHA256 {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment %q is bound to a different timeline", artifact.WindowID)
+		}
+		if manifest.ProfileID != profile.StreamProfile() {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment %q profile %q does not match output stream profile %q", artifact.WindowID, manifest.ProfileID, profile.StreamProfile())
+		}
+		window, ok := overlayWindowByID(windows, artifact.WindowID)
+		if !ok {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment references unknown window %q", artifact.WindowID)
+		}
+		windowDurationUS := frameToUS(window.StartFrame+window.FrameCount, profile.FPSNum, profile.FPSDen) - frameToUS(window.StartFrame, profile.FPSNum, profile.FPSDen)
+		if manifest.TimelineStartFrame != window.StartFrame || manifest.FrameCount != window.FrameCount || manifest.DurationUS != windowDurationUS {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment %q does not exactly cover its overlay window", artifact.WindowID)
+		}
+		asset, err := manifest.AssetRefV2("video/mp4")
+		if err != nil {
+			return nil, fmt.Errorf("compiled render plan v2: prepared fragment %q: %w", artifact.WindowID, err)
+		}
+		asset.Width = profile.Width
+		asset.Height = profile.Height
+		prepared = append(prepared, PreparedOverlayFragment{
+			WindowID: artifact.WindowID, AssetID: asset.AssetID, SHA256: asset.SHA256, ProfileID: asset.ProfileID,
+		})
+		plan.Assets = append(plan.Assets, asset)
+	}
+	segments, err := ApplyPreparedOverlayFragments(base, windows, prepared, profile.FPSNum, profile.FPSDen)
+	if err != nil {
+		return nil, fmt.Errorf("compiled render plan v2: apply prepared overlays: %w", err)
+	}
+	for i := range segments {
+		segments[i].SegmentID = fmt.Sprintf("%s-segment-%06d", plan.VideoTracks[0].TrackID, i)
+	}
+	plan.VideoTracks[0].Segments = segments
+	if err := ValidateCompiledRenderPlanV2(plan); err != nil {
+		return nil, fmt.Errorf("compiled render plan v2: prepared overlay plan failed validation: %w", err)
+	}
+	return plan, nil
+}
+
+func videoTrackFrameCount(segments []VideoSegmentV2) int64 {
+	var frames int64
+	for _, segment := range segments {
+		if end := segment.TimelineStartFrame + segment.FrameCount; end > frames {
+			frames = end
+		}
+	}
+	return frames
+}
+
+func overlayWindowByID(windows []OverlayWindow, id string) (OverlayWindow, bool) {
+	for _, window := range windows {
+		if window.WindowID == id {
+			return window, true
+		}
+	}
+	return OverlayWindow{}, false
+}
+
 // CompileRenderPlanV2FromManifestWithReplacements compiles the strict
 // render_manifest and then applies the visual_replacements[] list: each
 // replacement swaps a prepared, video-only asset into the base video
@@ -293,10 +420,29 @@ func CompileRenderPlanV2JSON(raw map[string]any) ([]byte, string, error) {
 }
 
 // CompileRenderPlanV2JSONWithOverlays returns canonical V2 bytes after
-// resolving editorial replace overlays. Composite overlays intentionally stop
-// before this function and use Chronon prepared fragments instead.
+// resolving editorial replace overlays. Composite overlays use the prepared
+// fragment entry point below.
 func CompileRenderPlanV2JSONWithOverlays(raw map[string]any, overlays []Overlay) ([]byte, string, error) {
 	plan, err := CompileRenderPlanV2FromManifestWithOverlays(raw, overlays)
+	if err != nil {
+		return nil, "", err
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		return nil, "", err
+	}
+	return canonical, HashCompiledPlanV2(canonical), nil
+}
+
+// CompileRenderPlanV2JSONWithPreparedOverlays returns canonical V2 bytes and
+// their transport hash after inserting certified Chronon-composited fragments
+// into the packet-copy timeline.
+func CompileRenderPlanV2JSONWithPreparedOverlays(
+	raw map[string]any,
+	overlays []Overlay,
+	fragments []PreparedOverlayFragmentArtifact,
+) ([]byte, string, error) {
+	plan, err := CompileRenderPlanV2FromManifestWithPreparedOverlays(raw, overlays, fragments)
 	if err != nil {
 		return nil, "", err
 	}

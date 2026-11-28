@@ -33,6 +33,14 @@ type PreparedVideoFragmentManifestV1 struct {
 	ClosedGOP          bool `json:"closed_gop"`
 }
 
+// PreparedOverlayFragmentArtifact binds one Chronon-composited overlay window
+// to its certified video fragment. WindowID is produced by ResolveOverlayWindows
+// so the compiler can reject missing, duplicate, or stale output.
+type PreparedOverlayFragmentArtifact struct {
+	WindowID string                          `json:"window_id"`
+	Manifest PreparedVideoFragmentManifestV1 `json:"manifest"`
+}
+
 func (m PreparedVideoFragmentManifestV1) Validate() error {
 	if m.SchemaVersion != PreparedVideoFragmentSchemaVersionV1 {
 		return fmt.Errorf("prepared video fragment: unsupported schema_version %d", m.SchemaVersion)

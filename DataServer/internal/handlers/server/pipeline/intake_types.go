@@ -48,14 +48,13 @@ type SubmitJobRequest struct {
 	// with final audio; the Master never turns scenes into renderer work.
 	Scenes []SubmitScene `json:"scenes"`
 
-	// Layers are independent overlays: title, name, important phrase or
-	// additional media. They are not folded into Scenes, so callers can
-	// submit a video, images and any combination of overlays together.
+	// Layers is retained only for a clear legacy-payload rejection. The V2
+	// intake requires visuals to be compiled into compiled_render_plan_json.
 	Layers []SubmitLayer `json:"layers,omitempty"`
 
-	// Overlays are editorial replacement intent. They become video timeline
-	// segments and preserve the independent final audio timeline. Composite
-	// work must be completed upstream and submitted through VisualReplacements.
+	// Overlays is retained only for a clear legacy-payload rejection. Composite
+	// rendering must be completed upstream; the worker receives prepared video
+	// fragments inside the producer-compiled V2 plan.
 	Overlays []SubmitOverlay `json:"overlays,omitempty"`
 
 	// RuntimeAssets and RuntimePayload make PRE single-stage when the
@@ -69,12 +68,9 @@ type SubmitJobRequest struct {
 	// list; nil-vs-empty must not decide a business state accidentally.
 	RuntimeAssetsComplete *bool `json:"runtime_assets_complete,omitempty"`
 
-	// VisualReplacements are already-composited video segments that
-	// replace the base visual timeline over an absolute interval. Each
-	// entry is a FINISHED video-only MP4; the master swaps it into the
-	// timeline as a normal VideoSource (no overlay/compositing) and the
-	// audio timeline remains independent. Resolved master-side by
-	// VisualTimelineResolver; requires render_manifest + final_audio.
+	// VisualReplacements is retained only for a clear legacy-payload rejection.
+	// Prepared replacements must already be represented as segments in the
+	// producer-compiled V2 plan; final audio remains a separate track.
 	VisualReplacements []SubmitVisualReplacement `json:"visual_replacements,omitempty"`
 
 	// DeliveryPlan is the ordered list of delivery targets. Empty is allowed.
