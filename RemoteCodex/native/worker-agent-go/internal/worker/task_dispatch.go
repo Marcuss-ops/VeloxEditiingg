@@ -200,7 +200,12 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
 		m.Mark(sharedtelemetry.MilestoneFirstAssetStarted)
 	}
-	if spec.Payload != nil && !preparedWindowCacheHit {
+	// Typed V2/preparation tasks resolve their complete input set below into
+	// verified runtime bindings. Running the legacy recursive payload resolver
+	// first would resolve runtime_assets independently (including locators that
+	// the typed plan later resolves again) and can materialize unselected pool
+	// candidates. Keep the generic pass for legacy payloads only.
+	if spec.Payload != nil && !preparedWindowCacheHit && !isCompiledPlan && !isWindowPreparation && !isSourceCertification {
 		telemetry.GetPrometheusMetrics().RecordAssetResolvePass()
 		assetCtx := ContextWithTaskID(ctx, pte.TaskID)
 		resolvedPayload, err := w.resolveTaskAssets(assetCtx, spec.Payload)
