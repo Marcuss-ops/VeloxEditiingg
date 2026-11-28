@@ -190,6 +190,14 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		field := path.String()
 		return w.resolveVerifiedAssetReference(withCacheAccessContext(ctx, "", cacheRole(field)), ref, index, field)
 	case map[string]interface{}:
+		// A stock-pool binding is a candidate locator, not a per-job asset
+		// dependency. The compiled V2 plan selects the concrete pool members
+		// after dispatch and resolves only those through the verified path.
+		// Resolving every candidate here would download the whole folder before
+		// the typed plan resolver gets a chance to select its inputs.
+		if poolMember, _ := typed["stock_pool_member"].(bool); poolMember {
+			return typed, nil
+		}
 		assetContext := mediaContext || isAssetEnvelope(typed)
 		if assetContext {
 			w.rememberRuntimeAssetLocator(typed)
